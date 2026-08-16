@@ -1,0 +1,20 @@
+[
+    {
+        "button": "button1",
+        "count": 2,
+        "modifiers": [],
+        "press_command": "submarine_session_list_open",
+        "context": [
+            { "key": "setting.submarine_session_list", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "button": "button1",
+        "count": 1,
+        "modifiers": ["super"],
+        "command": "submarine_open_link",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true }
+        ]
+    }
+]

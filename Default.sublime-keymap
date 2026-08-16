@@ -1,0 +1,413 @@
+[
+    {
+        "keys": ["super+\\"],
+        "command": "submarine_switch"
+    },
+    {
+        "keys": ["super+shift+\\"],
+        "command": "submarine_quick_agent"
+    },
+    {
+        // Keep old chord as alias so existing muscle memory still works
+        "keys": ["super+alt+\\"],
+        "command": "submarine_switch"
+    },
+    {
+        "keys": ["super+shift+escape"],
+        "command": "submarine_interrupt"
+    },
+    {
+        // Ctrl+C with selection → ST default copy (do not clear/interrupt)
+        // Ctrl+C empty selection → clear non-empty draft or interrupt
+        "keys": ["ctrl+c"],
+        "command": "submarine_interrupt",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "selection_empty", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        // Cmd/Ctrl+A in draft → draft only
+        "keys": ["super+a"],
+        "command": "submarine_select_draft",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "submarine_caret_in_draft", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["ctrl+a"],
+        "command": "submarine_select_draft",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "submarine_caret_in_draft", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        // Cmd/Ctrl+A while browsing → history only (exclude ◎ draft)
+        "keys": ["super+a"],
+        "command": "submarine_select_history",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": true },
+            { "key": "submarine_caret_in_draft", "operator": "equal", "operand": false }
+        ]
+    },
+    {
+        "keys": ["ctrl+a"],
+        "command": "submarine_select_history",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": true },
+            { "key": "submarine_caret_in_draft", "operator": "equal", "operand": false }
+        ]
+    },
+    {
+        // Soft undo only while composing (draft geometry)
+        "keys": ["super+z"],
+        "command": "soft_undo",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "submarine_caret_in_draft", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["ctrl+z"],
+        "command": "soft_undo",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "submarine_caret_in_draft", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["ctrl+shift+z"],
+        "command": "soft_redo",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "submarine_caret_in_draft", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["super+y"],
+        "command": "soft_redo",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "submarine_caret_in_draft", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["super+ctrl+alt+p"],
+        "command": "submarine_change_provider"
+    },
+    {
+        "keys": ["super+ctrl+alt+c"],
+        "command": "submarine_clear"
+    },
+    {
+        "keys": ["super+alt+t"],
+        "command": "submarine_toggle_tasks_fold",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["y"],
+        "command": "submarine_permission_allow",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+        ]
+    },
+    {
+        "keys": ["n"],
+        "command": "submarine_permission_deny",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+        ]
+    },
+    {
+        "keys": ["s"],
+        "command": "submarine_permission_allow_session",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+        ]
+    },
+    {
+        "keys": ["a"],
+        "command": "submarine_permission_allow_all",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+        ]
+    },
+    {
+        "keys": ["v"],
+        "command": "submarine_view_plan",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+        ]
+    },
+    {
+        "keys": ["1"],
+        "command": "submarine_question_key",
+        "args": { "key": "1" },
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+        ]
+    },
+    {
+        "keys": ["2"],
+        "command": "submarine_question_key",
+        "args": { "key": "2" },
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+        ]
+    },
+    {
+        "keys": ["3"],
+        "command": "submarine_question_key",
+        "args": { "key": "3" },
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+        ]
+    },
+    {
+        "keys": ["4"],
+        "command": "submarine_question_key",
+        "args": { "key": "4" },
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+        ]
+    },
+    {
+        "keys": ["o"],
+        "command": "submarine_question_key",
+        "args": { "key": "o" },
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+        ]
+    },
+    {
+        "keys": ["enter"],
+        "command": "submarine_question_key",
+        "args": { "key": "enter" },
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+        ]
+    },
+    // Submit on Enter (default mode: submit_with_modifier=false)
+    // While busy, plain Enter queues; Ctrl/Cmd+Enter is send-now (cancel+send).
+    {
+        "keys": ["enter"],
+        "command": "submarine_submit_input",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": true },
+            { "key": "submarine_submit_with_modifier", "operator": "equal", "operand": false }
+        ]
+    },
+    {
+        "keys": ["enter"],
+        "command": "submarine_submit_input",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_sleeping", "operator": "equal", "operand": true },
+            { "key": "submarine_submit_with_modifier", "operator": "equal", "operand": false }
+        ]
+    },
+    // Send now (cancel-and-send while busy; normal submit when idle).
+    {
+        "keys": ["super+enter"],
+        "command": "submarine_submit_input",
+        "args": { "send_now": true },
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["ctrl+enter"],
+        "command": "submarine_submit_input",
+        "args": { "send_now": true },
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["super+enter"],
+        "command": "submarine_submit_input",
+        "args": { "send_now": true },
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_sleeping", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["ctrl+enter"],
+        "command": "submarine_submit_input",
+        "args": { "send_now": true },
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_sleeping", "operator": "equal", "operand": true }
+        ]
+    },
+    // Explicit queue while busy (works in both submit modes; idle = normal submit)
+    {
+        "keys": ["alt+enter"],
+        "command": "submarine_submit_input",
+        "args": { "send_now": false },
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": true }
+        ]
+    },
+    // Modifier+Enter mode: Enter inserts newline
+    {
+        "keys": ["enter"],
+        "command": "submarine_insert_newline",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": true },
+            { "key": "submarine_submit_with_modifier", "operator": "equal", "operand": true }
+        ]
+    },
+    // Shift+Enter always inserts newline
+    {
+        "keys": ["shift+enter"],
+        "command": "submarine_insert_newline",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        // Super+K clear chat — works in history *and* sticky ◎ draft.
+        "keys": ["super+k"],
+        "command": "submarine_clear",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        // Super+Shift+K: clear older rounds, keep last turn (also from draft).
+        "keys": ["super+shift+k"],
+        "command": "submarine_clear_keep_last",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        // Conversation undo when not composing (caret in history)
+        "keys": ["super+shift+z"],
+        "command": "submarine_undo_message",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "submarine_caret_in_draft", "operator": "equal", "operand": false }
+        ]
+    },
+    {
+        // Empty draft: conversation undo still available
+        "keys": ["super+shift+z"],
+        "command": "submarine_undo_message",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "submarine_caret_in_draft", "operator": "equal", "operand": true },
+            { "key": "following_text", "operator": "regex_match", "operand": "^$" },
+            { "key": "preceding_text", "operator": "regex_match", "operand": "^◎\\s*$" }
+        ]
+    },
+    {
+        "keys": ["alt+escape"],
+        "command": "submarine_interrupt"
+    },
+    {
+        "keys": ["f"],
+        "command": "submarine_quick_prompt",
+        "args": { "key": "refresh" },
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+        ]
+    },
+    {
+        "keys": ["enter"],
+        "command": "submarine_session_list_open",
+        "context": [
+            { "key": "setting.submarine_session_list", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["r"],
+        "command": "submarine_session_list_rename",
+        "context": [
+            { "key": "setting.submarine_session_list", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["v"],
+        "command": "submarine_session_list_reveal",
+        "context": [
+            { "key": "setting.submarine_session_list", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["s"],
+        "command": "submarine_session_list_star",
+        "context": [
+            { "key": "setting.submarine_session_list", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["j"],
+        "command": "submarine_session_list_jsonl",
+        "context": [
+            { "key": "setting.submarine_session_list", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["shift+j"],
+        "command": "submarine_session_list_jsonl",
+        "args": {"reveal": true},
+        "context": [
+            { "key": "setting.submarine_session_list", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["delete"],
+        "command": "submarine_session_list_close",
+        "context": [
+            { "key": "setting.submarine_session_list", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["backspace"],
+        "command": "submarine_session_list_close",
+        "context": [
+            { "key": "setting.submarine_session_list", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["super+shift+v"],
+        "command": "submarine_paste_image",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["super+w"],
+        "command": "submarine_close_session",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true }
+        ]
+    }
+]

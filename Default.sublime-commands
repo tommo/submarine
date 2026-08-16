@@ -1,0 +1,320 @@
+[
+    {
+        "caption": "Submarine: Query",
+        "command": "submarine_query"
+    },
+    {
+        "caption": "Submarine: Copy Session ID",
+        "command": "submarine_copy_session_id"
+    },
+    {
+        "caption": "Codex: New Session",
+        "command": "codex_start"
+    },
+    {
+        "caption": "Pi: New Session",
+        "command": "pi_start"
+    },
+    {
+        "caption": "Grok: New Session",
+        "command": "grok_start"
+    },
+    {
+        "caption": "Kimi Code: New Session",
+        "command": "kimi_start"
+    },
+    {
+        "caption": "DeepSeek: New Session",
+        "command": "deep_seek_start"
+    },
+    {
+        "caption": "Submarine: Query Selection",
+        "command": "submarine_query_selection"
+    },
+    {
+        "caption": "Submarine: Query File",
+        "command": "submarine_query_file"
+    },
+    {
+        "caption": "Submarine: Add Current File",
+        "command": "submarine_add_file"
+    },
+    {
+        "caption": "Submarine: Add Selection",
+        "command": "submarine_add_selection"
+    },
+    {
+        "caption": "Submarine: Add Open Files",
+        "command": "submarine_add_open_files"
+    },
+    {
+        "caption": "Submarine: Add Current Folder",
+        "command": "submarine_add_folder"
+    },
+    {
+        "caption": "Submarine: Clear Context",
+        "command": "submarine_clear_context"
+    },
+    {
+        "caption": "Submarine: Goal Status",
+        "command": "submarine_goal_status"
+    },
+    {
+        "caption": "Submarine: Goal Pause",
+        "command": "submarine_goal_pause"
+    },
+    {
+        "caption": "Submarine: Goal Resume",
+        "command": "submarine_goal_resume"
+    },
+    {
+        "caption": "Submarine: Goal Clear",
+        "command": "submarine_goal_clear"
+    },
+    {
+        "caption": "Submarine: Devtools Snapshot",
+        "command": "submarine_devtools_snapshot"
+    },
+    {
+        "caption": "Submarine: Devtools Sessions",
+        "command": "submarine_devtools_sessions"
+    },
+    {
+        "caption": "Submarine: Devtools Composer",
+        "command": "submarine_devtools_composer"
+    },
+    {
+        "caption": "Submarine: Devtools Log",
+        "command": "submarine_devtools_log"
+    },
+    {
+        "caption": "Submarine: Devtools Reload Package",
+        "command": "submarine_devtools_reload"
+    },
+    {
+        "caption": "Submarine: Devtools Reload Package (hard)",
+        "command": "submarine_devtools_reload",
+        "args": {"mode": "hard"}
+    },
+    {
+        "caption": "Submarine: New Session",
+        "command": "submarine_start"
+    },
+    {
+        "caption": "Submarine: Switch Session… (⌘\\)",
+        "command": "submarine_switch"
+    },
+    {
+        "caption": "Submarine: Session List",
+        "command": "submarine_session_list"
+    },
+    {
+        "caption": "Submarine: Session List Reveal (keep focus)",
+        "command": "submarine_session_list_reveal"
+    },
+    {
+        "caption": "Submarine: Open Session JSONL",
+        "command": "submarine_session_jsonl"
+    },
+    {
+        "caption": "Submarine: Reveal Session JSONL in Finder",
+        "command": "submarine_session_jsonl",
+        "args": {"reveal": true}
+    },
+    {
+        "caption": "Submarine: Hide Session (keep running)",
+        "command": "submarine_hide_session"
+    },
+    {
+        "caption": "Submarine: Quick Agent (⌘⇧\\ toggle show/hide)",
+        "command": "submarine_quick_agent"
+    },
+    {
+        "caption": "Submarine: Quick Agent New Slot",
+        "command": "submarine_quick_agent_new_slot"
+    },
+    {
+        "caption": "Submarine: Quick Agent Config…",
+        "command": "submarine_quick_agent_config"
+    },
+    {
+        "caption": "Submarine: Quick Agent Stop",
+        "command": "submarine_quick_agent_stop"
+    },
+    {
+        "caption": "Submarine: Fork Session",
+        "command": "submarine_fork"
+    },
+    {
+        "caption": "Submarine: Fork Session...",
+        "command": "submarine_fork_from"
+    },
+    {
+        "caption": "Submarine: Restart Session",
+        "command": "submarine_restart"
+    },
+    {
+        "caption": "Submarine: Restart New",
+        "command": "submarine_restart_new"
+    },
+    {
+        "caption": "Submarine: Change Provider for Current Session…",
+        "command": "submarine_change_provider"
+    },
+    {
+        "caption": "Submarine: Toggle Tasks Fold",
+        "command": "submarine_toggle_tasks_fold"
+    },
+    {
+        "caption": "Submarine: Resume Session...",
+        "command": "submarine_resume"
+    },
+    {
+        "caption": "Submarine: Rename Session...",
+        "command": "submarine_rename"
+    },
+    {
+        "caption": "Submarine: Stop Session",
+        "command": "submarine_stop"
+    },
+    {
+        "caption": "Submarine: Toggle Output",
+        "command": "submarine_toggle"
+    },
+    {
+        "caption": "Submarine: Clear Output",
+        "command": "submarine_clear"
+    },
+    {
+        "caption": "Submarine: Clear Output (Keep Last Round)",
+        "command": "submarine_clear_keep_last"
+    },
+    {
+        "caption": "Submarine: Undo Message",
+        "command": "submarine_undo_message"
+    },
+    {
+        "caption": "Submarine: Search Sessions",
+        "command": "submarine_search_sessions"
+    },
+    {
+        "caption": "Submarine: Select Effort",
+        "command": "submarine_select_effort"
+    },
+    {
+        "caption": "Submarine: Select Model",
+        "command": "submarine_select_model"
+    },
+    {
+        "caption": "Submarine: Set Default Model",
+        "command": "submarine_set_default_model"
+    },
+    {
+        "caption": "Submarine: Refresh Models",
+        "command": "submarine_refresh_models"
+    },
+    {
+        "caption": "Submarine: Manage Anthropic Providers",
+        "command": "submarine_manage_providers"
+    },
+    {
+        "caption": "Submarine: Start Custom Provider Session",
+        "command": "submarine_start_custom_provider"
+    },
+    {
+        "caption": "Submarine: Generate Provider Model Config",
+        "command": "submarine_generate_provider_models"
+    },
+    {
+        "caption": "Submarine: Set Default Provider",
+        "command": "submarine_set_default_provider"
+    },
+    { "caption": "-" },
+    {
+        "caption": "Submarine: Copy Conversation",
+        "command": "submarine_copy"
+    },
+    {
+        "caption": "Submarine: Interrupt",
+        "command": "submarine_interrupt"
+    },
+    {
+        "caption": "Submarine: Permission Mode...",
+        "command": "submarine_toggle_permission_mode"
+    },
+    {
+        "caption": "Submarine: Add MCP Tools to Project",
+        "command": "submarine_add_mcp"
+    },
+    {
+        "caption": "Submarine: Manage Auto-Allowed Tools...",
+        "command": "submarine_manage_auto_allowed_tools"
+    },
+    {
+        "caption": "Submarine: Reset Input Mode",
+        "command": "submarine_reset_input"
+    },
+    {
+        "caption": "Submarine: Queue Prompt",
+        "command": "submarine_queue_prompt"
+    },
+    {
+        "caption": "Submarine: Send Now (cancel turn)",
+        "command": "submarine_send_now"
+    },
+    {
+        "caption": "Submarine: View Session History...",
+        "command": "submarine_view_history"
+    },
+    {
+        "caption": "Submarine: Show Usage",
+        "command": "submarine_usage"
+    },
+    {
+        "caption": "Submarine: View Retain Content",
+        "command": "submarine_retain",
+        "args": {"action": "view"}
+    },
+    {
+        "caption": "Submarine: Edit Retain Content",
+        "command": "submarine_retain",
+        "args": {"action": "edit"}
+    },
+    {
+        "caption": "Submarine: Clear Retain Content",
+        "command": "submarine_retain",
+        "args": {"action": "clear"}
+    },
+    {
+        "caption": "Submarine: Edit Project Retain",
+        "command": "submarine_project_retain"
+    },
+    {
+        "caption": "Submarine: Open Link at Cursor",
+        "command": "submarine_open_link"
+    },
+    {
+        "caption": "Submarine: Toggle Auto-Sleep for This Session",
+        "command": "submarine_toggle_auto_sleep"
+    },
+    {
+        "caption": "Submarine: Toggle Submit Key (Enter / Cmd+Enter)",
+        "command": "submarine_toggle_submit_mode"
+    },
+    {
+        "caption": "Submarine: Sleep Session",
+        "command": "submarine_sleep_session"
+    },
+    {
+        "caption": "Submarine: Wake Session",
+        "command": "submarine_wake_session"
+    },
+    {
+        "caption": "Submarine: Output Settings",
+        "command": "edit_settings",
+        "args": {
+            "base_file": "${packages}/Submarine/SubmarineOutput.sublime-settings",
+            "default": "// Submarine Output View Settings\n// See default settings on the left for available options\n{\n}\n"
+        }
+    }
+]

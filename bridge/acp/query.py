@@ -1,0 +1,428 @@
+"""Host query / interrupt and session/prompt (+ images).
+
+Invariants: Grok session/cancel is a notification (§9.3); do not
+re-send cancel after the turn ended (§9.4); agent_busy cancel+retry
+up to 3 times (§9.23); Kimi PREEMPT_PROMPT=False (§9.40).
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import sys
+import time
+from typing import Any, Optional
+
+_BRIDGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _BRIDGE_DIR not in sys.path:
+    sys.path.insert(0, _BRIDGE_DIR)
+
+from rpc_helpers import send_error, send_notification, send_result  # noqa: E402
+
+
+class QueryMixin:
+    def _is_agent_busy_error(self, e: BaseException) -> bool:
+        msg = str(e).lower()
+        return (
+            "agent_busy" in msg
+            or "another turn" in msg
+            or "turn is active" in msg
+            or "cannot launch a new turn" in msg
+        )
+
+    async def _cancel_agent_turn(
+        self,
+        *,
+        reason: str = "",
+        wait_s: float = 2.0,
+        settle_s: float = 0.3,
+        force_local: bool = True,
+        orphan_ok: bool = True,
+    ) -> None:
+        """session/cancel + wait until local prompt future settles.
+
+        Kimi rejects a new session/prompt while its agent-side turn is still
+        active (``turn.agent_busy`` / "another turn is already in progress").
+
+        Important: after host interrupt we often force the *local* prompt
+        future done while the agent turn is still live (auto-continue, slow
+        cancel). Next user message must still send session/cancel even when
+        ``_prompt_fut`` is already None — otherwise Esc → type fails with
+        agent_busy forever.
+        """
+        fut = self._prompt_fut
+        active = fut is not None and not fut.done()
+        has_query = self._query_req_id is not None
+        if not active and not has_query and not orphan_ok:
+            return
+        self._prompt_cancelled = True
+        self._cancel_in_flight = True
+        if self.session_id is not None:
+            try:
+                await self._notify_acp(
+                    "session/cancel", {"sessionId": self.session_id})
+                self.file_log(
+                    f"cancel_agent_turn: session/cancel ({reason})"
+                    f"{'' if active or has_query else ' [orphan agent turn]'}")
+            except Exception as e:
+                self.log(f"session/cancel failed ({reason}): {e}")
+        fut = self._prompt_fut
+        if fut is not None and not fut.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(fut), timeout=wait_s)
+            except (asyncio.TimeoutError, Exception):
+                pass
+            if force_local and not fut.done():
+                fut.set_result({"stopReason": "cancelled"})
+                self.file_log(
+                    f"cancel_agent_turn: forced local fut ({reason})")
+        # Agent-side turn teardown lag (Kimi turn IDs / subagents)
+        if settle_s > 0:
+            try:
+                await asyncio.sleep(settle_s)
+            except Exception:
+                pass
+
+    async def handle_query(self, req_id: Optional[int],
+                            params: dict) -> None:
+        if self.session_id is None:
+            send_error(req_id, -32000, "session not initialized")
+            return
+        # A new query must not overlap an agent turn (Kimi: turn.agent_busy).
+        if self._query_req_id is not None and self._query_req_id != req_id:
+            self.file_log(
+                f"query: superseding in-flight req {self._query_req_id}")
+            await self._cancel_agent_turn(
+                reason="supersede", wait_s=2.0, settle_s=0.5)
+        elif self._prompt_fut is not None and not self._prompt_fut.done():
+            await self._cancel_agent_turn(
+                reason="stale_prompt", wait_s=2.0, settle_s=0.5)
+        elif self._cancel_in_flight:
+            # Just interrupted — one more cancel for orphan agent turn + settle.
+            # Do not kill the process; session/cancel only.
+            await self._cancel_agent_turn(
+                reason="post_interrupt", wait_s=2.0, settle_s=0.8,
+                force_local=True, orphan_ok=True)
+        prompt = params.get("prompt") or params.get("text") or ""
+        images = params.get("images") or []
+        if not isinstance(images, list):
+            images = []
+        prompt_blocks = self._build_prompt_blocks(prompt, images)
+        self._query_req_id = req_id
+        self._prompt_cancelled = False
+        self._cancel_in_flight = False
+        turn_t0 = time.time()
+        try:
+            result = None
+            last_err: Optional[BaseException] = None
+            # Busy retry: cancel leaves agent laggy; up to 3 attempts
+            for attempt in range(3):
+                try:
+                    result = await self._send_prompt(prompt_blocks) or {}
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = e
+                    if (not self._is_agent_busy_error(e)
+                            or self._prompt_cancelled):
+                        raise
+                    settle = 0.6 + attempt * 0.8
+                    self.file_log(
+                        f"query: agent_busy attempt {attempt + 1}/3 "
+                        f"settle={settle:.1f}s: {e}")
+                    await self._cancel_agent_turn(
+                        reason=f"busy_retry_{attempt + 1}",
+                        wait_s=2.0 + attempt,
+                        settle_s=settle,
+                        force_local=True,
+                        orphan_ok=True,
+                    )
+                    self._prompt_cancelled = False
+                    self._cancel_in_flight = False
+            if last_err is not None and result is None:
+                raise last_err
+            result = result or {}
+            stop_reason = result.get("stopReason", "end_turn")
+            cancelled = (
+                self._prompt_cancelled
+                or stop_reason in ("cancelled", "canceled", "interrupted")
+            )
+            usage = self.usage_from_prompt_result(result)
+            duration_ms = max(0, int((time.time() - turn_t0) * 1000))
+            if usage:
+                send_notification("message",
+                                  {"type": "turn_usage", "usage": usage})
+            send_notification("message", {
+                "type": "result",
+                "session_id": self.session_id or "",
+                "duration_ms": duration_ms,
+                "is_error": False,
+                "num_turns": 1,
+                "total_cost_usd": 0,
+                "stop_reason": "interrupted" if cancelled else stop_reason,
+                "usage": usage or {},
+            })
+            if cancelled:
+                send_result(req_id, {"status": "interrupted",
+                                     "stopReason": stop_reason})
+            else:
+                send_result(req_id, {
+                    "status": "complete",
+                    "stopReason": stop_reason})
+        except Exception as e:
+            if self._prompt_cancelled:
+                duration_ms = max(0, int((time.time() - turn_t0) * 1000))
+                send_notification("message", {
+                    "type": "result",
+                    "session_id": self.session_id or "",
+                    "duration_ms": duration_ms,
+                    "is_error": False,
+                    "num_turns": 1,
+                    "total_cost_usd": 0,
+                    "stop_reason": "interrupted",
+                })
+                send_result(req_id, {"status": "interrupted"})
+            else:
+                send_error(req_id, -32000,
+                           f"{self.BACKEND_NAME} query failed: {e}")
+        finally:
+            if self._query_req_id == req_id:
+                self._query_req_id = None
+            self._prompt_cancelled = False
+            # Leave _cancel_in_flight set after interrupt so the NEXT query
+            # still session/cancel+settles (Kimi agent_busy). Cleared when
+            # that next query actually starts sending.
+            self._prompt_fut = None
+            self._prompt_acp_id = None
+
+    def _prompt_caps(self) -> dict:
+        return (self.agent_capabilities or {}).get("promptCapabilities") or {}
+
+    def _prompt_supports_images(self) -> bool:
+        return bool(self._prompt_caps().get("image"))
+
+    def _prompt_supports_embedded(self) -> bool:
+        return bool(self._prompt_caps().get("embeddedContext"))
+
+    def _image_b64(self, img: dict) -> tuple:
+        """Return (mime, base64_data) only — never put a filesystem path on the wire."""
+        import base64 as _b64
+        mime = (img.get("mime_type") or img.get("mimeType") or "image/png")
+        data = img.get("data") or ""
+        if data:
+            return mime, data
+        # Optional: load bytes from a local path the *plugin* already has, but
+        # still only emit base64 (no uri/path in the ACP prompt).
+        path = (img.get("path") or "").strip()
+        if path and os.path.isfile(path):
+            try:
+                with open(path, "rb") as f:
+                    data = _b64.b64encode(f.read()).decode("ascii")
+                if not mime or mime == "image/png":
+                    low = path.lower()
+                    if low.endswith((".jpg", ".jpeg")):
+                        mime = "image/jpeg"
+                    elif low.endswith(".gif"):
+                        mime = "image/gif"
+                    elif low.endswith(".webp"):
+                        mime = "image/webp"
+                return mime, data
+            except OSError as e:
+                self.file_log(f"image load failed: {e}")
+        return mime, ""
+
+    def _build_prompt_blocks(self, prompt, images: list) -> list:
+        """Build ACP ContentBlock[] — images as base64 only, never file paths.
+
+        Grok will otherwise invent an assets/ path and call read_file on the
+        PNG (text fs API) → FAILED. Vision is one multimodal image block.
+        https://agentclientprotocol.com/protocol/v1/content
+        """
+        if isinstance(prompt, list):
+            blocks = [b for b in prompt if isinstance(b, dict)]
+            text = ""
+        else:
+            text = prompt if isinstance(prompt, str) else str(prompt or "")
+            blocks = []
+
+        if not images:
+            if not blocks:
+                blocks = [{"type": "text", "text": text}]
+            elif text:
+                blocks.append({"type": "text", "text": text})
+            return blocks
+
+        caps = self._prompt_caps()
+        use_image_cap = bool(caps.get("image"))
+        n_img = 0
+
+        for img in images:
+            if not isinstance(img, dict):
+                continue
+            mime, data = self._image_b64(img)
+            if not data:
+                self.file_log("query: skipped image with no base64 data")
+                continue
+            # Never set uri/path/resource_link for images.
+            blocks.append({
+                "type": "image",
+                "mimeType": mime or "image/png",
+                "data": data,
+            })
+            n_img += 1
+
+        self.file_log(
+            f"query: images→blocks image={n_img} (base64 only, no paths) "
+            f"caps={caps} image_cap={use_image_cap}")
+
+        if text or not any(b.get("type") == "text" for b in blocks):
+            blocks.append({"type": "text", "text": text or ""})
+        return blocks
+
+    async def _send_prompt(self, prompt_blocks: list) -> Any:
+        """session/prompt with a tracked future so interrupt can unblock us."""
+        await self._spawn()
+        assert self.proc is not None and self.proc.stdin is not None
+        rid = self._acp_id()
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+        self.pending[rid] = fut
+        self._prompt_fut = fut
+        self._prompt_acp_id = rid
+        params = {"sessionId": self.session_id, "prompt": prompt_blocks}
+        # Log without dumping multi-MB base64 image payloads
+        def _summarize_block(b: dict) -> dict:
+            t = b.get("type")
+            if t == "text":
+                return {"type": "text", "text": (b.get("text") or "")[:200]}
+            if t == "image":
+                return {
+                    "type": "image",
+                    "mimeType": b.get("mimeType"),
+                    "data_len": len(b.get("data") or ""),
+                    # never log/send path; uri must stay empty
+                    "has_uri": bool(b.get("uri")),
+                }
+            if t == "resource":
+                res = b.get("resource") or {}
+                return {
+                    "type": "resource",
+                    "mimeType": res.get("mimeType"),
+                    "blob_len": len(res.get("blob") or ""),
+                    "uri": res.get("uri"),
+                }
+            if t == "resource_link":
+                return {
+                    "type": "resource_link",
+                    "uri": b.get("uri"),
+                    "name": b.get("name"),
+                    "mimeType": b.get("mimeType"),
+                }
+            return {"type": t}
+        log_params = {
+            "sessionId": self.session_id,
+            "prompt": [
+                _summarize_block(b)
+                for b in (prompt_blocks or [])
+                if isinstance(b, dict)
+            ],
+        }
+        line = json.dumps({
+            "jsonrpc": "2.0", "id": rid,
+            "method": "session/prompt", "params": params,
+        })
+        self.file_log(
+            f"→ acp session/prompt (id={rid}): "
+            f"{json.dumps(log_params)[:800]} (wire_len={len(line)})")
+        async with self._get_acp_write_lock():
+            self.proc.stdin.write((line + "\n").encode())
+            await self.proc.stdin.drain()
+        exit_task = None
+        try:
+            if self.proc is not None:
+                exit_task = asyncio.create_task(self.proc.wait())
+                done, _pend = await asyncio.wait(
+                    {fut, exit_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if fut not in done:
+                    rc = self.proc.returncode
+                    self.file_log(
+                        f"agent exited during session/prompt id={rid} "
+                        f"returncode={rc}")
+                    raise RuntimeError(
+                        f"agent process exited during prompt (returncode={rc})")
+            result = await fut
+            try:
+                self.file_log(
+                    f"← acp session/prompt (id={rid}) result: "
+                    f"{json.dumps(result)[:800]}")
+            except Exception:
+                self.file_log(
+                    f"← acp session/prompt (id={rid}) result: {result!r}")
+            return result
+        finally:
+            if exit_task is not None and not exit_task.done():
+                exit_task.cancel()
+            self.pending.pop(rid, None)
+            if self._prompt_fut is fut:
+                self._prompt_fut = None
+            if self._prompt_acp_id == rid:
+                self._prompt_acp_id = None
+
+    async def handle_interrupt(self, req_id: Optional[int],
+                                params: dict) -> None:
+        """Cancel the in-flight ACP turn.
+
+        Grok expects session/cancel as a JSON-RPC *notification* (no id).
+        Sending it as a request returns Method not found and never unblocks
+        the prompt. After notify, session/prompt resolves with
+        stopReason=cancelled — handle_query maps that to interrupted.
+
+        Idempotent: extra Esc presses must NOT re-send session/cancel after
+        the turn already ended (Grok logs ChatStateActor dead / channel_dropped).
+
+        Kimi: cancel alone is not enough if we force the local future too
+        early — agent keeps turn.agent_busy. Wait longer before force; next
+        query also re-settles via _cancel_agent_turn.
+        """
+        fut = self._prompt_fut
+        active = fut is not None and not fut.done()
+        has_query = self._query_req_id is not None
+        # Idle — nothing to cancel (don't poke Grok).
+        if not active and not has_query:
+            self.file_log("interrupt: idle (no in-flight prompt)")
+            send_result(req_id, {"status": "interrupted"})
+            return
+        # Cancel already in progress / done for this turn — no second notify.
+        if self._cancel_in_flight and not active:
+            self.file_log("interrupt: already cancelled; skip session/cancel")
+            send_result(req_id, {"status": "interrupted"})
+            return
+
+        # Kill client-side terminals so terminal/wait_for_exit unblocks.
+        for tid in list(self._terminals):
+            try:
+                await self._terminal_close(tid)
+            except Exception:
+                pass
+
+        # Cancel + wait (longer than old 0.35s force — Kimi turn teardown).
+        await self._cancel_agent_turn(
+            reason="interrupt", wait_s=1.5, settle_s=0.2, force_local=True)
+
+        # Unblock any permission waiters so they don't keep the turn alive.
+        for pid, pfut in list(self.pending_permissions.items()):
+            if pfut and not pfut.done():
+                pfut.set_result({"kind": "denied-interactively-by-user"})
+            self.pending_permissions.pop(pid, None)
+        # Unblock ask_user waiters (None → outcome "cancelled").
+        for qid, qfut in list(self.pending_questions.items()):
+            if qfut and not qfut.done():
+                qfut.set_result(None)
+            self.pending_questions.pop(qid, None)
+        # Unblock plan approval (None → rejected / stay in plan).
+        for pid, pfut in list(self.pending_plan_approvals.items()):
+            if pfut and not pfut.done():
+                pfut.set_result(None)
+            self.pending_plan_approvals.pop(pid, None)
+        send_result(req_id, {"status": "interrupted"})

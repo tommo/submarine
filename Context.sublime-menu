@@ -1,0 +1,6 @@
+[
+    {
+        "caption": "Ask Submarine",
+        "command": "submarine_query_selection"
+    }
+]

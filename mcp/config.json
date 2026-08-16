@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "submarine": {
+      "command": "python3",
+      "args": ["<PATH_TO_PACKAGE>/mcp/server.py"]
+    }
+  }
+}

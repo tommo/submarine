@@ -1,0 +1,36 @@
+"""Slash / composer commands for RESTART NEW."""
+from __future__ import annotations
+
+import unittest
+
+from ui.command_parser import CommandParser
+
+
+class TestRestartNewParse(unittest.TestCase):
+    def test_restart_is_builtin(self):
+        self.assertTrue(CommandParser.is_builtin("restart"))
+        self.assertTrue(CommandParser.is_builtin("restart-new"))
+
+    def test_slash_restart(self):
+        cmd = CommandParser.parse("/restart")
+        self.assertIsNotNone(cmd)
+        self.assertEqual(cmd.name, "restart")
+        self.assertEqual(cmd.args, "")
+
+    def test_slash_restart_new(self):
+        cmd = CommandParser.parse("/restart new")
+        self.assertIsNotNone(cmd)
+        self.assertEqual(cmd.name, "restart")
+        self.assertEqual(cmd.args, "new")
+
+    def test_slash_restart_new_hyphen(self):
+        cmd = CommandParser.parse("/restart-new")
+        self.assertIsNotNone(cmd)
+        self.assertEqual(cmd.name, "restart-new")
+
+    def test_plain_prompt_is_not_slash(self):
+        self.assertIsNone(CommandParser.parse("RESTART NEW"))
+
+
+if __name__ == "__main__":
+    unittest.main()

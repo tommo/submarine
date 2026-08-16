@@ -1,0 +1,97 @@
+[
+    {
+        "id": "tools",
+        "children": [
+            {
+                "caption": "Submarine",
+                "children": [
+                    {
+                        "caption": "Start Session",
+                        "command": "submarine_start"
+                    },
+                    {
+                        "caption": "Switch Session…                 ⌘\\",
+                        "command": "submarine_switch"
+                    },
+                    {
+                        "caption": "Session List",
+                        "command": "submarine_session_list"
+                    },
+                    {
+                        "caption": "Quick Agent (toggle)          ⌘⇧\\",
+                        "command": "submarine_quick_agent"
+                    },
+                    {
+                        "caption": "Quick Agent Config…",
+                        "command": "submarine_quick_agent_config"
+                    },
+                    {
+                        "caption": "Query Submarine",
+                        "command": "submarine_query"
+                    },
+                    {
+                        "caption": "Query Selection",
+                        "command": "submarine_query_selection"
+                    },
+                    { "caption": "-" },
+                    {
+                        "caption": "Toggle Output",
+                        "command": "submarine_toggle"
+                    },
+                    {
+                        "caption": "Clear Output",
+                        "command": "submarine_clear"
+                    },
+                    {
+                        "caption": "Clear Output (Keep Last Round)  ⌘⇧K",
+                        "command": "submarine_clear_keep_last"
+                    },
+                    {
+                        "caption": "Interrupt",
+                        "command": "submarine_interrupt"
+                    },
+                    { "caption": "-" },
+                    {
+                        "caption": "Stop Session",
+                        "command": "submarine_stop"
+                    },
+                    { "caption": "-" },
+                    {
+                        "caption": "Settings...",
+                        "command": "edit_settings",
+                        "args": {
+                            "base_file": "${packages}/Submarine/Submarine.sublime-settings",
+                            "default": "// Submarine Settings\n// See default settings on the left for available options\n{\n}\n"
+                        }
+                    },
+                    {
+                        "caption": "Output Settings...",
+                        "command": "edit_settings",
+                        "args": {
+                            "base_file": "${packages}/Submarine/SubmarineOutput.sublime-settings",
+                            "default": "// Submarine Output View Settings\n// See default settings on the left for available options\n{\n}\n"
+                        }
+                    },
+                    { "caption": "-" },
+                    {
+                        "caption": "Grok: New Session",
+                        "command": "grok_start"
+                    },
+                    {
+                        "caption": "Kimi Code: New Session",
+                        "command": "kimi_start"
+                    },
+                    { "caption": "-" },
+                    {
+                        "caption": "Manage Anthropic Providers…",
+                        "command": "submarine_manage_providers"
+                    },
+                    {
+                        "caption": "Set Default Provider…",
+                        "command": "submarine_set_default_provider"
+                    }
+                ]
+            }
+        ]
+    }
+]
