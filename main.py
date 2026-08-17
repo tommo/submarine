@@ -567,6 +567,22 @@ def _install_create_session_compat():
         pass
 
 
+def _run_legacy_migration():
+    """One-time import from a sibling sublime-claude / ClaudeCode install."""
+    try:
+        from core.migrate import run_migration
+        user_packages_dir = os.path.join(sublime.packages_path(), "User")
+        override = None
+        try:
+            override = sublime.load_settings(SETTINGS_FILE).get("legacy_claude_dir") or None
+        except Exception:
+            override = None
+        report = run_migration(PLUGIN_DIR, user_packages_dir, override_dir=override)
+        log_plugin("migration: %s" % report)
+    except Exception as e:
+        log_plugin("migration: %s" % e)
+
+
 def plugin_loaded():
     global _PLUGIN_LOADED_AT
     _PLUGIN_LOADED_AT = time.time()
@@ -578,6 +594,7 @@ def plugin_loaded():
     _drop_stale_sessions()
     _bind_registry()
     _install_create_session_compat()
+    _run_legacy_migration()
 
     try:
         from features.quick import set_session_factory

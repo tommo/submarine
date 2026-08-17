@@ -218,6 +218,11 @@
     // Toggle from command palette: "Submarine: Toggle Submit Key".
     "submit_with_modifier": false
 
+    // Path to an existing sublime-claude / ClaudeCode package directory
+    // (must contain .sessions.json). Read once on first load, then ignored.
+    // Default discovery: sibling `sublime-claude` (dev) then `ClaudeCode`.
+    // "legacy_claude_dir": ""
+
     // Profiles are stored in separate files (same locations as the old plugin,
     // so existing profiles keep working):
     //   User-level:    ~/.claude-sublime/profiles.json
