@@ -669,9 +669,18 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
             elif action == "profile":
                 create_session(self.window, profile=data, backend=backend)
             elif action == "fork" and data and data.session_id:
-                create_session(
+                from core.session import fork_session_title
+                forked = create_session(
                     self.window, resume_id=data.session_id, fork=True,
                     backend=data.backend)
+                if forked:
+                    forked_name = fork_session_title(
+                        getattr(data, "name", None) or "session")
+                    forked.name = forked_name
+                    try:
+                        forked.output.set_name(forked_name)
+                    except Exception:
+                        pass
             elif action == "sleep" and data:
                 data.sleep()
             elif action == "focus" and data:
@@ -775,7 +784,8 @@ class SubmarineForkCommand(sublime_plugin.WindowCommand):
             return
         forked = create_session(
             self.window, resume_id=s.session_id, fork=True, backend=s.backend)
-        forked_name = "%s (fork)" % (s.name or "session")
+        from core.session import fork_session_title
+        forked_name = fork_session_title(s.name or "session")
         forked.name = forked_name
         forked.output.set_name(forked_name)
         sublime.status_message("Forked session: %s" % forked_name)
@@ -815,7 +825,8 @@ class SubmarineForkFromCommand(sublime_plugin.WindowCommand):
             _kind, session_id, name, src_backend = sources[idx]
             forked = create_session(
                 self.window, resume_id=session_id, fork=True, backend=src_backend)
-            forked_name = "%s (fork)" % name
+            from core.session import fork_session_title
+            forked_name = fork_session_title(name)
             forked.name = forked_name
             forked.output.set_name(forked_name)
             sublime.status_message("Forked session: %s" % forked_name)

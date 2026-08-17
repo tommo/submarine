@@ -48,6 +48,12 @@ class TransportMixin:
             except Exception:
                 pass
         self.file_log(f"agent dead: {reason}")
+        pf = getattr(self, "_prompt_fut", None)
+        in_flight = pf is not None and not pf.done()
+        if not in_flight:
+            # Prompt already returned end_turn — Grok often closes stdio
+            # after a long turn. Do not paint ⚠ turn failed on a finished @done.
+            return
         try:
             send_notification("message", {
                 "type": "result",
@@ -166,6 +172,7 @@ class TransportMixin:
                 # Drop child/subagent streams before logging noise (Grok fans
                 # subagent tool_call + agent_message onto this same stdio).
                 if self._is_foreign_session(params):
+                    self._ingest_child_session(params)
                     self._note_foreign_session_drop(
                         kind or "session/update", params)
                     continue
@@ -191,6 +198,7 @@ class TransportMixin:
                 # Surface MCP lifecycle (servers_updated, init_progress, …)
                 # Still skip foreign-session MCP chatter if tagged.
                 if self._is_foreign_session(params):
+                    self._ingest_child_session(params)
                     self._note_foreign_session_drop(method, params)
                     continue
                 self.file_log(
@@ -200,6 +208,7 @@ class TransportMixin:
             ):
                 # Grok may nest schedule lifecycle under x.ai/session/update.
                 if self._is_foreign_session(params):
+                    self._ingest_child_session(params)
                     self._note_foreign_session_drop(method, params)
                     continue
                 self.file_log(
@@ -207,8 +216,10 @@ class TransportMixin:
                 upd = params.get("update") or params
                 if isinstance(upd, dict):
                     self._handle_schedule_lifecycle(upd)
-
-            # Other notifications (_x.ai/*, etc.) are intentionally ignored.
+            elif method and self._is_foreign_session(params):
+                self._ingest_child_session(params)
+                self._note_foreign_session_drop(method, params)
+            # Other parent notifications (_x.ai/*, etc.) are intentionally ignored.
 
     def _acp_id(self) -> int:
         self.next_acp_id += 1

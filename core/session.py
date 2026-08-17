@@ -63,6 +63,19 @@ _CONTEXT_LIMITS = {
 CLAUDE_BRIDGE_SCRIPTS = frozenset({"claude_main.py", "main.py"})
 
 
+def fork_session_title(name):
+    # type: (str) -> str
+    """Tab / list title for a forked session: '(fork) <name>'."""
+    base = (name or "session").strip() or "session"
+    if base.lower().startswith("(fork)"):
+        return base
+    if base.endswith(" (fork)"):
+        base = base[:-7].rstrip() or "session"
+    if base.lower().startswith("fork:"):
+        base = base[5:].strip() or "session"
+    return "(fork) %s" % base
+
+
 def resolve_model_id(model_id):
     # type: (Optional[str]) -> tuple
     """Strip @400k/@200k → (real_id, token_cap or None)."""
@@ -1090,8 +1103,14 @@ class Session:
 
     def _find_jsonl_path(self):
         # type: () -> Optional[str]
-        from .rewind import find_claude_jsonl
-        return find_claude_jsonl(self.session_id or "", self.cwd or "")
+        from .rewind import find_session_jsonl
+        cwd = ""
+        try:
+            cwd = self.cwd or ""
+        except Exception:
+            cwd = ""
+        return find_session_jsonl(
+            self.session_id or "", self.backend or "claude", cwd)
 
     # ── persist ───────────────────────────────────────────────────────
 

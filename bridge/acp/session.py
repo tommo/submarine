@@ -173,6 +173,16 @@ class SessionMixin:
         self._resume_fallback = False
         self._loading_session = False
         self._in_plan_mode = False
+        for slot in list(getattr(self, "_child_sessions", {}).values()):
+            ev = slot.get("event")
+            slot["done"] = True
+            if ev is not None and not ev.is_set():
+                ev.set()
+        if hasattr(self, "_child_sessions"):
+            self._child_sessions.clear()
+        if hasattr(self, "_released_terminals"):
+            self._released_terminals.clear()
+        self._leftover_end_pending = False
         keys = list(self._client_schedule_tasks.keys())
         for key in keys:
             self._cancel_client_schedule(key)

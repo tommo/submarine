@@ -284,9 +284,18 @@ class TerminalMixin:
     async def _acp_terminal_output(self, params: dict) -> dict:
         tid = params.get("terminalId") or ""
         slot = self._terminals.get(tid)
-        if not slot:
-            # Already released/killed (e.g. on interrupt) — empty output,
-            # cancelled exit. Matches terminal/wait_for_exit soft handling.
+        if slot:
+            out = (slot.get("stdout") or "") + (slot.get("stderr") or "")
+            return {"output": out, "truncated": bool(slot["truncated"]),
+                    "exitStatus": slot.get("exit_status")}
+        child = getattr(self, "_child_sessions", {}).get(tid)
+        if child:
+            self.file_log(
+                f"terminal/output {tid} child session "
+                f"done={bool(child.get('done'))} n={len(child.get('text') or '')}")
+            return self._child_output_payload(child)
+        if tid in getattr(self, "_released_terminals", set()) or str(tid).startswith("term_"):
+            # Host shell we created (or already released).
             self.file_log(
                 f"terminal/output {tid} unknown (released); return cancelled")
             return {
@@ -294,9 +303,10 @@ class TerminalMixin:
                 "truncated": False,
                 "exitStatus": {"exitCode": None, "signal": "SIGTERM"},
             }
-        out = (slot.get("stdout") or "") + (slot.get("stderr") or "")
-        return {"output": out, "truncated": bool(slot["truncated"]),
-                "exitStatus": slot.get("exit_status")}
+        # Grok polls spawn_subagent ids here before the first child update.
+        self.file_log(f"terminal/output {tid} unknown child; still running")
+        self._register_child_session(tid)
+        return {"output": "", "truncated": False}
 
     def _mark_terminal_bg(self, tid: str, slot: dict) -> None:
         """⚙ only for this execute's explicit detach or native kimi detached."""
@@ -340,6 +350,17 @@ class TerminalMixin:
         tid = params.get("terminalId") or ""
         slot = self._terminals.get(tid)
         if not slot:
+            child = getattr(self, "_child_sessions", {}).get(tid)
+            if child is None and tid not in getattr(self, "_released_terminals", set()) \
+                    and not str(tid).startswith("term_"):
+                child = self._register_child_session(tid)
+            if child:
+                ev = child.get("event")
+                if ev is not None and not child.get("done"):
+                    await ev.wait()
+                es = child.get("exit") or {"exitCode": 0, "signal": None}
+                return {"exitCode": es.get("exitCode"),
+                        "signal": es.get("signal")}
             # Already released/killed (e.g. on interrupt) — report cancelled.
             return {"exitCode": None, "signal": "SIGTERM"}
         # kimi-code AcpTerminalProcess: exitCode ?? -1. A null exit is
@@ -412,6 +433,9 @@ class TerminalMixin:
 
     async def _acp_terminal_kill(self, params: dict) -> dict:
         tid = params.get("terminalId") or ""
+        if tid in getattr(self, "_child_sessions", {}):
+            self.file_log(f"terminal/kill {tid} is subagent session; ignore")
+            return {}
         slot = self._terminals.get(tid)
         if slot:
             self._kill_terminal_proc(slot.get("proc"))
@@ -420,6 +444,10 @@ class TerminalMixin:
 
     async def _acp_terminal_release(self, params: dict) -> dict:
         tid = params.get("terminalId") or ""
+        if tid in getattr(self, "_child_sessions", {}):
+            # Detach the poll handle; the child session keeps running.
+            self.file_log(f"terminal/release {tid} is subagent session; ignore")
+            return {}
         await self._terminal_close(tid)
         return {}
 
@@ -427,6 +455,9 @@ class TerminalMixin:
         slot = self._terminals.pop(tid, None)
         if not slot:
             return
+        if not hasattr(self, "_released_terminals"):
+            self._released_terminals = set()
+        self._released_terminals.add(tid)
         self._kill_terminal_proc(slot.get("proc"))
         reader = slot.get("reader")
         if reader and not reader.done():

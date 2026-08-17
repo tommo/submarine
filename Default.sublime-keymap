@@ -368,6 +368,13 @@
         ]
     },
     {
+        "keys": ["f"],
+        "command": "submarine_session_list_fork",
+        "context": [
+            { "key": "setting.submarine_session_list", "operator": "equal", "operand": true }
+        ]
+    },
+    {
         "keys": ["j"],
         "command": "submarine_session_list_jsonl",
         "context": [

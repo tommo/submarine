@@ -110,6 +110,7 @@ class QueryMixin:
         prompt_blocks = self._build_prompt_blocks(prompt, images)
         self._query_req_id = req_id
         self._prompt_cancelled = False
+        self._leftover_end_pending = False
         self._cancel_in_flight = False
         turn_t0 = time.time()
         try:

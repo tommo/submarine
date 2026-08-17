@@ -58,7 +58,7 @@ class ToolsMixin:
     # prose like "Smoke-test subagent harness" as a tool id).
     _CANONICAL_NAMES = frozenset({
         "Read", "Write", "Edit", "Bash", "Glob", "Grep",
-        "WebSearch", "WebFetch", "TodoWrite", "Task", "TaskGet",
+        "WebSearch", "WebFetch", "TodoWrite", "Task", "TaskGet", "Subagent",
         "TaskCreate", "TaskUpdate", "TaskList", "NotebookEdit",
         "Skill", "EnterPlanMode", "ExitPlanMode", "ask_user",
         "Thinking",
@@ -173,6 +173,8 @@ class ToolsMixin:
 
     def _should_suppress_tool_row(self, upd: dict, tool_name: str) -> bool:
         """Drop Kimi lifecycle tool_call noise (✔ Starting)."""
+        if self._is_subagent_output_poll(upd, tool_name):
+            return True
         title = (upd.get("title") or "").strip()
         name = (tool_name or "").strip()
         # Real mapped / mcp tools always keep
@@ -297,7 +299,7 @@ class ToolsMixin:
                 if low.startswith("running:") or len(t.split()) > 1:
                     return "Bash"
             if low.startswith("launching ") and "agent" in low:
-                return "Task"
+                return "Subagent"
             if (
                 low.startswith("asking ")
                 or low.startswith("ask:")
@@ -539,7 +541,7 @@ class ToolsMixin:
                     out["description"] = sub[:200]
         # Task / Kimi Agent: description in rawInput or title
         # ("Launching coder agent: Implement render.playground…")
-        if tool_name == "Task":
+        if tool_name in ("Task", "Subagent"):
             if not out.get("description"):
                 for k in ("description", "prompt", "task"):
                     v = out.get(k)

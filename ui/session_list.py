@@ -161,14 +161,14 @@ def use_compact(cols: int) -> bool:
 
 def format_header(cols: int = 0) -> str:
     left = "SESSIONS"
-    right = "enter open · v reveal · j jsonl · s star · r rename · del close"
+    right = "enter open · v reveal · f fork · s star · r rename · del close"
     if not cols:
         return f"{left}                  {right}"
     for cand in (
         right,
-        "↵ open · v · j · s · r · del",
-        "v · j · s · r · del",
-        "j · s · r · del",
+        "↵ open · v · f · s · r · del",
+        "v · f · s · r · del",
+        "f · s · r · del",
         "s · r · del",
         "r · del",
         "r rename",
@@ -204,7 +204,7 @@ def fit_title(name: str, width: int) -> str:
 
 
 def format_when(ts, now=None) -> str:
-    """Elapsed since last access: now / 12s / 5m / 3h / 2d / 4w."""
+    """Elapsed since last access: now / <1m / 5m / 3h / 2d / 4w."""
     try:
         t = float(ts)
     except (TypeError, ValueError):
@@ -218,8 +218,9 @@ def format_when(ts, now=None) -> str:
     sec = max(0, int(now_t - t))
     if sec < 5:
         return "now"
+    # No per-second stamp — a 900ms poll + undo stack was leaking GBs.
     if sec < 60:
-        return f"{sec}s"
+        return "<1m"
     if sec < 3600:
         return f"{sec // 60}m"
     if sec < 86400:
@@ -784,6 +785,31 @@ def _reveal_in_file_manager(path: str) -> bool:
         return False
 
 
+def fork_row(window, row: dict) -> bool:
+    """Fork the row's session into a new sheet. True if a session was created."""
+    sid = (row or {}).get("session_id")
+    if not window or not sid:
+        return False
+    backend = (row or {}).get("backend") or "claude"
+    name = ((row or {}).get("name") or "").strip() or "session"
+    try:
+        from core import create_session
+    except Exception:
+        from core.session import create_session
+    forked = create_session(window, resume_id=sid, fork=True, backend=backend)
+    if not forked:
+        return False
+    from core.session import fork_session_title
+    forked_name = fork_session_title(name)
+    forked.name = forked_name
+    try:
+        forked.output.set_name(forked_name)
+    except Exception:
+        pass
+    sublime.status_message("Forked session: %s" % forked_name)
+    return True
+
+
 def rename_row(window, row: dict, name: str) -> bool:
     """Rename a live session or a history entry."""
     name = (name or "").strip()
@@ -825,7 +851,7 @@ class SubmarineSessionJsonlCommand(sublime_plugin.WindowCommand):
         }
         if open_row_jsonl(self.window, row, reveal=bool(reveal)):
             sublime.status_message(
-                "Claude: revealed jsonl" if reveal else "Claude: opened jsonl")
+                "Submarine: revealed jsonl" if reveal else "Submarine: opened jsonl")
 
 
 class SessionListView:
@@ -886,7 +912,9 @@ class SessionListView:
             if hit:
                 keep_sid = hit.get("session_id")
                 keep_kind = hit.get("kind")
-        self.view.settings().set(ROWS_KEY, json.dumps(index))
+        rows_json = json.dumps(index)
+        if self.view.settings().get(ROWS_KEY) != rows_json:
+            self.view.settings().set(ROWS_KEY, rows_json)
         wrote = False
         if text != cur:
             self._write_list_text(text)
@@ -900,7 +928,9 @@ class SessionListView:
                 break
             cols = max(24, cols - 1)
             text, index = build_for_window(self.window, cols=cols)
-            self.view.settings().set(ROWS_KEY, json.dumps(index))
+            rows_json = json.dumps(index)
+            if self.view.settings().get(ROWS_KEY) != rows_json:
+                self.view.settings().set(ROWS_KEY, rows_json)
             self._write_list_text(text)
             wrote = True
         if not wrote and not follow:
@@ -927,11 +957,19 @@ class SessionListView:
                 pass
 
     def _write_list_text(self, text: str) -> None:
-        self.view.set_read_only(False)
-        self.view.run_command("select_all")
-        self.view.run_command("left_delete")
-        self.view.run_command("append", {"characters": text})
-        self.view.set_read_only(True)
+        view = self.view
+        view.set_read_only(False)
+        view.run_command("submarine_session_list_set_text", {"text": text})
+        view.set_read_only(True)
+        # select_all+delete+append left an undo snapshot every poll (~1Hz).
+        def _drop_undo(v=view):
+            try:
+                if v and v.is_valid():
+                    v.clear_undo_stack()
+            except Exception:
+                pass
+        if sublime is not None:
+            sublime.set_timeout(_drop_undo, 0)
 
 
 def show_session_list(window) -> Optional[SessionListView]:
@@ -979,6 +1017,8 @@ class SessionListClickListener(sublime_plugin.EventListener):
             return ("submarine_session_list_reveal", {})
         if ch == "s":
             return ("submarine_session_list_star", {})
+        if ch == "f":
+            return ("submarine_session_list_fork", {})
         if ch == "j":
             return ("submarine_session_list_jsonl", {})
         if ch == "J":
@@ -1073,6 +1113,15 @@ def _session_list_poll() -> None:
     sublime.set_timeout(_session_list_poll, 900)
 
 
+class SubmarineSessionListSetTextCommand(sublime_plugin.TextCommand):
+    """Replace the list buffer in one edit (no select_all/delete undo pair)."""
+
+    def run(self, edit, text=""):
+        if not self.view.settings().get(SETTING):
+            return
+        self.view.replace(edit, sublime.Region(0, self.view.size()), text)
+
+
 class SubmarineSessionListCloseCommand(sublime_plugin.TextCommand):
     """Delete/close the session under the caret in the Sessions list."""
 
@@ -1145,6 +1194,34 @@ class SubmarineSessionListRenameCommand(sublime_plugin.TextCommand):
                 sublime.status_message("Submarine: renamed")
 
         win.show_input_panel("Session name:", current, _done, None, None)
+
+    def is_enabled(self):
+        return bool(self.view.settings().get(SETTING))
+
+
+class SubmarineSessionListForkCommand(sublime_plugin.TextCommand):
+    """Fork the session under the caret (f)."""
+
+    def run(self, edit):
+        if not self.view.settings().get(SETTING):
+            return
+        raw = self.view.settings().get(ROWS_KEY) or "[]"
+        try:
+            index = json.loads(raw)
+        except Exception:
+            index = []
+        sel = self.view.sel()
+        if not sel:
+            return
+        line = self.view.rowcol(sel[0].begin())[0] + 1
+        row = row_at_line(index, line)
+        win = self.view.window()
+        if not win or not row:
+            return
+        if not row.get("session_id"):
+            sublime.status_message("Submarine: no session to fork")
+            return
+        fork_row(win, row)
 
     def is_enabled(self):
         return bool(self.view.settings().get(SETTING))

@@ -43,9 +43,9 @@ contexts:
       push: row_rest
 
   header_rest:
-    - match: '\b(enter|dclick|r|v|s|j)\b'
+    - match: '\b(enter|dclick|r|v|s|f|j)\b'
       scope: keyword.operator.session-list
-    - match: '\b(open|rename|reveal|star|jsonl)\b'
+    - match: '\b(open|rename|reveal|star|fork|jsonl)\b'
       scope: comment.line.session-list
     - match: '·'
       scope: comment.line.session-list
@@ -77,7 +77,7 @@ contexts:
     - match: '\s+(idle)\s*$'
       scope: keyword.ready.session-list
       pop: true
-    - match: '\s+(now|\d+[smhdw])\s*$'
+    - match: '\s+(now|<1m|\d+[smhdw])\s*$'
       scope: comment.line.time.session-list
       pop: true
     - match: '$'

@@ -36,6 +36,7 @@ _HOST_CONTROL_TOOLS = frozenset({
 # Only these names may sit as ⚙. Everything else is forced pending.
 SHELL_BG = frozenset({
     "Bash", "Shell", "execute", "run_terminal_command", "Workflow",
+    "Task", "Subagent",
 })
 
 

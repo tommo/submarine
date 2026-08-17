@@ -98,10 +98,73 @@ class BackgroundMixin:
     _SHELL_BG_NAMES = frozenset({
         "Bash", "Shell", "execute", "run_terminal_command", "tool",
     })
+    _SUBAGENT_BG_NAMES = frozenset({"Task", "Subagent", "spawn_subagent"})
 
     @classmethod
     def _is_shell_tool_name(cls, name: str) -> bool:
         return (name or "") in cls._SHELL_BG_NAMES or (name or "") == "Workflow"
+
+    @classmethod
+    def _is_subagent_tool_name(cls, name: str) -> bool:
+        return (name or "") in cls._SUBAGENT_BG_NAMES
+
+    @classmethod
+    def _is_subagent_spawn(cls, tool_name: str, upd: Optional[dict] = None,
+                           tool_input: Optional[dict] = None) -> bool:
+        """True for spawn_subagent / Task launch — not TaskGet polls."""
+        name = (tool_name or "")
+        title = str((upd or {}).get("title") or "").lower()
+        if "spawn_subagent" in title or name in cls._SUBAGENT_BG_NAMES:
+            ri = tool_input if isinstance(tool_input, dict) else {}
+            if not ri:
+                raw = (upd or {}).get("rawInput")
+                ri = raw if isinstance(raw, dict) else {}
+            if ri.get("task_ids") or ri.get("task_id") or ri.get("taskId"):
+                return False
+            if "get task output" in title or "reading output of task" in title:
+                return False
+            if name in ("Task", "Subagent") or "spawn_subagent" in title:
+                return True
+        return False
+
+    def _poll_task_ids(self, upd: Optional[dict] = None,
+                       tool_input: Optional[dict] = None) -> list:
+        ri = tool_input if isinstance(tool_input, dict) else {}
+        if not ri:
+            raw = (upd or {}).get("rawInput")
+            ri = raw if isinstance(raw, dict) else {}
+        ids = []
+        for key in ("task_ids", "taskIds"):
+            v = ri.get(key)
+            if isinstance(v, list):
+                ids.extend(str(x) for x in v if x)
+        for key in ("task_id", "taskId"):
+            v = ri.get(key)
+            if v:
+                ids.append(str(v))
+        return ids
+
+    def _is_child_session_id(self, tid: str) -> bool:
+        tid = str(tid or "")
+        if not tid:
+            return False
+        if tid in getattr(self, "_child_sessions", {}):
+            return True
+        if tid.startswith(("term_", "bash-")):
+            return False
+        return tid.count("-") >= 4 and len(tid) >= 20
+
+    def _is_subagent_output_poll(self, upd: Optional[dict],
+                                 tool_name: str) -> bool:
+        """get_command_or_subagent_output on a child session — not a new row."""
+        name = tool_name or ""
+        title = str((upd or {}).get("title") or "").lower()
+        if name not in ("TaskGet", "TaskOutput") and (
+                "get task output" not in title
+                and "reading output of task" not in title):
+            return False
+        return any(self._is_child_session_id(i)
+                   for i in self._poll_task_ids(upd))
 
     @staticmethod
     def _looks_like_background_tool(upd: dict, tool_input: Optional[dict] = None) -> bool:
@@ -116,6 +179,8 @@ class BackgroundMixin:
         # Poll tools are foreground — never ⚙
         if "reading output of task" in low or low.startswith("taskoutput"):
             return False
+        if "spawn_subagent" in low:
+            return True
         if low.startswith("starting background"):
             return True
         if low.startswith("running in background") or low.startswith("background task"):
@@ -244,16 +309,18 @@ class BackgroundMixin:
         if "reading output of task" in tlow or tlow.startswith("taskoutput"):
             return
         name = self._tool_names_by_id.get(tool_use_id) or "Bash"
+        is_sub = self._is_subagent_tool_name(name)
         # Never promote Read / TaskOutput / etc. to ⚙ background
-        if not self._is_shell_tool_name(name):
+        if not self._is_shell_tool_name(name) and not is_sub:
             return
         if name == "tool":
             name = "Bash"
+        emit_name = "Subagent" if is_sub else "Bash"
         already = tool_use_id in self._bg_tool_ids
         self._bg_tool_ids.add(tool_use_id)
         self._last_bg_tool_id = tool_use_id
         inp = dict(tool_input or self._tool_inputs_by_id.get(tool_use_id) or {})
-        if title and not inp.get("command"):
+        if title and not inp.get("command") and not is_sub:
             cmd = title
             for prefix in (
                 "Starting background:", "Starting background",
@@ -269,14 +336,14 @@ class BackgroundMixin:
             **(self._tool_inputs_by_id.get(tool_use_id) or {}),
             **inp,
         }
-        self._tool_names_by_id[tool_use_id] = "Bash"
+        self._tool_names_by_id[tool_use_id] = emit_name
         self._tool_ids_emitted.add(tool_use_id)
         if already:
             return
         send_notification("message", {
             "type": "tool_use",
             "id": tool_use_id,
-            "name": "Bash",
+            "name": emit_name,
             "input": self._tool_inputs_by_id[tool_use_id],
             "background": True,
         })

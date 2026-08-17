@@ -108,8 +108,10 @@ from features.quick import (  # noqa: F401
 # Session-list extras (defined in ui/)
 from ui.session_list import (  # noqa: F401
     SubmarineSessionJsonlCommand,
+    SubmarineSessionListSetTextCommand,
     SubmarineSessionListCloseCommand,
     SubmarineSessionListRenameCommand,
+    SubmarineSessionListForkCommand,
     SubmarineSessionListJsonlCommand,
     SubmarineSessionListStarCommand,
     SubmarineSessionListRevealCommand,

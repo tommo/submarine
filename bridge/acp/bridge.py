@@ -141,6 +141,13 @@ class AcpBridge(TransportMixin, SessionMixin, UpdatesMixin,
         # Grok multiplexes subagent session/update on the parent ACP pipe with
         # a different sessionId. Count drops so we can log without spam.
         self._foreign_session_drops: int = 0
+        # child sessionId → {text, done, exit, event}. Grok polls these via
+        # terminal/output (same RPC as shells).
+        self._child_sessions: Dict[str, Dict[str, Any]] = {}
+        self._released_terminals: set = set()
+        # After Esc the prompt RPC is done; Grok may still fire turn_completed.
+        # leftover_end closes interrupt leftover busy — not a normal @done.
+        self._leftover_end_pending: bool = False
         # Serialize writes to agent stdin — concurrent create_task handlers
         # (permission + terminal + fs) would otherwise interleave JSON lines.
         self._acp_write_lock: Optional[asyncio.Lock] = None

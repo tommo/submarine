@@ -28,6 +28,7 @@ _POLL_TOOLS = (
 
 _SHELL_BG = (
     "Bash", "Shell", "execute", "run_terminal_command", "Workflow",
+    "Task", "Subagent",
 )
 
 _BASH_ID_RE = re.compile(r"\b(bash-[\w-]+)\b", flags=re.I)
