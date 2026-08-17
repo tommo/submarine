@@ -10,6 +10,8 @@ import os
 import re
 from typing import Callable, Dict, Optional, TYPE_CHECKING
 
+from core.background import is_child_session_id
+
 if TYPE_CHECKING:
     from .models import ToolCall
 
@@ -477,19 +479,39 @@ def _webfetch(view, tool) -> str:
     return ": %s" % tool.tool_input.get("url", "")
 
 
+def _scrub_session_ids(text) -> str:
+    """Drop raw child-session ULIDs from a spawn label."""
+    if not text:
+        return ""
+    if not isinstance(text, str):
+        text = str(text)
+    text = text.strip()
+    if not text or is_child_session_id(text):
+        return ""
+    kept = []
+    for tok in text.split():
+        bare = tok.strip(":#(),[]")
+        if is_child_session_id(bare):
+            continue
+        kept.append(tok)
+    return " ".join(kept).strip(" :-")
+
+
 def _task(view, tool) -> str:
     inp = tool.tool_input or {}
     sub = (
         inp.get("subagent_type") or inp.get("subagentType")
         or inp.get("type") or inp.get("agent_type") or ""
     )
-    desc = inp.get("description") or inp.get("prompt") or ""
+    desc = inp.get("description") or inp.get("prompt") or inp.get("title") or ""
     if not isinstance(desc, str):
         desc = str(desc) if desc else ""
     if desc:
-        desc = desc.strip().split("\n", 1)[0].strip()
+        desc = _scrub_session_ids(desc.strip().split("\n", 1)[0])
         if len(desc) > 80:
             desc = desc[:77] + "…"
+    if is_child_session_id(str(sub)):
+        sub = ""
     if sub and desc:
         return ": %s — %s" % (sub, desc)
     if sub or desc:
@@ -535,13 +557,6 @@ def _task_list(view, tool) -> str:
     return ""
 
 
-def _looks_like_session_id(tid: str) -> bool:
-    tid = str(tid or "")
-    if not tid or tid.startswith(("term_", "bash-")):
-        return False
-    return tid.count("-") >= 4 and len(tid) >= 20
-
-
 def _task_get(view, tool) -> str:
     inp = tool.tool_input or {}
     tid = inp.get("taskId") or inp.get("task_id") or ""
@@ -555,7 +570,7 @@ def _task_get(view, tool) -> str:
         if len(desc) > 80:
             desc = desc[:77] + "…"
     # Child session ids are not human labels — never print #01a00fd8-…
-    if _looks_like_session_id(str(tid)):
+    if is_child_session_id(str(tid)):
         if desc:
             return ": %s" % desc
         if tool.status in ("pending", "running", "in_progress", "background"):

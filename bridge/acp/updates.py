@@ -69,7 +69,88 @@ class UpdatesMixin:
                 "event": asyncio.Event(),
             }
             self._child_sessions[sid] = slot
+        if not slot.get("tool_use_id"):
+            tuid = self._unbound_spawn_tool_id()
+            if tuid:
+                self._apply_child_tool_bind(sid, slot, tuid)
         return slot
+
+    def _bound_child_tool_ids(self) -> set:
+        return {
+            s.get("tool_use_id")
+            for s in (getattr(self, "_child_sessions", {}) or {}).values()
+            if s and s.get("tool_use_id")
+        }
+
+    def _unbound_spawn_tool_id(self) -> Optional[str]:
+        """Most recent Subagent/Task row that has no child yet."""
+        bound = self._bound_child_tool_ids()
+        found = None
+        for tid, name in (getattr(self, "_tool_names_by_id", {}) or {}).items():
+            if not self._is_subagent_tool_name(name or ""):
+                continue
+            if tid in bound:
+                continue
+            found = tid
+        if found:
+            return found
+        last = getattr(self, "_last_bg_tool_id", None)
+        if last and last not in bound:
+            return last
+        for tid in getattr(self, "_bg_tool_ids", ()) or ():
+            if tid not in bound:
+                return tid
+        return None
+
+    def _apply_child_tool_bind(
+            self, sid: str, slot: dict, tool_use_id: str) -> None:
+        """Bind sid → spawn tool_use_id. Emit task_started even if done."""
+        if not slot or not tool_use_id:
+            return
+        late = bool(slot.get("done")) and not slot.get("tool_use_id")
+        slot["tool_use_id"] = tool_use_id
+        inp = (getattr(self, "_tool_inputs_by_id", {}) or {}).get(
+            tool_use_id) or {}
+        desc = (
+            slot.get("description")
+            or inp.get("description")
+            or inp.get("title")
+            or inp.get("prompt")
+            or ""
+        )
+        if desc and not self._is_child_session_id(str(desc)):
+            slot["description"] = desc
+        if tool_use_id not in getattr(self, "_bg_tool_ids", set()):
+            self._bg_tool_ids.add(tool_use_id)
+            try:
+                send_notification("message", {
+                    "type": "tool_use",
+                    "id": tool_use_id,
+                    "name": (
+                        (getattr(self, "_tool_names_by_id", {}) or {}).get(
+                            tool_use_id) or "Subagent"
+                    ),
+                    "input": {**inp, "run_in_background": True},
+                    "background": True,
+                })
+            except Exception:
+                pass
+        task_id = f"acp-child-{sid}"
+        # Always emit once we know the real tool_use_id so the host can
+        # close the ⚙ row — even if completion already fired (zombie fix).
+        if task_id not in getattr(self, "_bg_notified_tasks", ()) or late:
+            self._emit_system("task_started", {
+                "task_id": task_id,
+                "tool_use_id": tool_use_id,
+            })
+        if late:
+            es = slot.get("exit") or {}
+            status = "failed" if es.get("signal") else "completed"
+            self._emit_system("task_updated", {
+                "task_id": task_id,
+                "tool_use_id": tool_use_id,
+                "patch": {"status": status},
+            })
 
     def _note_spawned_child(self, text: Optional[str]) -> None:
         if not text:
@@ -85,31 +166,60 @@ class UpdatesMixin:
             slot = self._register_child_session(sid)
             if not slot:
                 continue
-            slot["tool_use_id"] = tool_use_id
-            inp = self._tool_inputs_by_id.get(tool_use_id) or {}
-            desc = inp.get("description") or inp.get("title") or ""
-            if desc:
-                slot["description"] = desc
-            task_id = f"acp-child-{sid}"
-            if task_id not in self._bg_notified_tasks:
-                self._emit_system("task_started", {
-                    "task_id": task_id,
-                    "tool_use_id": tool_use_id,
-                })
+            self._apply_child_tool_bind(sid, slot, tool_use_id)
+
+    def _child_complete_status(self, slot: dict) -> str:
+        es = slot.get("exit") or {}
+        if es.get("signal"):
+            return "failed"
+        code = es.get("exitCode")
+        return "completed" if code in (0, None) else "failed"
 
     def _emit_bg_child_complete(self, sid: str, slot: dict) -> None:
+        if not slot.get("tool_use_id"):
+            tuid = self._unbound_spawn_tool_id()
+            if tuid:
+                self._apply_child_tool_bind(sid, slot, tuid)
         tuid = slot.get("tool_use_id") or ""
         task_id = f"acp-child-{sid}"
         if self._should_skip_bg_notify(task_id, tuid):
             return
         out = slot.get("text") or ""
         path = self._write_bg_output_file("acp-child-", out)
-        line = out.strip().split("\n", 1)[0] if out.strip() else sid
+        desc = (slot.get("description") or "").strip()
+        if self._is_child_session_id(desc):
+            desc = ""
+        first = out.strip().split("\n", 1)[0] if out.strip() else ""
+        if first and self._is_child_session_id(first):
+            first = ""
+        line = first or desc or "subagent"
         es = slot.get("exit") or {}
         code = es.get("exitCode")
-        status = "completed" if code in (0, None) else "failed"
+        status = self._child_complete_status(slot)
         self._emit_bg_finished(
             task_id, tuid, status, self._clip_bg_summary(line, code), path)
+
+    def _cancel_child_sessions(self, reason: str = "interrupt") -> None:
+        """Unblock waiters and fail live ⚙ rows (interrupt / clear / shutdown)."""
+        cancelled = {"exitCode": None, "signal": "SIGTERM"}
+        for sid, slot in list(
+                (getattr(self, "_child_sessions", {}) or {}).items()):
+            if not slot:
+                continue
+            already_done = bool(slot.get("done"))
+            slot["done"] = True
+            if slot.get("exit") is None:
+                slot["exit"] = dict(cancelled)
+            ev = slot.get("event")
+            if ev is not None and not ev.is_set():
+                ev.set()
+            if already_done:
+                continue
+            try:
+                self._emit_bg_child_complete(str(sid), slot)
+            except Exception as e:
+                self.file_log(
+                    f"cancel child {sid} ({reason}): {e}")
 
     def _ingest_child_session(self, params: dict) -> None:
         sid = params.get("sessionId") or params.get("session_id")
@@ -267,6 +377,7 @@ class UpdatesMixin:
                 }
             if is_spawn and tid:
                 self._bg_tool_ids.add(tid)
+                self._last_bg_tool_id = tid
             send_notification("message", {
                 "type": "tool_use",
                 "id": tid,
@@ -329,6 +440,7 @@ class UpdatesMixin:
                         "id": tid,
                         "name": tool_name,
                         "input": enriched or self._tool_inputs_by_id.get(tid) or {},
+                        "background": bool(tid and tid in self._bg_tool_ids),
                     })
             elif tool_name != "tool" or (enriched and status not in ("completed", "failed")):
                 # Enrich open row (same id → output.tool upserts). Prefer real name.
@@ -345,6 +457,9 @@ class UpdatesMixin:
                             "id": tid,
                             "name": enrich_name,
                             "input": enriched or self._tool_inputs_by_id.get(tid) or {},
+                            # Re-paint must not demote a ⚙ row (spawn ack keeps
+                            # background until child/task_notification closes).
+                            "background": bool(tid and tid in self._bg_tool_ids),
                         })
             # Cache run_in_background for create pairing. Do not ⚙ / do not
             # drop pending here — that left ⚙ unbound when create arrived
@@ -418,7 +533,7 @@ class UpdatesMixin:
 
                 # TaskOutput / "Reading output of task …" only *polls* a
                 # bash-* job — never register it as a new ⚙ background tool.
-                # spawn_subagent is Task (launch), not a poll.
+                # spawn_subagent is Subagent (launch), not a poll.
                 _title_l = str(upd.get("title") or "").lower()
                 _inp = enriched if isinstance(enriched, dict) else {}
                 is_task_poll = (
@@ -560,22 +675,6 @@ class UpdatesMixin:
             "agent_thought_chunk",
         ):
             return
-        # if kind == "user_message_chunk":
-        #     text = (upd.get("content") or {}).get("text", "")
-        #     if text:
-        #         send_notification("message", {
-        #             "type": "replay_user", "text": text,
-        #         })
-        #     return
-        # if kind == "agent_message_chunk":
-        #     text = (upd.get("content") or {}).get("text", "")
-        #     if text:
-        #         send_notification("message", {
-        #             "type": "text_delta", "text": text, "replay": True,
-        #         })
-        #     return
-        # if kind == "agent_thought_chunk":
-        #     return
         if kind == "tool_call":
             tool_name = self._normalize_tool_name(upd)
             tool_input = self._tool_input_from_update(upd, tool_name)
@@ -593,14 +692,6 @@ class UpdatesMixin:
                     prev = self._tool_inputs_by_id.get(tid) or {}
                     self._tool_inputs_by_id[tid] = {**prev, **tool_input}
                 self._tool_ids_emitted.add(tid)
-            # send_notification("message", {
-            #     "type": "tool_use",
-            #     "id": tid,
-            #     "name": tool_name,
-            #     "input": tool_input,
-            #     "background": False,
-            #     "replay": True,
-            # })
             return
         if kind == "tool_call_update":
             status = upd.get("status")
@@ -620,23 +711,7 @@ class UpdatesMixin:
                     or status in ("completed", "failed")):
                 if not self._should_suppress_tool_row(upd, tool_name):
                     self._tool_ids_emitted.add(tid)
-                    # send_notification("message", {
-                    #     "type": "tool_use",
-                    #     "id": tid,
-                    #     "name": tool_name,
-                    #     "input": enriched or self._tool_inputs_by_id.get(tid) or {},
-                    #     "background": False,
-                    #     "replay": True,
-                    # })
             if status in ("completed", "failed"):
-                # text = self._extract_tool_content(upd, tool_name)
-                # send_notification("message", {
-                #     "type": "tool_result",
-                #     "tool_use_id": tid,
-                #     "content": text,
-                #     "is_error": status == "failed",
-                #     "replay": True,
-                # })
                 self._tool_ids_emitted.discard(tid)
 
     def _handle_mode_update(self, upd: dict) -> None:

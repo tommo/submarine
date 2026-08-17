@@ -1,5 +1,10 @@
 """ACP background-tool registry, pairing, and notify dedupe.
 
+``_bg_notified_tasks`` / ``_bg_notified_tools`` are EPHEMERAL emit
+suppression for this process lifetime. The host ``notified_*`` set is
+the durable "already shown" authority — do not treat a wire sighting
+as host-notified.
+
 Invariants: Kimi titles `Running: cmd` are foreground; only
 run_in_background / detached / Starting background / timeout 0
 are ⚙ (§9.30). TaskOutput is never ⚙. Notify once per logical job.
@@ -46,6 +51,9 @@ class BackgroundMixin:
         extra = getattr(self, "_live_kimi_task_ids", None)
         if callable(extra):
             ids.update(extra())
+        for sid, slot in (getattr(self, "_child_sessions", {}) or {}).items():
+            if slot and not slot.get("done"):
+                ids.add("acp-child-%s" % sid)
         return ids
 
     def _kimi_handle_tool_result(
@@ -95,6 +103,9 @@ class BackgroundMixin:
             self._tool_inputs_by_id.pop(tool_use_id, None)
             self._tool_names_by_id.pop(tool_use_id, None)
 
+    # Canonical host list lives in core/background.py (SHELL_BG ∪
+    # SUBAGENT_BG). This process cannot import the plugin; keep the
+    # shell-vs-spawn split here and update both when adding a name.
     _SHELL_BG_NAMES = frozenset({
         "Bash", "Shell", "execute", "run_terminal_command", "tool",
     })
@@ -111,20 +122,32 @@ class BackgroundMixin:
     @classmethod
     def _is_subagent_spawn(cls, tool_name: str, upd: Optional[dict] = None,
                            tool_input: Optional[dict] = None) -> bool:
-        """True for spawn_subagent / Task launch — not TaskGet polls."""
+        """True only for explicit spawn — not every Task/Agent row.
+
+        Grok mapped name ``Subagent`` is ⚙. Canonical ``Task`` (kimi
+        Agent) stays foreground unless the wire says detach: title
+        contains ``spawn_subagent``, or ``run_in_background`` /
+        ``detached`` in input. A child session ingested later also
+        promotes the row. TaskGet polls are never ⚙ (§9.30).
+        """
         name = (tool_name or "")
         title = str((upd or {}).get("title") or "").lower()
-        if "spawn_subagent" in title or name in cls._SUBAGENT_BG_NAMES:
-            ri = tool_input if isinstance(tool_input, dict) else {}
-            if not ri:
-                raw = (upd or {}).get("rawInput")
-                ri = raw if isinstance(raw, dict) else {}
-            if ri.get("task_ids") or ri.get("task_id") or ri.get("taskId"):
-                return False
-            if "get task output" in title or "reading output of task" in title:
-                return False
-            if name in ("Task", "Subagent") or "spawn_subagent" in title:
-                return True
+        ri = tool_input if isinstance(tool_input, dict) else {}
+        if not ri:
+            raw = (upd or {}).get("rawInput")
+            ri = raw if isinstance(raw, dict) else {}
+        if ri.get("task_ids") or ri.get("task_id") or ri.get("taskId"):
+            return False
+        if "get task output" in title or "reading output of task" in title:
+            return False
+        if name in ("Subagent", "spawn_subagent"):
+            return True
+        if "spawn_subagent" in title:
+            return True
+        if name in cls._SUBAGENT_BG_NAMES and (
+                ri.get("run_in_background") is True
+                or ri.get("detached") is True):
+            return True
         return False
 
     def _poll_task_ids(self, upd: Optional[dict] = None,

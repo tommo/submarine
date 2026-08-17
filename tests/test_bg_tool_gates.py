@@ -326,6 +326,10 @@ class _FwdStub(AcpBridge):
         self._bg_notified_tasks = set()
         self._bg_notified_tools = set()
         self._tool_titles_by_id = {}
+        self._last_bg_tool_id = None
+        self.terminal_wait_timeout_s = 0
+        self._finished = []
+        self._systems = []
         self._prompt_fut = None
         self._prompt_cancelled = False
         self._leftover_end_pending = False
@@ -335,11 +339,11 @@ class _FwdStub(AcpBridge):
     def file_log(self, msg):
         pass
 
-    def _emit_system(self, *a, **k):
-        pass
+    def _emit_system(self, subtype, data=None, *a, **k):
+        self._systems.append((subtype, data or {}))
 
     def _emit_bg_finished(self, *a, **k):
-        pass
+        self._finished.append(a)
 
     def _write_bg_output_file(self, *a, **k):
         return ""
@@ -561,6 +565,9 @@ class TestSubagentTerminalOutput(unittest.TestCase):
                 "prompt": "say hi",
             },
         }
+        # Title is an explicit spawn signal — ⚙ even when the mapped
+        # name is still Task (pre-F10 kimi). Task *name alone* is not ⚙
+        # (see test_kimi_task_without_detach_is_not_spawn).
         self.assertTrue(AcpBridge._is_subagent_spawn("Task", upd, upd["rawInput"]))
         self.assertTrue(AcpBridge._looks_like_background_tool(upd, upd["rawInput"]))
         poll = {
@@ -583,6 +590,33 @@ class TestSubagentTerminalOutput(unittest.TestCase):
         result = asyncio.run(_go())
         self.assertNotIn("exitStatus", result)
         self.assertIn("01a00never-seen", self.b._child_sessions)
+
+    def test_kimi_task_without_detach_is_not_spawn(self):
+        """F4: kimi Agent/Task is foreground unless the wire says detach."""
+        self.assertFalse(AcpBridge._is_subagent_spawn(
+            "Task", {"title": "Agent"}, {"prompt": "say hi"}))
+        self.assertFalse(AcpBridge._is_subagent_spawn(
+            "Task", {"title": "Task"}, {"description": "review"}))
+        self.assertTrue(AcpBridge._is_subagent_spawn(
+            "Subagent", {"title": "Subagent"}, {"prompt": "say hi"}))
+        self.assertTrue(AcpBridge._is_subagent_spawn(
+            "Task", {"title": "Agent"},
+            {"prompt": "say hi", "detached": True}))
+
+    def test_live_ids_include_running_children(self):
+        """F7: poll running lists acp-child-* for not-done slots."""
+        sid = "01a00live-child-aaaa-bbbb-ccccdddd"
+        self.b._register_child_session(sid)
+        live = self.b._live_bg_task_ids()
+        self.assertIn("acp-child-%s" % sid, live)
+        self.b._ingest_child_session({
+            "sessionId": sid,
+            "update": {
+                "sessionUpdate": "turn_completed",
+                "stop_reason": "end_turn",
+            },
+        })
+        self.assertNotIn("acp-child-%s" % sid, self.b._live_bg_task_ids())
 
 
 if __name__ == "__main__":

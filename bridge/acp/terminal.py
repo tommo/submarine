@@ -356,9 +356,34 @@ class TerminalMixin:
                 child = self._register_child_session(tid)
             if child:
                 ev = child.get("event")
+                timeout = getattr(self, "terminal_wait_timeout_s", 0) or 0
                 if ev is not None and not child.get("done"):
-                    await ev.wait()
-                es = child.get("exit") or {"exitCode": 0, "signal": None}
+                    try:
+                        if timeout and timeout > 0:
+                            await asyncio.wait_for(ev.wait(), timeout=timeout)
+                        else:
+                            # ACP: wait until exit; interrupt/clear set the Event.
+                            await ev.wait()
+                    except asyncio.TimeoutError:
+                        self.file_log(
+                            f"terminal/wait_for_exit {tid} child TIMEOUT "
+                            f"after {timeout}s")
+                        child["done"] = True
+                        child["exit"] = {
+                            "exitCode": None, "signal": "SIGTERM",
+                        }
+                        if not ev.is_set():
+                            ev.set()
+                        try:
+                            self._emit_bg_child_complete(tid, child)
+                        except Exception as e:
+                            self.file_log(
+                                f"child wait timeout notify {tid}: {e}")
+                    except asyncio.CancelledError:
+                        return {"exitCode": None, "signal": "SIGTERM"}
+                es = child.get("exit") or {
+                    "exitCode": None, "signal": "SIGTERM",
+                }
                 return {"exitCode": es.get("exitCode"),
                         "signal": es.get("signal")}
             # Already released/killed (e.g. on interrupt) — report cancelled.
@@ -369,8 +394,6 @@ class TerminalMixin:
         # process actually exits. Dispatch is create_task so this does not
         # block the ACP reader. session/prompt already returned for
         # run_in_background; ⚙ clears on real exit via wait_and_close.
-        # if slot.get("bg") and slot.get("exit_status") is None:
-        #     return {"exitCode": None, "signal": None}
         reader = slot.get("reader")
         timeout = self.terminal_wait_timeout_s
         if reader is not None and not reader.done():

@@ -1,5 +1,10 @@
 """Kimi-only background bash tracking (ACP + ~/.kimi-code tasks/*.json).
 
+Bind strategy behind the shared bridge events (task_started /
+task_notification) and the host gate — not a third live-job map.
+Pairs ``bash-*.json`` to ACP terminals. Grok children use
+``_child_sessions`` the same way. Do not add a host-side kimi stack.
+
 Not on AcpBridge — Grok/other ACP backends must not walk Kimi session files.
 
 Real wire (see sandbox/kimi_bg): every detached bash-* also has terminal/create
@@ -77,9 +82,6 @@ class KimiBgMixin:
             "auto": "automatic_notification" in text.lower(),
         }
 
-    # AcpBridge called this as a classmethod — keep the name for call sites.
-    _parse_kimi_bg_result_text = parse_kimi_bg_result_text
-
     def kimi_tasks_dir(self) -> Optional[str]:
         sid = (getattr(self, "session_id", None) or "").strip()
         if not sid:
@@ -96,9 +98,6 @@ class KimiBgMixin:
             return None
         return None
 
-    def _kimi_tasks_dir(self) -> Optional[str]:
-        return self.kimi_tasks_dir()
-
     def read_kimi_task_meta(self, task_id: str) -> Optional[dict]:
         tdir = self.kimi_tasks_dir()
         if not tdir or not task_id:
@@ -112,9 +111,6 @@ class KimiBgMixin:
         except Exception as e:
             self.file_log(f"kimi task json read {path}: {e}")
             return None
-
-    def _read_kimi_task_meta(self, task_id: str) -> Optional[dict]:
-        return self.read_kimi_task_meta(task_id)
 
     def _ensure_bg_poller(self) -> None:
         if self._bg_poll_task is not None and not self._bg_poll_task.done():
@@ -303,9 +299,6 @@ class KimiBgMixin:
         except OSError:
             return None
         return best if best_score > 0 else None
-
-    def _find_matching_kimi_task(self, cmd: str = "") -> Optional[dict]:
-        return self.find_matching_kimi_task(cmd)
 
     def _kimi_detached_meta(self, cmd: str = "") -> Optional[dict]:
         """Native bash-*.json with detached:true matching this command."""

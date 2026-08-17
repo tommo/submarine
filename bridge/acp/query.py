@@ -406,6 +406,12 @@ class QueryMixin:
                 await self._terminal_close(tid)
             except Exception:
                 pass
+        # Detached children are not SIGTERM'd, but waiters must not hang
+        # and the host must close ⚙ rows.
+        try:
+            self._cancel_child_sessions("interrupt")
+        except Exception:
+            pass
 
         # Cancel + wait (longer than old 0.35s force — Kimi turn teardown).
         await self._cancel_agent_turn(

@@ -1,9 +1,17 @@
 """Background-task gate: ⚙ pairing, poll epochs, notify dedupe, flush.
 
+Authority split (do not invert):
+  * Host ``notified_*`` is the durable "already shown / already queried"
+    set. Mark only when surface/query actually happens. ``abort()``
+    clears it (sleep/wake /clear must not skip a later reused id).
+  * Bridge ``_bg_notified_*`` is ephemeral emit suppression for the
+    process lifetime only. The host never treats a wire sighting as
+    "notified."
+
 Notify policy goes through TurnController.notify_action:
   claude → query (host starts a turn with the notification body)
   kimi/grok → surface (⚙ strip + unread; agent auto-continues)
-  busy → hold (drop the buffer; agent is already working)
+  busy → hold (KEEP the generation-stamped buffer; retry on end_live)
 
 Dedupe is source-contains (TaskGet/TaskOutput already delivered bash-*)
 plus mirrored aliases (acp-term-* and bash-* sharing one tool_use_id).
@@ -22,12 +30,17 @@ _TASK_TERMINAL = (
     "error", "errored", "aborted", "timeout", "crashed",
 )
 
+# Poll-of-output names only. "Task" / "Subagent" are spawn names, not polls.
 _POLL_TOOLS = (
-    "TaskGet", "TaskOutput", "Task", "get_command_or_subagent_output",
+    "TaskGet", "TaskOutput", "get_command_or_subagent_output",
 )
 
-_SHELL_BG = (
+# Canonical host allowlists. UI imports these; bridge cannot (separate
+# process) and keeps a commented copy of the split.
+SHELL_BG = (
     "Bash", "Shell", "execute", "run_terminal_command", "Workflow",
+)
+SUBAGENT_BG = (
     "Task", "Subagent",
 )
 
@@ -111,6 +124,7 @@ class BackgroundTaskGate:
         self.notified_task_ids = set()  # type: Set[str]
         self.notified_tool_ids = set()  # type: Set[str]
         self.flush_scheduled = False
+        self.pending_hold_gen = None  # type: Optional[int]
         self.poll_epoch = 0
         self._poll_armed = False
 
@@ -190,7 +204,6 @@ class BackgroundTaskGate:
             if tool_use_id:
                 self.finalize_tool(tool_use_id, keep=False)
                 self.drop_tool(tool_use_id)
-            self.mark(task_id, tool_use_id)
             return
         if tool_use_id:
             self.bg_task_ids.discard(tool_use_id)
@@ -213,12 +226,14 @@ class BackgroundTaskGate:
             self.finalize_tool(
                 tool_use_id, keep=(status == "completed" and bool(output)))
             self.bg_tools.pop(tool_use_id, None)
-        self.mark(task_id, tool_use_id)
 
-        if working or self.turn.busy:
-            return
-
+        # Always buffer. "notified" means shown/queried, not seen on the
+        # wire — mark() happens in flush after surface/query, not here.
+        # `working` is unused for drop: hold at flush-time keeps the buffer.
+        _ = working
         summary = (data.get("summary") or task_id or "background task").strip()
+        if is_child_session_id(summary):
+            summary = "subagent"
         if "\n" in summary:
             summary = " ⏎ ".join(
                 s.strip() for s in summary.splitlines() if s.strip())
@@ -227,6 +242,9 @@ class BackgroundTaskGate:
         header = "%s [%s]" % (summary, status) if status != "completed" else summary
         if not output:
             tip = "task_id=%s" % task_id if task_id else "background task"
+            if is_child_session_id(task_id) or (
+                    isinstance(task_id, str) and task_id.startswith("acp-child-")):
+                tip = "background task"
             if output_file:
                 tip += "\nlog: %s" % output_file
             block = "<task-notification>%s\n%s</task-notification>" % (header, tip)
@@ -283,14 +301,16 @@ class BackgroundTaskGate:
             return
         action = self.turn.notify_action(self.backend)
         if action == "hold":
-            self.pending_notifications = []
-            self.pending_task_ids.clear()
-            self.pending_tool_ids.clear()
+            # Keep the generation-stamped buffer; retry on end_live.
+            self.pending_hold_gen = getattr(self.turn, "gen", None)
             return
         blocks = self.pending_notifications
+        pending_tasks = set(self.pending_task_ids)
+        pending_tools = set(self.pending_tool_ids)
         self.pending_notifications = []
         self.pending_task_ids.clear()
         self.pending_tool_ids.clear()
+        self.pending_hold_gen = None
         seen = set()
         uniq = []
         for b in blocks:
@@ -300,6 +320,11 @@ class BackgroundTaskGate:
             uniq.append(b)
         if not uniq:
             return
+        # Surface/query is about to happen — now the ids are "notified".
+        for tid in pending_tasks:
+            self.mark(tid, "")
+        for tuid in pending_tools:
+            self.mark("", tuid)
         joined = "\n".join(uniq)
         from .turn import looks_like_compact_done
         if looks_like_compact_done(joined) or "compaction" in joined.lower():
@@ -464,6 +489,9 @@ class BackgroundTaskGate:
         self.pending_notifications = []
         self.pending_task_ids.clear()
         self.pending_tool_ids.clear()
+        self.notified_task_ids.clear()
+        self.notified_tool_ids.clear()
+        self.pending_hold_gen = None
         self.flush_scheduled = False
         self.poll_epoch += 1
         self._poll_armed = False
@@ -484,4 +512,17 @@ def _read_file(path):
 
 def is_shell_background_tool(name):
     # type: (str) -> bool
-    return name in _SHELL_BG
+    return name in SHELL_BG or name in SUBAGENT_BG
+
+
+def is_child_session_id(tid):
+    # type: (str) -> bool
+    """True for a grok/kimi child session ULID (never print as a label)."""
+    tid = str(tid or "").strip()
+    if not tid:
+        return False
+    if tid.startswith("acp-child-"):
+        tid = tid[len("acp-child-"):]
+    if not tid or tid.startswith(("term_", "bash-")):
+        return False
+    return tid.count("-") >= 4 and len(tid) >= 20

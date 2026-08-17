@@ -173,11 +173,16 @@ class SessionMixin:
         self._resume_fallback = False
         self._loading_session = False
         self._in_plan_mode = False
-        for slot in list(getattr(self, "_child_sessions", {}).values()):
-            ev = slot.get("event")
-            slot["done"] = True
-            if ev is not None and not ev.is_set():
-                ev.set()
+        try:
+            self._cancel_child_sessions("clear")
+        except Exception:
+            for slot in list(getattr(self, "_child_sessions", {}).values()):
+                ev = slot.get("event")
+                slot["done"] = True
+                if slot.get("exit") is None:
+                    slot["exit"] = {"exitCode": None, "signal": "SIGTERM"}
+                if ev is not None and not ev.is_set():
+                    ev.set()
         if hasattr(self, "_child_sessions"):
             self._child_sessions.clear()
         if hasattr(self, "_released_terminals"):
@@ -603,6 +608,10 @@ class SessionMixin:
                 await self._terminal_close(tid)
             except Exception:
                 pass
+        try:
+            self._cancel_child_sessions("shutdown")
+        except Exception:
+            pass
         if self.proc is not None:
             try:
                 self.proc.terminate()

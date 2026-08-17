@@ -122,11 +122,12 @@ class KimiBridge(KimiBgMixin, AcpBridge):
         "TodoWrite": "TodoWrite",
         "TodoList": "TodoWrite",
         "TodoRead": "TodoWrite",
-        # Subagents — format like Claude Task (description + type)
+        # Subagents — spawn_subagent is ⚙ Subagent (same as grok).
+        # Agent/Task stays foreground unless the wire says detach (§9.30).
         "Agent": "Task",
         "AgentSwarm": "Task",
         "agent": "Task",
-        "spawn_subagent": "Task",
+        "spawn_subagent": "Subagent",
         "Task": "Task",
         "TaskOutput": "TaskGet",
         "TaskGet": "TaskGet",

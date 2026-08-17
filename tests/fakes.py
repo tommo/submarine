@@ -1,4 +1,16 @@
-"""In-process ports for core/ tests. No sublime."""
+"""In-process ports for core/ tests. No sublime.
+
+Fake extensions used by the bg/subagent lifecycle suite
+(tests/test_bg_lifecycle.py):
+
+* FakeOutput.tool records expose ``tool_input`` (alias of ``input``) so
+  formatters and composer ⚙-hint tests read the same attribute as
+  production ToolCall.
+* FakeOutput.tool upserts an open pending/background row by id the
+  same way ui.renderer.tool does (including gear-to-pending demote).
+* FakeOutput.removed lists every tool passed to remove_tool (abort /
+  failed-notify / force-sleep assertions).
+"""
 from __future__ import annotations
 
 from typing import Any, Callable, List, Optional
@@ -67,8 +79,10 @@ class FakeOutput:
         self.resets = []  # type: list
         self.names = []  # type: list
         self.shown = []  # type: list
+        self.hint_refreshes = 0
         self._input = False
         self._tools_by_id = {}  # type: dict
+        self.removed = []  # type: list  # tools passed to remove_tool
         self.view = None
         self.pending_context = []  # type: list
 
@@ -76,8 +90,27 @@ class FakeOutput:
         self.prompts.append((text, context_names, context_refs))
 
     def tool(self, name, tool_input, tool_id=None, background=False):
+        # Upsert matches ui.renderer.tool: same id keeps the open row and
+        # may demote ⚙ → pending when a later paint is not background.
+        # `tool_input` mirrors production ToolCall so formatters / composer
+        # ⚙-hint tests can read the same attribute the UI uses.
+        from core.background import is_shell_background_tool
+        if background and not is_shell_background_tool(name):
+            background = False
+        existing = self._tools_by_id.get(tool_id) if tool_id else None
+        if existing is not None and existing.status in ("background", "pending"):
+            existing.name = name
+            existing.input = tool_input
+            existing.tool_input = tool_input
+            if background and is_shell_background_tool(name):
+                existing.status = "background"
+            elif existing.status == "background" and (
+                    not background or not is_shell_background_tool(name)):
+                existing.status = "pending"
+            return existing
         rec = type("Tool", (), {
-            "name": name, "input": tool_input, "id": tool_id,
+            "name": name, "input": tool_input, "tool_input": tool_input,
+            "id": tool_id,
             "status": "background" if background else "pending",
         })()
         self.tools.append(rec)
@@ -144,9 +177,13 @@ class FakeOutput:
         return self._tools_by_id.get(tool_id)
 
     def refresh_background_hints(self):
-        pass
+        self.hint_refreshes += 1
 
     def remove_tool(self, tool):
+        # EXTENDED: record removals so lifecycle tests can assert ⚙ rows
+        # were dropped (force-sleep / abort / failed notify) without
+        # inspecting private maps only.
+        self.removed.append(tool)
         if getattr(tool, "id", None) in self._tools_by_id:
             self._tools_by_id.pop(tool.id, None)
 

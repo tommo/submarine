@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+from core.background import SHELL_BG as _CORE_SHELL_BG
+from core.background import SUBAGENT_BG as _CORE_SUBAGENT_BG
 from plat.constants import TOOL_STATUS_SYMBOLS
 
 from .formatters import (
@@ -33,11 +35,8 @@ _HOST_CONTROL_TOOLS = frozenset({
     "submarine__quick_done",
 })
 
-# Only these names may sit as ⚙. Everything else is forced pending.
-SHELL_BG = frozenset({
-    "Bash", "Shell", "execute", "run_terminal_command", "Workflow",
-    "Task", "Subagent",
-})
+# Canonical host list: core/background.py SHELL_BG ∪ SUBAGENT_BG.
+SHELL_BG = frozenset(_CORE_SHELL_BG) | frozenset(_CORE_SUBAGENT_BG)
 
 
 def is_host_control_tool(name: str) -> bool:

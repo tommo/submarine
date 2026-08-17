@@ -655,12 +655,19 @@ class Session:
             if newer:
                 return
             self.turn.settle_interrupt()
-            if self._interrupt_stream and self.bg.has_background():
-                self._resume_interrupt_stream()
-                return
+            # A detached ⚙ child is not a closer. Leftover PARENT stream
+            # may still resume via _maybe_resume_stream; do not re-own
+            # busy just because has_background() is true.
             self._clear_deferred_state(clear_queue=False)
             self._stamp_idle_clock()
             self._fire_turn_end("interrupted")
+            if self.bg.pending_notifications:
+                try:
+                    self.bg.flush()
+                except Exception:
+                    pass
+                if self.working:
+                    return
             if self._fire_next_queued():
                 return
             self._enter_input_if_idle()
@@ -1221,11 +1228,6 @@ class Session:
     def _flush_bg_notifications(self):
         # type: () -> None
         self.bg.flush()
-
-    def _bg_soft_fallback_query(self):
-        # type: () -> None
-        """Uncalled; tests forbid flush from invoking it."""
-        return
 
     def _on_compact_timeout(self):
         # type: () -> None

@@ -416,6 +416,22 @@ def _bind_registry():
     sublime._submarine_background = default_registry.background  # type: ignore[attr-defined]
 
 
+def _abort_session_ui(s):
+    """Clear ⚙ rows before dropping a Session on reload. Do not SIGTERM."""
+    try:
+        bg = getattr(s, "bg", None)
+        if bg is not None:
+            bg.abort()
+    except Exception:
+        pass
+    try:
+        output = getattr(s, "output", None)
+        if output is not None and hasattr(output, "reset_active_states"):
+            output.reset_active_states()
+    except Exception:
+        pass
+
+
 def _drop_stale_sessions():
     """Drop Python refs without terminating live bridges (reload invariant)."""
     prev = getattr(sublime, "_submarine_sessions", None)
@@ -424,6 +440,7 @@ def _drop_stale_sessions():
     if isinstance(prev, dict) and prev:
         log_plugin("plugin_loaded: dropping %d stale session(s)" % len(prev))
         for s in list(prev.values()):
+            _abort_session_ui(s)
             try:
                 if getattr(s, "client", None):
                     s.client = None
@@ -441,6 +458,7 @@ def _drop_stale_sessions():
     if held is not None and held is not default_registry:
         try:
             for s in list(held.iter_sessions()):
+                _abort_session_ui(s)
                 try:
                     if getattr(s, "client", None):
                         s.client = None
@@ -456,6 +474,7 @@ def _drop_stale_sessions():
             % len(default_registry.sessions)
         )
         for s in list(default_registry.iter_sessions()):
+            _abort_session_ui(s)
             try:
                 if getattr(s, "client", None):
                     s.client = None
@@ -469,6 +488,7 @@ def _drop_stale_sessions():
     if isinstance(bg, dict) and bg:
         log_plugin("plugin_loaded: dropping %d background session(s)" % len(bg))
         for s in list(bg.values()):
+            _abort_session_ui(s)
             try:
                 if getattr(s, "client", None):
                     s.client = None
