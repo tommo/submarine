@@ -234,6 +234,25 @@
             { "key": "setting.submarine_input_mode", "operator": "equal", "operand": true }
         ]
     },
+    // Queue send-now when ◎ is closed or caret is in history.
+    {
+        "keys": ["super+enter"],
+        "command": "submarine_submit_input",
+        "args": { "send_now": true },
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+        ]
+    },
+    {
+        "keys": ["ctrl+enter"],
+        "command": "submarine_submit_input",
+        "args": { "send_now": true },
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+        ]
+    },
     {
         "keys": ["ctrl+enter"],
         "command": "submarine_submit_input",

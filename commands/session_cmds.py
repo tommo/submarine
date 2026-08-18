@@ -562,8 +562,6 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
             if not active_session.is_sleeping:
                 items.append(["○ Sleep Session", "Put session to sleep, free resources"])
                 actions.append(("sleep", active_session))
-            items.append(["RESTART NEW", "Fresh session in this view — same provider/model"])
-            actions.append(("restart_new", active_session))
             items.append(["🔄 Restart Session…", "Restart with a profile"])
             actions.append(("restart", active_session))
 
@@ -643,8 +641,6 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
                 return
             if action == "undo_message" and data:
                 self._undo_picker(data)
-            elif action == "restart_new" and data:
-                restart_session_new(self.window, data)
             elif action == "restart" and data:
                 self._show_restart_picker(data, profiles)
             elif action == "new_with_file" and data:

@@ -108,6 +108,22 @@ class SubmarineSubmitInputCommand(sublime_plugin.TextCommand):
             return
         if s.output.submit_question_input():
             return
+
+        # Cmd+Enter with a queue: send now even if ◎ is closed or caret is
+        # in history (the phantom hint). Draft in ◎ is handled below.
+        if (
+            send_now
+            and s.working
+            and getattr(s, "_queued_prompts", None)
+        ):
+            in_composer = (
+                s.output.is_input_mode()
+                and not _caret_outside_composer(self.view, s.output)
+            )
+            if not in_composer:
+                s.send_now("")
+                return
+
         if not s.output.is_input_mode():
             if not s.working and getattr(s, "_composer_allowed", True) and not s.is_sleeping:
                 try:
@@ -244,6 +260,8 @@ class SubmarineSubmitInputCommand(sublime_plugin.TextCommand):
                 lines.append("")
                 session.output.text("\n".join(lines))
             session.output.enter_input_mode()
+        elif cmd.name == "rename":
+            self._cmd_rename(session, cmd)
         elif cmd.name == "goal":
             if hasattr(session, "handle_goal_command"):
                 session.handle_goal_command(cmd.args)
@@ -252,6 +270,19 @@ class SubmarineSubmitInputCommand(sublime_plugin.TextCommand):
                 handle_goal_command(session, cmd.args)
         else:
             session.query(cmd.raw)
+
+    def _cmd_rename(self, session, cmd):
+        """Rename this session. Host-only — do not forward /rename to the agent."""
+        name = (getattr(cmd, "args", None) or "").strip()
+        if not name:
+            cur = (getattr(session, "name", None) or "").strip() or "(unnamed)"
+            session.output.text(
+                "\n*Usage: /rename <title> — current: {}*\n".format(cur))
+            session.output.enter_input_mode()
+            return
+        session._set_name(name)
+        sublime.status_message("Submarine: renamed")
+        session.output.enter_input_mode()
 
 
 class SubmarineSendNowCommand(sublime_plugin.TextCommand):

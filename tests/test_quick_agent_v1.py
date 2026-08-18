@@ -404,6 +404,7 @@ class TestGoalPersistenceSchema(unittest.TestCase):
         td = tempfile.mkdtemp()
         s = make_session(initialized=True)
         s.session_id = "persist-1"
+        s.query_count = 1
         s.store.path = os.path.join(td, ".sessions.json")
         s.goal_tracker = GoalTracker()
         s.goal_tracker.create("ship persist")

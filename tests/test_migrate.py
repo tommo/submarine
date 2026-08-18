@@ -312,16 +312,19 @@ def test_e2e_real_sessions_empty_store_and_conflict_wins(tmp_path, isolated_home
     shutil.copy2(REAL_LEGACY_SESSIONS, str(legacy / ".sessions.json"))
     with open(REAL_LEGACY_SESSIONS, encoding="utf-8") as f:
         real = json.load(f)
-    assert len(real) == 200
+    # The legacy file is live data — the row count changes over time
+    # (upstream now prunes unused rows). Assert against the actual content.
+    n = len(real)
+    assert n > 0
     victim = real[0]
     sid = victim["session_id"]
 
     empty = run_migration(str(plugin), override_dir=str(legacy))
-    assert empty["sessions"]["imported"] == 200
+    assert empty["sessions"]["imported"] == n
     assert empty["sessions"]["skipped_existing"] == 0
     store = _store(str(plugin))
     loaded = store.load()
-    assert len(loaded) == 200
+    assert len(loaded) == n
     assert store.find(sid)["name"] == victim.get("name")
 
     plugin2 = tmp_path / "plugin2"
@@ -335,11 +338,11 @@ def test_e2e_real_sessions_empty_store_and_conflict_wins(tmp_path, isolated_home
     _store(str(plugin2)).save([ours])
     conflicted = run_migration(str(plugin2), override_dir=str(legacy))
     assert conflicted["sessions"]["skipped_existing"] == 1
-    assert conflicted["sessions"]["imported"] == 199
+    assert conflicted["sessions"]["imported"] == n - 1
     kept = _store(str(plugin2)).find(sid)
     assert kept["name"] == "pre-existing-wins"
     assert kept["state"] == "closed"
-    assert len(_store(str(plugin2)).load()) == 200
+    assert len(_store(str(plugin2)).load()) == n
     # source copy must still match the original bytes
     assert (legacy / ".sessions.json").read_bytes() == open(
         REAL_LEGACY_SESSIONS, "rb"

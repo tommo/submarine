@@ -327,6 +327,13 @@ class Session:
         saved_entry = None
         if self.resume_id:
             saved_entry = self.store.find(self.resume_id)
+            if saved_entry:
+                try:
+                    saved_q = int(saved_entry.get("query_count") or 0)
+                except (TypeError, ValueError):
+                    saved_q = 0
+                if saved_q > int(getattr(self, "query_count", 0) or 0):
+                    self.query_count = saved_q
         view_model = read_stamp(self.persist, STAMP_MODEL) if self.resume_id else None
         chosen_raw = resolve_init_model(
             profile_model=(self.profile.get("model") if self.profile else None),
@@ -1140,12 +1147,24 @@ class Session:
         if not self.session_id or self.quick_mode:
             return
         self._persist_view_identity()
+        existing = self.store.find(self.session_id)
+        live_q = int(getattr(self, "query_count", 0) or 0)
+        saved_q = 0
+        if existing:
+            try:
+                saved_q = int(existing.get("query_count") or 0)
+            except (TypeError, ValueError):
+                saved_q = 0
+        # New unused sheet: do not create a history row. Never delete an
+        # existing resume entry just because this process has not queried yet.
+        if live_q <= 0 and existing is None:
+            return
         entry = {
             "session_id": self.session_id,
             "name": self.name,
             "project": self.cwd or self._default_cwd(),
             "total_cost": self.total_cost,
-            "query_count": self.query_count,
+            "query_count": max(live_q, saved_q),
             "backend": self.backend,
             "last_activity": self.last_activity,
             "last_access": float(self.last_access or 0) or float(self.last_activity or 0),

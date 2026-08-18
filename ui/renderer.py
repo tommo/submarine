@@ -36,6 +36,7 @@ from .tools import (
     format_tool_row,
     is_host_control_tool,
     may_background,
+    same_ask_payload,
     same_modal_tool,
     stash_media_path,
     sync_todos_from_task_result,
@@ -179,17 +180,27 @@ class TurnRenderer:
         existing = None
         if tool_id:
             existing = self._find_pending_or_background_by_id(tool_id)
+            if existing is not None and existing.status == DONE:
+                return
+        # ExitPlanMode / EnterPlanMode / ask_user: agent or ACP often opens
+        # twice with different toolCallIds. Collapse to one open row. A late
+        # tool_use after ✔ must not start a second ☐ of the same question.
         if existing is None and name in (
             "ExitPlanMode", "EnterPlanMode", "ask_user", "AskUserQuestion",
         ):
             for event in reversed(self.current.events):
-                if (isinstance(event, ToolCall)
-                        and same_modal_tool(event.name, name)
-                        and event.status in (PENDING, BACKGROUND)):
+                if not isinstance(event, ToolCall):
+                    continue
+                if not same_modal_tool(event.name, name):
+                    continue
+                if event.status in (PENDING, BACKGROUND):
                     existing = event
                     if tool_id:
                         event.id = tool_id
                     break
+                if event.status == DONE and same_ask_payload(
+                        event.tool_input, tool_input):
+                    return
         if existing is not None and existing.status in (PENDING, BACKGROUND):
             existing.name = name
             if tool_input:

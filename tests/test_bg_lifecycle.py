@@ -93,6 +93,8 @@ class LiveBridge(AcpBridge):
         self._terminals = {}
         self._terminal_bg = {}
         self._released_terminals = set()
+        self._detached_snaps = {}
+        self._detached_procs = {}
         self._child_sessions = {}
         self._bg_notified_tasks = set()
         self._bg_notified_tools = set()

@@ -608,6 +608,10 @@ class SessionMixin:
                 await self._terminal_close(tid)
             except Exception:
                 pass
+        for tid, proc in list(getattr(self, "_detached_procs", {}).items()):
+            self._kill_terminal_proc(proc)
+        if hasattr(self, "_detached_procs"):
+            self._detached_procs.clear()
         try:
             self._cancel_child_sessions("shutdown")
         except Exception:

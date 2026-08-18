@@ -325,6 +325,19 @@ class SubmarineOutputView(FormatHelpers):
             else:
                 labels.append(str(it))
         html = " · ".join(l for l in labels if l)
+        try:
+            hint = (
+                "⌘↵ send now"
+                if sublime is not None and sublime.platform() == "osx"
+                else "Ctrl+↵ send now"
+            )
+        except Exception:
+            hint = "Ctrl+↵ send now"
+        html = (
+            '%s<div style="margin:2px 0 1px 0;font-size:10px;'
+            'color:color(var(--foreground) alpha(0.35));">%s</div>'
+            % (html, hint)
+        )
         self._set_banner("_queue_phantom", keys.PHANTOM_QUEUE, html, True)
 
     def wakeup_banner(self, fire_at=None):

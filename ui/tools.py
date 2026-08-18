@@ -68,6 +68,22 @@ def same_modal_tool(a: str, b: str) -> bool:
     return bool(a and b and _n(a) == _n(b))
 
 
+def same_ask_payload(a: dict, b: dict) -> bool:
+    """True when two ask_user inputs are the same question (collapse 2nd ☐)."""
+    def _q(inp):
+        if not isinstance(inp, dict):
+            return ""
+        q = inp.get("question")
+        if q:
+            return str(q).strip()
+        qs = inp.get("questions") or []
+        if isinstance(qs, list) and qs and isinstance(qs[0], dict):
+            return str(qs[0].get("question") or "").strip()
+        return ""
+    qa, qb = _q(a), _q(b)
+    return bool(qa and qb and qa == qb)
+
+
 def format_tool_row(view, tool: ToolCall) -> str:
     """`  {SYMBOL} {name}{detail}\\n` — empty string for host-control tools."""
     if is_host_control_tool(tool.name):

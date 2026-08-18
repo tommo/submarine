@@ -409,6 +409,11 @@ class UpdatesMixin:
                     f"title={upd.get('title')!r} name={tool_name!r} "
                     f"status={status!r}")
                 return
+            # Ext method already closed this id (ask_user / ExitPlanMode).
+            # Re-emitting tool_use after ✔ opens a second ☐ (plugin only
+            # upserts PENDING rows).
+            if tid and tid in getattr(self, "_tool_results_sent", set()):
+                return
             # Grok: bare tool_call then richer update. Emit tool_use at most
             # once per id (plugin upserts); re-emitting created a second ☐
             # that never received tool_result → last row stuck pending.

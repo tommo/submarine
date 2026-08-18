@@ -238,6 +238,11 @@ class TerminalMixin:
                 code = await proc.wait()
                 slot["exit_status"] = self._exit_status_from_code(code)
             except asyncio.CancelledError:
+                if slot.get("detached"):
+                    if slot.get("exit_status") is None:
+                        slot["exit_status"] = {
+                            "exitCode": 0, "signal": None}
+                    raise
                 self._kill_terminal_proc(proc)
                 code = None
                 try:
@@ -272,6 +277,8 @@ class TerminalMixin:
                             hid, out or f"exit {code}", is_error=is_err)
                     except Exception as e:
                         self.file_log(f"synth tool_result {tid}: {e}")
+                if slot.get("detached"):
+                    return
                 # Claude-compatible wake when host is already idle after end_turn
                 try:
                     self._emit_bg_terminal_complete(tid)
@@ -294,6 +301,13 @@ class TerminalMixin:
                 f"terminal/output {tid} child session "
                 f"done={bool(child.get('done'))} n={len(child.get('text') or '')}")
             return self._child_output_payload(child)
+        snap = getattr(self, "_detached_snaps", {}).get(tid)
+        if snap:
+            return {
+                "output": snap.get("output") or "",
+                "truncated": bool(snap.get("truncated")),
+                "exitStatus": snap.get("exitStatus"),
+            }
         if tid in getattr(self, "_released_terminals", set()) or str(tid).startswith("term_"):
             # Host shell we created (or already released).
             self.file_log(
@@ -386,6 +400,11 @@ class TerminalMixin:
                 }
                 return {"exitCode": es.get("exitCode"),
                         "signal": es.get("signal")}
+            snap = getattr(self, "_detached_snaps", {}).get(tid)
+            if snap:
+                es = snap.get("exitStatus") or {"exitCode": 0, "signal": None}
+                return {"exitCode": es.get("exitCode"),
+                        "signal": es.get("signal")}
             # Already released/killed (e.g. on interrupt) — report cancelled.
             return {"exitCode": None, "signal": "SIGTERM"}
         # kimi-code AcpTerminalProcess: exitCode ?? -1. A null exit is
@@ -471,8 +490,67 @@ class TerminalMixin:
             # Detach the poll handle; the child session keeps running.
             self.file_log(f"terminal/release {tid} is subagent session; ignore")
             return {}
+        slot = self._terminals.get(tid)
+        # Grok timeout:0 / run_in_background: release is detach, not kill.
+        if slot and slot.get("bg"):
+            await self._detach_terminal(tid)
+            return {}
         await self._terminal_close(tid)
         return {}
+
+    async def _detach_terminal(self, tid: str) -> None:
+        """Drop the ACP handle; leave a timeout:0 / bg process running."""
+        slot = self._terminals.get(tid)
+        if not slot:
+            return
+        slot["detached"] = True
+        if slot.get("exit_status") is None:
+            slot["exit_status"] = {"exitCode": 0, "signal": None}
+        out = (slot.get("stdout") or "") + (slot.get("stderr") or "")
+        if not hasattr(self, "_detached_snaps"):
+            self._detached_snaps = {}
+        if not hasattr(self, "_detached_procs"):
+            self._detached_procs = {}
+        self._detached_snaps[tid] = {
+            "output": out,
+            "truncated": bool(slot.get("truncated")),
+            "exitStatus": slot["exit_status"],
+        }
+        extra = list(self._detached_snaps)[:-32]
+        for old in extra:
+            self._detached_snaps.pop(old, None)
+        reader = slot.get("reader")
+        if reader and not reader.done():
+            reader.cancel()
+            try:
+                await asyncio.wait_for(reader, timeout=0.5)
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                pass
+        self._terminals.pop(tid, None)
+        proc = slot.get("proc")
+        if proc is not None and proc.returncode is None:
+            self._detached_procs[tid] = proc
+            asyncio.create_task(self._watch_detached(tid, proc, slot))
+        self.file_log(
+            f"terminal/release {tid} detach (bg keep pid="
+            f"{getattr(proc, 'pid', None)})")
+
+    async def _watch_detached(self, tid: str, proc, slot: dict) -> None:
+        try:
+            code = await proc.wait()
+            es = self._exit_status_from_code(code)
+            slot["exit_status"] = es
+            snap = getattr(self, "_detached_snaps", {}).get(tid)
+            if snap is not None:
+                snap["exitStatus"] = es
+            getattr(self, "_detached_procs", {}).pop(tid, None)
+            try:
+                self._emit_bg_terminal_complete(tid)
+            except Exception as e:
+                self.file_log(f"detached complete {tid}: {e}")
+        except Exception as e:
+            self.file_log(f"detached watch {tid}: {e}")
+            getattr(self, "_detached_procs", {}).pop(tid, None)
 
     async def _terminal_close(self, tid: str) -> None:
         slot = self._terminals.pop(tid, None)

@@ -98,6 +98,8 @@ class FakeOutput:
         if background and not is_shell_background_tool(name):
             background = False
         existing = self._tools_by_id.get(tool_id) if tool_id else None
+        if existing is not None and existing.status == "done":
+            return existing
         if existing is not None and existing.status in ("background", "pending"):
             existing.name = name
             existing.input = tool_input

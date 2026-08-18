@@ -145,6 +145,10 @@ class AcpBridge(TransportMixin, SessionMixin, UpdatesMixin,
         # terminal/output (same RPC as shells).
         self._child_sessions: Dict[str, Dict[str, Any]] = {}
         self._released_terminals: set = set()
+        # timeout:0 / run_in_background: Grok release()s while the process
+        # must keep running. Snap last output; do not SIGTERM.
+        self._detached_snaps: Dict[str, dict] = {}
+        self._detached_procs: Dict[str, Any] = {}
         # After Esc the prompt RPC is done; Grok may still fire turn_completed.
         # leftover_end closes interrupt leftover busy — not a normal @done.
         self._leftover_end_pending: bool = False
