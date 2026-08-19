@@ -31,7 +31,13 @@ _TITLE_ICON_RE = re.compile(r'^(?:[◉◇•○◐◓◑◒❓⏸↻⚠✘❌!�
 
 
 class OutputSheet:
-    """View lifecycle + named-region helpers + buffer mutations."""
+    """View lifecycle + named-region helpers + buffer mutations.
+
+    Viewless convention: `_has_view()` is False when detached. `write` /
+    `replace` / region / viewport helpers no-op. `show()` is the bind path
+    and still creates a sheet when none exists — detached event handlers
+    must not call it.
+    """
 
     def __init__(self, owner, window):
         self.owner = owner
@@ -39,6 +45,9 @@ class OutputSheet:
         self.view = None
         self._name = "Submarine"
         self._panel_name = None
+
+    def _has_view(self) -> bool:
+        return self._valid()
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -233,7 +242,8 @@ class OutputSheet:
             self.view.set_read_only(True)
 
     def write(self, text: str, pos: Optional[int] = None) -> int:
-        if not self._valid():
+        """Insert text. Viewless: no-op, returns 0."""
+        if not self._has_view():
             return 0
         self.view.set_read_only(False)
         if pos is None:
@@ -243,7 +253,8 @@ class OutputSheet:
         return pos + len(text)
 
     def replace(self, start: int, end: int, text: str) -> int:
-        if not self._valid():
+        """Replace a span. Viewless: no-op, returns `end`."""
+        if not self._has_view():
             return end
         self.view.set_read_only(False)
         self.view.run_command(keys.CMD_REPLACE, {
@@ -253,7 +264,8 @@ class OutputSheet:
         return start + len(text)
 
     def clear_all(self) -> None:
-        if not self._valid():
+        """Erase the buffer. Viewless: no-op."""
+        if not self._has_view():
             return
         self.view.set_read_only(False)
         self.view.run_command(keys.CMD_CLEAR_ALL)
@@ -262,7 +274,8 @@ class OutputSheet:
     # --- regions -----------------------------------------------------------
 
     def set_hidden_region(self, key: str, start: int, end: int) -> None:
-        if not self._valid() or sublime is None:
+        """Stamp a named region. Viewless: no-op."""
+        if not self._has_view() or sublime is None:
             return
         flags = getattr(sublime, "HIDDEN", 0)
         self.view.add_regions(key, [sublime.Region(start, end)], "", "", flags)

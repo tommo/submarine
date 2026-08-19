@@ -37,7 +37,15 @@ _DANGEROUS_BASH = (
 
 
 class ModalUI:
-    """Turn-modal permission / plan / question blocks."""
+    """Turn-modal permission / plan / question blocks.
+
+    Viewless convention: `_has_view()` is False when detached. Pending
+    requests stay as live objects (callback + payload); `descriptors()`
+    serializes them. Regions/phantoms are never carried across views —
+    `drop_view_chrome()` nulls spans; `rerender_pending()` rebuilds them
+    on the bound view. Answering/dismissing clears the live object, so
+    the descriptor list empties.
+    """
 
     def __init__(self, owner):
         self.owner = owner
@@ -49,6 +57,82 @@ class ModalUI:
         self._last_allowed_tool = None
         self._last_allowed_time = 0.0
         self._perm_timeout_token = 0
+
+    def _has_view(self) -> bool:
+        view = self.owner.view
+        if not view:
+            return False
+        try:
+            return bool(view.is_valid())
+        except Exception:
+            return True
+
+    def descriptors(self) -> List[dict]:
+        """Serializable pending-modal list (kind + payload). Callbacks omitted."""
+        out = []  # type: List[dict]
+        if self.pending_permission:
+            out.append(self.pending_permission.descriptor())
+        for perm in self._permission_queue:
+            out.append(perm.descriptor())
+        if self.pending_plan:
+            out.append(self.pending_plan.descriptor())
+        if self.pending_question:
+            out.append(self.pending_question.descriptor())
+        return out
+
+    def drop_view_chrome(self) -> None:
+        """Erase named regions/phantoms on the bound view, then null offsets."""
+        view = self.owner.view
+        if view:
+            for key in (
+                keys.PERM_BLOCK, keys.PLAN_BLOCK, keys.QUESTION_BLOCK,
+                keys.QUESTION_KEYS, keys.QUESTION_INPUT_MARKER,
+            ):
+                try:
+                    view.erase_regions(key)
+                except Exception:
+                    pass
+            perm = self.pending_permission
+            if perm:
+                for btn_type in list(perm.button_regions):
+                    try:
+                        view.erase_regions("%s%s" % (keys.PERM_BTN_PREFIX, btn_type))
+                    except Exception:
+                        pass
+            plan = self.pending_plan
+            if plan:
+                for btn_type in list(plan.button_regions):
+                    try:
+                        view.erase_regions("%s%s" % (keys.PLAN_BTN_PREFIX, btn_type))
+                    except Exception:
+                        pass
+        self.drop_regions()
+
+    def drop_regions(self) -> None:
+        """Invalidate stored region tuples. Live request objects are kept."""
+        if self.pending_permission:
+            self.pending_permission.region = None
+            self.pending_permission.button_regions = {}
+        for perm in self._permission_queue:
+            perm.region = None
+            perm.button_regions = {}
+        if self.pending_plan:
+            self.pending_plan.region = None
+            self.pending_plan.button_regions = {}
+        if self.pending_question:
+            self.pending_question.region = None
+            self.pending_question.button_regions = {}
+
+    def rerender_pending(self) -> None:
+        """Rebuild modal chrome from live pending objects. Viewless: no-op."""
+        if not self._has_view():
+            return
+        if self.pending_permission:
+            self._render_permission()
+        if self.pending_plan:
+            self._render_plan_approval()
+        if self.pending_question:
+            self.render_question()
 
     def reset_all(self, keep_auto=False):
         self.pending_permission = None
@@ -69,7 +153,7 @@ class ModalUI:
 
     def trailing_ui_start(self):
         view = self.owner.view
-        if not view:
+        if not self._has_view():
             return None
         starts = []
         for key in (
@@ -94,7 +178,9 @@ class ModalUI:
     # --- permission --------------------------------------------------------
 
     def permission_request(self, pid, tool, tool_input, callback):
-        self.owner.show(focus=False)
+        """Queue/show a permission modal. Viewless: records request, no chrome."""
+        if self._has_view():
+            self.owner.show(focus=False)
         for pattern in self.auto_allow_tools:
             if self._match_auto_allow_pattern(tool, tool_input, pattern):
                 callback(PERM_ALLOW)
@@ -137,7 +223,7 @@ class ModalUI:
         sublime.set_timeout(_expire, PERM_TIMEOUT_S * 1000)
 
     def _render_permission(self):
-        if not self.pending_permission or not self.owner.view:
+        if not self.pending_permission or not self._has_view():
             return
         perm = self.pending_permission
         tool = perm.tool
@@ -214,7 +300,7 @@ class ModalUI:
         self._add_button_regions()
 
     def _add_button_regions(self):
-        if not self.pending_permission or not self.owner.view or sublime is None:
+        if not self.pending_permission or not self._has_view() or sublime is None:
             return
         perm = self.pending_permission
         for btn_type, (start, end) in perm.button_regions.items():
@@ -227,7 +313,11 @@ class ModalUI:
             )
 
     def remove_permission_block(self):
-        if not self.pending_permission or not self.owner.view:
+        if not self.pending_permission:
+            return
+        if not self._has_view():
+            self.pending_permission.region = None
+            self.pending_permission.button_regions = {}
             return
         perm = self.pending_permission
         for btn_type in perm.button_regions:
@@ -237,26 +327,29 @@ class ModalUI:
             r = regions[0]
             self.owner._replace(r.begin(), r.end(), "")
         else:
-            if self.owner.current:
-                conv_end = self.owner.current.region[1]
-                if self.owner.view.size() > conv_end:
-                    self.owner._replace(conv_end, self.owner.view.size(), "")
+            conv_end = _conv_end(self.owner)
+            if conv_end is not None and self.owner.view.size() > conv_end:
+                self.owner._replace(conv_end, self.owner.view.size(), "")
         self.owner.view.erase_regions(keys.PERM_BLOCK)
+        perm.region = None
+        perm.button_regions = {}
 
     def _clear_permission(self):
-        if not self.pending_permission or not self.owner.view:
+        if not self.pending_permission:
             return
-        clear_pending_block(
-            self.owner.view,
-            block_region_key=keys.PERM_BLOCK,
-            button_prefix=keys.PERM_BTN_PREFIX,
-            button_keys=self.pending_permission.button_regions,
-            fallback_region_end=(
-                self.owner.current.region[1] if self.owner.current else None),
-        )
-        if self.owner.current:
-            self.owner.current.region = (
-                self.owner.current.region[0], self.owner.view.size())
+        if self._has_view():
+            clear_pending_block(
+                self.owner.view,
+                block_region_key=keys.PERM_BLOCK,
+                button_prefix=keys.PERM_BTN_PREFIX,
+                button_keys=self.pending_permission.button_regions,
+                fallback_region_end=_conv_end(self.owner),
+            )
+            cur = self.owner.current
+            if cur and cur.region:
+                cur.region = (cur.region[0], self.owner.view.size())
+        self.pending_permission.region = None
+        self.pending_permission.button_regions = {}
 
     def clear_stale_permission(self, current_pid):
         if not self.pending_permission:
@@ -440,6 +533,7 @@ class ModalUI:
             break
 
     def handle_permission_key(self, key):
+        """Answer the visible permission. Viewless: still resolves the callback."""
         if not self.pending_permission:
             return False
         if self.pending_permission.callback is None:
@@ -463,7 +557,9 @@ class ModalUI:
     # --- plan --------------------------------------------------------------
 
     def plan_approval_request(self, plan_id, plan_file, allowed_prompts, callback):
-        self.owner.show(focus=False)
+        """Show a plan-approval modal. Viewless: records request, no chrome."""
+        if self._has_view():
+            self.owner.show(focus=False)
         self.pending_plan = PlanApproval(
             id=plan_id, plan_file=plan_file,
             allowed_prompts=allowed_prompts, callback=callback,
@@ -473,7 +569,7 @@ class ModalUI:
         self.owner.composer.scroll_to_end()
 
     def _render_plan_approval(self):
-        if not self.pending_plan or not self.owner.view:
+        if not self.pending_plan or not self._has_view():
             return
         plan = self.pending_plan
         lines = ["\n", "  ⚙ Plan complete — approve to start implementation\n"]
@@ -516,18 +612,21 @@ class ModalUI:
             )
 
     def clear_plan_approval(self):
-        if not self.pending_plan or not self.owner.view:
+        if not self.pending_plan:
             return
-        clear_pending_block(
-            self.owner.view,
-            block_region_key=keys.PLAN_BLOCK,
-            button_prefix=keys.PLAN_BTN_PREFIX,
-            button_keys=self.pending_plan.button_regions,
-            fallback_region_end=(
-                self.owner.current.region[1] if self.owner.current else None),
-        )
+        if self._has_view():
+            clear_pending_block(
+                self.owner.view,
+                block_region_key=keys.PLAN_BLOCK,
+                button_prefix=keys.PLAN_BTN_PREFIX,
+                button_keys=self.pending_plan.button_regions,
+                fallback_region_end=_conv_end(self.owner),
+            )
+        self.pending_plan.region = None
+        self.pending_plan.button_regions = {}
 
     def handle_plan_key(self, key):
+        """Answer the visible plan. Viewless: still resolves the callback."""
         if not self.pending_plan or self.pending_plan.callback is None:
             return False
         if self.owner.composer.is_input_mode() and not self.owner.composer._question_input_mode:
@@ -546,7 +645,7 @@ class ModalUI:
         callback = plan.callback
         plan.callback = None
         self.clear_plan_approval()
-        self.pending_plan = None
+        self.pending_plan = None  # descriptor clears with the live object
         self.owner._move_cursor_to_end()
         callback(response)
         return True
@@ -578,7 +677,9 @@ class ModalUI:
     # --- question ----------------------------------------------------------
 
     def question_request(self, qid, questions, callback):
-        self.owner.show(focus=False)
+        """Show a question modal. Viewless: records request, no chrome."""
+        if self._has_view():
+            self.owner.show(focus=False)
         self.pending_question = QuestionRequest(
             qid=qid, questions=questions, callback=callback)
         self.owner.composer.hide_composer_for_modal()
@@ -619,7 +720,7 @@ class ModalUI:
         return "".join(lines)
 
     def render_question(self):
-        if not self.pending_question or not self.owner.view:
+        if not self.pending_question or not self._has_view():
             return
         q_req = self.pending_question
         if q_req.current_idx >= len(q_req.questions):
@@ -705,7 +806,15 @@ class ModalUI:
             view.erase_regions(keys.QUESTION_KEYS)
 
     def clear_question(self, summary=""):
-        if not self.pending_question or not self.owner.view:
+        if not self.pending_question:
+            return
+        if not self._has_view():
+            self.pending_question.region = None
+            self.pending_question.button_regions = {}
+            c = self.owner.composer
+            c._question_input_mode = False
+            if summary and self.owner.current is not None:
+                self.owner.current.events.append("  ☑ %s\n" % summary)
             return
         view = self.owner.view
         c = self.owner.composer
@@ -745,10 +854,11 @@ class ModalUI:
             block_region_key=keys.QUESTION_BLOCK,
             button_prefix="submarine_question_btn_",
             button_keys={},
-            fallback_region_end=(
-                self.owner.current.region[1] if self.owner.current else None),
+            fallback_region_end=_conv_end(self.owner),
             extra_region_keys=(keys.QUESTION_KEYS, keys.QUESTION_INPUT_MARKER),
         )
+        self.pending_question.region = None
+        self.pending_question.button_regions = {}
         if summary:
             self.owner.renderer._struct_dirty = True
             self.owner.renderer._render_current()
@@ -771,6 +881,7 @@ class ModalUI:
             self.owner.composer.scroll_to_end()
 
     def handle_question_key(self, key):
+        """Answer the visible question. Viewless: updates answers, no chrome."""
         if not self.pending_question or self.pending_question.callback is None:
             return False
         if (self.owner.composer.is_input_mode()
@@ -823,7 +934,7 @@ class ModalUI:
     def _question_enter_input_mode(self):
         view = self.owner.view
         c = self.owner.composer
-        if not view or not self.pending_question:
+        if not self._has_view() or not self.pending_question:
             return
         if c._question_input_mode:
             view.set_read_only(False)
@@ -865,7 +976,7 @@ class ModalUI:
         view = self.owner.view
         if not c._question_input_mode:
             return False
-        if not self.pending_question or not view:
+        if not self.pending_question or not self._has_view():
             c._question_input_mode = False
             try:
                 keys.write_setting(view.settings(), keys.QUESTION_INPUT_MODE, False)
@@ -904,6 +1015,16 @@ class ModalUI:
         self.clear_question("%s → %s" % (header, text))
         self._advance_question()
         return True
+
+
+def _conv_end(owner):
+    cur = getattr(owner, "current", None)
+    if not cur or not cur.region:
+        return None
+    try:
+        return cur.region[1]
+    except Exception:
+        return None
 
 
 def _R(a, b):

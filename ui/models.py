@@ -88,8 +88,18 @@ class PlanApproval:
     plan_file: str
     allowed_prompts: List[dict]
     callback: Callable[[str], None]
-    region: tuple = (0, 0)
+    region: Optional[tuple] = None
     button_regions: Dict[str, tuple] = field(default_factory=dict)
+
+    def descriptor(self) -> dict:
+        return {
+            "kind": "plan",
+            "payload": {
+                "id": self.id,
+                "plan_file": self.plan_file,
+                "allowed_prompts": list(self.allowed_prompts or []),
+            },
+        }
 
 
 @dataclass
@@ -99,9 +109,19 @@ class PermissionRequest:
     tool: str
     tool_input: dict
     callback: Callable[[str], None]
-    region: tuple = (0, 0)
+    region: Optional[tuple] = None
     button_regions: Dict[str, tuple] = field(default_factory=dict)
     created_at: float = 0.0
+
+    def descriptor(self) -> dict:
+        return {
+            "kind": "permission",
+            "payload": {
+                "id": self.id,
+                "tool": self.tool,
+                "tool_input": dict(self.tool_input or {}),
+            },
+        }
 
 
 @dataclass
@@ -112,9 +132,21 @@ class QuestionRequest:
     current_idx: int = 0
     answers: Dict[str, Any] = field(default_factory=dict)
     callback: Callable = None
-    region: tuple = (0, 0)
+    region: Optional[tuple] = None
     button_regions: Dict[str, tuple] = field(default_factory=dict)
     selected: set = field(default_factory=set)
+
+    def descriptor(self) -> dict:
+        return {
+            "kind": "question",
+            "payload": {
+                "qid": self.qid,
+                "questions": list(self.questions or []),
+                "current_idx": int(self.current_idx or 0),
+                "answers": dict(self.answers or {}),
+                "selected": sorted(self.selected or []),
+            },
+        }
 
 
 @dataclass
@@ -354,7 +386,7 @@ class Conversation:
     duration: float = 0.0
     has_meta: bool = False
     usage: dict = None
-    region: tuple = (0, 0)
+    region: Optional[tuple] = (0, 0)  # buffer span; None while detached
     context_names: List[str] = field(default_factory=list)
     context_refs: List[dict] = field(default_factory=list)
 

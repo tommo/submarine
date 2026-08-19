@@ -17,7 +17,13 @@ except ImportError:
 
 
 class Composer:
-    """Sticky ◎ at EOF + pad phantom + pending-context 📎 + caret ownership."""
+    """Sticky ◎ at EOF + pad phantom + pending-context 📎 + caret ownership.
+
+    Viewless convention: `_has_view()` is False when detached. `_input_start`
+    / `_input_area_start` are buffer offsets — `detach()` peels the draft
+    into `_detached_draft` and drops them. Buffer writes, phantoms, and
+    scrolling no-op while viewless; `surface_restore` re-enters input mode.
+    """
 
     def __init__(self, owner):
         self.owner = owner
@@ -33,6 +39,36 @@ class Composer:
         self._question_input_start = None
         self._pad_phantom_set = None
         self._context_phantom_set = None
+        self._detached_draft = ""
+
+    def _has_view(self) -> bool:
+        view = self.owner.view
+        if not view:
+            return False
+        try:
+            return bool(view.is_valid())
+        except Exception:
+            return True
+
+    def detach(self) -> None:
+        """Capture draft text and drop buffer offsets. Live flag goes idle."""
+        draft = ""
+        if self._has_view() and self._input_mode:
+            try:
+                draft = self.get_input_text()
+            except Exception:
+                draft = self._detached_draft or ""
+        elif self._detached_draft:
+            draft = self._detached_draft
+        self._detached_draft = draft or ""
+        self._input_mode = False
+        self._input_start = 0
+        self._input_area_start = 0
+        self._question_input_mode = False
+        self._question_input_start = None
+        self._pending_context_region = (0, 0)
+        self._pad_phantom_set = None
+        self._context_phantom_set = None
 
     # --- public flags ------------------------------------------------------
 
@@ -44,14 +80,18 @@ class Composer:
         return self._input_mode
 
     def is_in_input_region(self, point: int) -> bool:
-        if not self._input_mode:
+        """True if point is in the composer tail. Viewless: False."""
+        if not self._input_mode or not self._has_view():
             return False
         return point >= self._input_start
 
     def get_input_text(self) -> str:
+        """Composer draft. Viewless: last detached draft if still in input mode."""
         view = self.owner.view
-        if not view or not self._input_mode:
-            return ""
+        if not self._input_mode:
+            return self._detached_draft if not view else ""
+        if not view:
+            return self._detached_draft or ""
         return view.substr(_region(self._input_start, view.size()))
 
     def draft_end(self) -> int:
@@ -83,6 +123,12 @@ class Composer:
     # --- enter / exit ------------------------------------------------------
 
     def hide_composer_for_modal(self) -> None:
+        """Peel composer before a modal. Viewless: drop input-mode flag, keep draft."""
+        if not self._has_view():
+            if self._input_mode:
+                self._detached_draft = self._detached_draft or ""
+                self._input_mode = False
+            return
         view = self.owner.view
         if not view or not view.is_valid():
             return
@@ -104,6 +150,7 @@ class Composer:
         keys.write_setting(view.settings(), keys.INPUT_MODE, False)
 
     def enter_input_mode(self) -> None:
+        """Open the ◎ composer. Viewless: no-op (restored via surface_restore)."""
         view = self.owner.view
         if not view or not view.is_valid():
             return
@@ -172,6 +219,7 @@ class Composer:
         view.run_command("append", {"characters": self._input_marker})
         self._input_start = view.size()
         self._input_mode = True
+        self._detached_draft = ""
         keys.write_setting(view.settings(), keys.INPUT_MODE, True)
         self._caret_owner = OWNER_DRAFT
         self._draft_caret_off = 0
@@ -205,9 +253,12 @@ class Composer:
         self.focus(force_show=True, steal_focus=False, preserve_caret=True)
 
     def exit_input_mode(self, keep_text: bool = False) -> str:
+        """Close the composer. Viewless: clears the input-mode flag, returns draft."""
         view = self.owner.view
         if not view or not self._input_mode:
-            return ""
+            draft = self._detached_draft if self._input_mode else ""
+            self._input_mode = False
+            return draft
         session = get_session_for_view(view)
         if session:
             for meth in ("_update_permission_banner", "_update_wakeup_banner"):
@@ -240,8 +291,12 @@ class Composer:
         return input_text
 
     def reset_input_mode(self, reenter: bool = False) -> None:
+        """Strip composer chrome. Viewless: drop input-mode flag and offsets."""
         view = self.owner.view
         if not view:
+            self._input_mode = False
+            self._input_start = 0
+            self._input_area_start = 0
             return
         try:
             if self._pad_phantom_set is not None:
@@ -269,8 +324,11 @@ class Composer:
                 sublime.set_timeout(self.enter_input_mode, 10)
 
     def set_composer_text(self, text: str) -> None:
+        """Replace draft body. Viewless: stashes text on `_detached_draft`."""
         view = self.owner.view
         if not view or not view.is_valid() or not self._input_mode:
+            if self._input_mode or not view:
+                self._detached_draft = text or ""
             return
         body = text or ""
         if not body.strip():
@@ -768,6 +826,7 @@ class Composer:
     # --- pending context ---------------------------------------------------
 
     def set_pending_context(self, context_items: list) -> None:
+        """Show 📎 chips. Viewless: no-op."""
         view = self.owner.view
         if not view or not view.is_valid():
             return

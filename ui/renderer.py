@@ -49,7 +49,14 @@ except ImportError:
 
 
 class TurnRenderer:
-    """Owns conversations (cap 20) + current and the buffer projection."""
+    """Owns conversations (cap 20) + current and the buffer projection.
+
+    Viewless convention: `_has_view()` is False when detached. Public turn
+    methods always update `conversations` / `current` / projection flags;
+    buffer writes, named regions, phantoms, and scrolling run only while
+    bound. `Conversation.region` is None while detached (stale offsets are
+    never read); `repaint_from_state()` recomputes them on attach.
+    """
 
     def __init__(self, owner):
         self.owner = owner
@@ -69,15 +76,56 @@ class TurnRenderer:
         self._media_uri_cache = {}
         self._media_anchor = {}
         self._turn_context_phantom_set = None
+        self._tasks_expanded = False
+        self._region_stash = None  # type: Optional[tuple]
         self._MEDIA_SOURCE_MAX_BYTES = 8_000_000
         self._MEDIA_PHANTOM_MAX_W = 96
         self._MEDIA_POPUP_MAX_W = 360
         self._MINIHTML_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif")
 
+    def _has_view(self) -> bool:
+        view = self.owner.view
+        if not view:
+            return False
+        try:
+            return bool(view.is_valid())
+        except Exception:
+            return True
+
+    def invalidate_regions(self) -> None:
+        """Drop buffer offsets so detached paths cannot read stale spans.
+
+        Stashes the previous tuples for same-view rebind (QuickHost); a
+        full `repaint_from_state()` overwrites them after a host swap.
+        """
+        conv_regs = []
+        for conv in self.conversations:
+            conv_regs.append(conv.region)
+            conv.region = None
+        cur = self.current.region if self.current is not None else None
+        if self.current is not None:
+            self.current.region = None
+        self._region_stash = (conv_regs, cur)
+        self._proj_events_end = None
+
+    def restore_stashed_regions(self) -> None:
+        stash = self._region_stash
+        if not stash:
+            return
+        conv_regs, cur = stash
+        for conv, reg in zip(self.conversations, conv_regs):
+            if conv.region is None:
+                conv.region = reg
+        if self.current is not None and self.current.region is None:
+            self.current.region = cur
+        self._region_stash = None
+
     # --- turn API ----------------------------------------------------------
 
     def prompt(self, text, context_names=None, context_refs=None):
-        self.owner.show(focus=False)
+        """Start a user turn. Viewless: records conversation, no buffer write."""
+        if self._has_view():
+            self.owner.show(focus=False)
         self._render_pending = False
         self._struct_dirty = True
         c = self.owner.composer
@@ -160,17 +208,21 @@ class TurnRenderer:
             line = "%s◎ %s ▶\n  %s\n" % (prefix, indented, CONTEXT_PREFIX)
         else:
             line = "%s◎ %s ▶\n" % (prefix, indented)
-        end = self.owner._write(line)
-        self.current.region = (start, end)
-        self.owner.sheet.set_hidden_region(keys.CONV_REGION, start, end)
-        self.owner.composer.scroll_to_end()
-        if refs and sublime is not None:
-            sublime.set_timeout(
-                lambda r=list(refs), a=start, b=end: self._refresh_turn_context_phantoms(
-                    r, region=(a, b)),
-                15)
+        if view:
+            end = self.owner._write(line)
+            self.current.region = (start, end)
+            self.owner.sheet.set_hidden_region(keys.CONV_REGION, start, end)
+            self.owner.composer.scroll_to_end()
+            if refs and sublime is not None:
+                sublime.set_timeout(
+                    lambda r=list(refs), a=start, b=end: self._refresh_turn_context_phantoms(
+                        r, region=(a, b)),
+                    15)
+        else:
+            self.current.region = None
 
     def tool(self, name, tool_input=None, tool_id=None, background=False):
+        """Open a tool row. Viewless: records ToolCall, no buffer write."""
         if not self.current:
             return
         tool_input = tool_input or {}
@@ -223,6 +275,7 @@ class TurnRenderer:
         self._render_current()
 
     def tool_done(self, name, result=None, tool_id=None):
+        """Mark a tool done. Viewless: updates ToolCall, no buffer write."""
         targets = []
         if tool_id and self.current:
             for event in self.current.events:
@@ -285,6 +338,7 @@ class TurnRenderer:
             self._render_current()
 
     def tool_error(self, name, result=None, tool_id=None):
+        """Mark a tool errored. Viewless: updates ToolCall, no buffer write."""
         target = self._find_pending_or_background_by_id(tool_id)
         if target is None and self.current:
             for event in reversed(self.current.events):
@@ -308,6 +362,7 @@ class TurnRenderer:
             self._patch_tool_symbol(target, old_status)
 
     def text(self, content):
+        """Append assistant text. Viewless: records events, no buffer write."""
         if not self.current:
             return
         if content is None or content == "":
@@ -326,7 +381,7 @@ class TurnRenderer:
         self._render_current()
 
     def meta(self, duration, cost=None, usage=None):
-        """Sync render + clear pending debounce (old race fix)."""
+        """Finish the live turn. Viewless: records meta, skips buffer flush."""
         if not self.current:
             return
         try:
@@ -341,6 +396,7 @@ class TurnRenderer:
         self._do_render()
 
     def interrupted(self, show_banner=True):
+        """Mark the turn interrupted. Viewless: records state, no buffer write."""
         if not self.current:
             return
         self.current.working = False
@@ -365,6 +421,7 @@ class TurnRenderer:
         self._render_current()
 
     def apply_plan_todos(self, entries):
+        """Replace live todos. Viewless: records todos, no buffer write."""
         if not self.current or not isinstance(entries, list):
             return
         from .tools import todos_from_raw_list
@@ -386,13 +443,15 @@ class TurnRenderer:
         self._render_current()
 
     def set_retry_hint(self, text):
+        """Set the live retry hint. Viewless: records hint, no buffer write."""
         self._retry_hint = text or None
         if self.current and self.current.working:
             self._struct_dirty = True
             self._render_current()
 
     def advance_spinner(self, frames=None):
-        if not self.current or not self.current.working or not self.owner.view:
+        """Advance the working spinner. Viewless: no-op."""
+        if not self.current or not self.current.working or not self._has_view():
             return
         if frames:
             self._spinner_frames = frames
@@ -442,9 +501,11 @@ class TurnRenderer:
         return None
 
     def find_tool_by_id(self, tool_id):
+        """Lookup a tool by id. Viewless: same, state-only."""
         return self._find_pending_or_background_by_id(tool_id)
 
     def active_background_tools(self):
+        """List BACKGROUND tools. Viewless: same, state-only."""
         result = []
         for conv in self.conversations:
             for event in conv.events:
@@ -462,6 +523,7 @@ class TurnRenderer:
         return any(e is target for e in self.current.events)
 
     def remove_tool(self, target):
+        """Drop a tool event. Viewless: mutates events, no buffer patch."""
         in_current = False
         convs = list(self.conversations)
         if self.current is not None:
@@ -503,7 +565,7 @@ class TurnRenderer:
 
     def _patch_tool_symbol(self, target, old_status):
         view = self.owner.view
-        if not view:
+        if not view or not self._has_view():
             return
         old_sym = SYMBOLS.get(old_status, "☐")
         new_sym = SYMBOLS.get(target.status, "☐")
@@ -578,12 +640,21 @@ class TurnRenderer:
         return "".join(lines)
 
     def repaint_from_state(self):
+        """Reproject conversations onto the bound view. Viewless: no-op.
+
+        None `Conversation.region` tuples mean the live span is unknown —
+        treat as a full recompute (this method already rebuilds from state
+        and does not read stored offsets).
+        """
         view = self.owner.view
         if not view or not view.is_valid():
             return
         parts = []
         for conv in self.conversations:
-            parts.append(self.conversation_body(conv, leading_nl=bool(parts)))
+            body = self.conversation_body(conv, leading_nl=bool(parts))
+            start = sum(len(p) for p in parts)
+            conv.region = (start, start + len(body)) if body else None
+            parts.append(body)
         cur_start = sum(len(p) for p in parts)
         if self.current:
             parts.append(self.conversation_body(self.current, leading_nl=bool(parts)))
@@ -593,9 +664,11 @@ class TurnRenderer:
             end = cur_start + (len(parts[-1]) if parts else 0)
             self.current.region = (cur_start, end)
             self.owner.sheet.set_hidden_region(keys.CONV_REGION, cur_start, end)
+        self._region_stash = None
         self._reset_proj()
 
     def clear(self, keep_supportive=True):
+        """Clear the transcript. Viewless: drops conversations, no buffer write."""
         c = self.owner.composer
         was_input_mode = c.is_input_mode()
         sess = get_session_for_view(self.owner.view)
@@ -649,7 +722,7 @@ class TurnRenderer:
         self._reset_proj()
         if was_working:
             self.current = Conversation(prompt="(continued)", working=True)
-            self.current.region = (0, 0)
+            self.current.region = (0, 0) if self._has_view() else None
             self.current.events.extend(carry_bg)
             self.current.todos = carry_todos
             self.current.goal = carry_goal
@@ -675,7 +748,7 @@ class TurnRenderer:
             carry.todos = carry_todos
             carry.todos_all_done = False
             carry.goal = carry_goal
-            carry.region = (0, 0)
+            carry.region = (0, 0) if self._has_view() else None
             self.current = carry
             self._struct_dirty = True
             self._render_current()
@@ -726,7 +799,7 @@ class TurnRenderer:
                 pass
         self.conversations = []
         self.current = keep
-        self.current.region = (0, 0)
+        self.current.region = (0, 0) if self._has_view() else None
         self.owner.modals.reset_all(keep_auto=True)
         c._pending_context_region = (0, 0)
         c._input_mode = False
@@ -765,6 +838,7 @@ class TurnRenderer:
             self.owner.composer.scroll_to_end()
 
     def reset_active_states(self, soft=False):
+        """Reset composer + pending tools. Viewless: state only, no buffer patch."""
         self.owner.composer.reset_input_mode()
         if self.owner.pending_permission:
             if not soft:
@@ -806,7 +880,8 @@ class TurnRenderer:
                 view.set_read_only(True)
 
     def refresh_preserving_input(self):
-        if not self.owner.view or not self.current:
+        """Rewrite the live turn, keep composer. Viewless: no-op."""
+        if not self._has_view() or not self.current:
             return
         self._render_pending = False
         self._auto_scroll = False
@@ -822,7 +897,7 @@ class TurnRenderer:
         self._struct_dirty = False
 
     def _render_current(self, auto_scroll=True):
-        if not self.current or not self.owner.view:
+        if not self.current or not self._has_view():
             return
         if self._render_pending:
             return
@@ -837,7 +912,13 @@ class TurnRenderer:
         """Full live-turn projection (prompt + events + live chrome)."""
         conv = self.current
         lines = []
-        prefix = "\n" if conv.region[0] > 0 else ""
+        reg0 = 0
+        if conv.region:
+            try:
+                reg0 = conv.region[0]
+            except Exception:
+                reg0 = 0
+        prefix = "\n" if reg0 > 0 else ""
         if conv.prompt:
             prompt_lines = conv.prompt.split("\n")
             if len(prompt_lines) > 1:
@@ -899,9 +980,11 @@ class TurnRenderer:
         is_working = bool(conv.working and not turn_done)
         show_goal = bool(goal and _goal_is_open(goal) and not turn_done)
         view = self.owner.view
-        expanded = bool(
-            keys.read_setting(view.settings(), keys.TASKS_EXPANDED, False)
-        ) if view else False
+        expanded = bool(self._tasks_expanded)
+        if view:
+            expanded = bool(
+                keys.read_setting(view.settings(), keys.TASKS_EXPANDED, expanded)
+            )
         show, hidden = tasks_fold_rows(open_todos, expanded)
         show_tasks = bool(show)
 
@@ -1048,7 +1131,7 @@ class TurnRenderer:
 
     def _do_render(self):
         self._render_pending = False
-        if not self.current or not self.owner.view:
+        if not self.current or not self._has_view():
             return
         view = self.owner.view
         c = self.owner.composer
@@ -1104,8 +1187,11 @@ class TurnRenderer:
         tracked = view.get_regions(keys.CONV_REGION)
         if tracked and tracked[0].size() > 0:
             start, end = tracked[0].begin(), tracked[0].end()
-        else:
+        elif self.current.region:
             start, end = self.current.region
+        else:
+            # None region: full recompute of the live turn over the buffer.
+            start, end = 0, view_size
         if start > view_size or end > view_size:
             if not self.current.prompt:
                 return
@@ -1248,6 +1334,9 @@ class TurnRenderer:
             return False
         if insert_at < 0 or insert_at > view.size():
             return False
+        span = self.current.region
+        if not span:
+            return False
         c = self.owner.composer
         was_input = c.is_input_mode() and not c._question_input_mode
         new_end = self.owner._replace(insert_at, insert_at, delta)
@@ -1255,7 +1344,7 @@ class TurnRenderer:
         self._proj_events_end = new_end
         self._proj_joined_text += delta
         self._proj_event_count = len(self.current.events)
-        start, old = self.current.region
+        start, old = span
         self.current.region = (start, old + grown)
         try:
             tracked = view.get_regions(keys.CONV_REGION)

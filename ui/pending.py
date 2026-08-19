@@ -18,7 +18,10 @@ def clear_pending_block(
     """Erase a pending UI block from the view.
 
     Returns the (begin, end) of the cleared region, or None if nothing was cleared.
+    Viewless: no-op, returns None.
     """
+    if not view:
+        return None
     for btn_type in button_keys:
         view.erase_regions("%s%s" % (button_prefix, btn_type))
 

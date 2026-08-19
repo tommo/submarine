@@ -3,6 +3,15 @@
 core/session.py talks to this object. core/ports.py does not exist yet
 (P2); the surface below matches the P2 protocol list plus the extra
 OutputView methods Session already calls.
+
+Viewless convention (Worker C / HostView):
+  Each of SubmarineOutputView, TurnRenderer, ModalUI, Composer, OutputSheet
+  exposes `_has_view()` → bool (a live ST view is bound and `is_valid()`).
+  Buffer writes, named regions, phantoms, and scrolling run only inside
+  `if self._has_view()`. Session/render state (`conversations`, `current`,
+  pending modals, captured draft) always updates. `Conversation.region`
+  and modal `.region` tuples are None while detached; `repaint_from_state()`
+  recomputes them; `surface_restore()` re-enters composer / modals / scroll.
 """
 from __future__ import annotations
 
@@ -26,7 +35,12 @@ except ImportError:
 
 
 class SubmarineOutputView(FormatHelpers):
-    """Conversation surface: sheet + composer + renderer + modals."""
+    """Conversation surface: sheet + composer + renderer + modals.
+
+    Detached sessions keep this object with `view is None`. OutputPort and
+    ChromePort methods still record state; they no-op any buffer/phantom
+    mutation. See module docstring for the `_has_view()` convention.
+    """
 
     def __init__(self, window):
         self.window = window
@@ -39,6 +53,17 @@ class SubmarineOutputView(FormatHelpers):
         self._queue_phantom = None
         self._wakeup_phantom = None
         self._perm_banner_phantom = None
+        self._surface = {}
+        self._tasks_expanded = False
+
+    def _has_view(self) -> bool:
+        view = self.sheet.view
+        if not view:
+            return False
+        try:
+            return bool(view.is_valid())
+        except Exception:
+            return True
 
     # --- view / state aliases (listeners + session poke these) -------------
 
@@ -48,7 +73,153 @@ class SubmarineOutputView(FormatHelpers):
 
     @view.setter
     def view(self, v):
+        old = self.sheet.view
+        if old is not None and v is not old:
+            try:
+                self.surface_save()
+            except Exception:
+                pass
+            try:
+                self.modals.drop_view_chrome()
+            except Exception:
+                pass
+            try:
+                self.clear_phantoms()
+            except Exception:
+                pass
+            try:
+                self.composer.detach()
+            except Exception:
+                pass
+            try:
+                self.renderer.invalidate_regions()
+            except Exception:
+                pass
         self.sheet.view = v
+        if v is not old:
+            self._drop_phantom_set_refs()
+        if v is not None:
+            self.renderer.restore_stashed_regions()
+
+    def _drop_phantom_set_refs(self) -> None:
+        """PhantomSets are per-view; drop them so bind rebuilds against the new view."""
+        self._sleep_phantom = None
+        self._queue_phantom = None
+        self._wakeup_phantom = None
+        self._perm_banner_phantom = None
+        c = self.composer
+        c._pad_phantom_set = None
+        c._context_phantom_set = None
+        r = self.renderer
+        r._media_phantom_set = None
+        r._turn_context_phantom_set = None
+
+    def surface_save(self) -> dict:
+        """Snapshot per-session chrome. Viewless: return last snapshot unchanged."""
+        if not self._has_view():
+            return dict(self._surface or {})
+        c = self.composer
+        view = self.view
+        input_mode = bool(c.is_input_mode() and not c._question_input_mode)
+        draft = ""
+        caret = 0
+        if input_mode:
+            try:
+                draft = c.get_input_text() or ""
+            except Exception:
+                draft = c._detached_draft or ""
+            try:
+                start = int(c._input_start or 0)
+                sel = view.sel()
+                if sel:
+                    b = sel[0].begin() if hasattr(sel[0], "begin") else getattr(sel[0], "a", start)
+                    caret = max(0, int(b) - start)
+                elif c._draft_caret_off is not None:
+                    caret = int(c._draft_caret_off)
+            except Exception:
+                caret = int(c._draft_caret_off or 0)
+        else:
+            draft = c._detached_draft or ""
+        scroll = (0.0, 0.0)
+        try:
+            vp = view.viewport_position()
+            if vp and len(vp) >= 2:
+                scroll = (float(vp[0]), float(vp[1]))
+        except Exception:
+            pass
+        tasks_expanded = bool(self._tasks_expanded)
+        try:
+            tasks_expanded = bool(keys.read_setting(
+                view.settings(), keys.TASKS_EXPANDED, tasks_expanded))
+        except Exception:
+            pass
+        self._tasks_expanded = tasks_expanded
+        self.renderer._tasks_expanded = tasks_expanded
+        surface = {
+            "draft": draft,
+            "input_mode": input_mode,
+            "scroll": scroll,
+            "caret": caret,
+            "tasks_expanded": tasks_expanded,
+            "modals": self.modals.descriptors(),
+        }
+        prev = self._surface or {}
+        # If the composer was already peeled (HostView/QuickHost exit input
+        # before unbinding), keep the last snapshot's draft/caret/input_mode.
+        if not surface["input_mode"] and prev.get("input_mode"):
+            surface["input_mode"] = True
+            surface["draft"] = prev.get("draft") or surface["draft"]
+            surface["caret"] = prev.get("caret", surface["caret"])
+        self._surface = surface
+        return dict(surface)
+
+    def surface_restore(self, surface: dict) -> None:
+        """Re-apply a snapshot. Assumes the view is bound and `repaint_from_state()` ran."""
+        surface = dict(surface or {})
+        self._surface = dict(surface)
+        if not self._has_view():
+            if "draft" in surface:
+                self.composer._detached_draft = surface.get("draft") or ""
+            return
+        view = self.view
+        tasks_expanded = bool(surface.get("tasks_expanded"))
+        self._tasks_expanded = tasks_expanded
+        self.renderer._tasks_expanded = tasks_expanded
+        try:
+            keys.write_setting(view.settings(), keys.TASKS_EXPANDED, tasks_expanded)
+        except Exception:
+            pass
+        try:
+            self.modals.rerender_pending()
+        except Exception as e:
+            print("[Submarine] surface_restore modals: %s" % e)
+        want_input = bool(surface.get("input_mode"))
+        draft = surface.get("draft") or ""
+        idle = not self.composer.has_turn_modal_ui()
+        if want_input and idle:
+            if not self.composer.is_input_mode():
+                self.composer.enter_input_mode()
+            if self.composer.is_input_mode() and draft:
+                try:
+                    self.composer.set_composer_text(draft)
+                except Exception:
+                    pass
+            caret = surface.get("caret")
+            if caret is not None and self.composer.is_input_mode():
+                try:
+                    self.composer._draft_caret_off = max(0, int(caret))
+                    self.composer.restore_draft_caret(force=True)
+                except Exception:
+                    pass
+        elif draft:
+            self.composer._detached_draft = draft
+        scroll = surface.get("scroll")
+        if scroll:
+            try:
+                self.view.set_viewport_position(
+                    (float(scroll[0]), float(scroll[1])), False)
+            except Exception:
+                pass
 
     @property
     def conversations(self):
@@ -137,59 +308,77 @@ class SubmarineOutputView(FormatHelpers):
     # --- OutputPort --------------------------------------------------------
 
     def prompt(self, text, context_names=None, context_refs=None):
+        """Start a user turn. Viewless: records conversation, no buffer write."""
         self.renderer.prompt(text, context_names, context_refs)
 
     def tool(self, name, tool_input=None, tool_id=None, background=False):
+        """Open a tool row. Viewless: records ToolCall, no buffer write."""
         self.renderer.tool(name, tool_input, tool_id, background)
 
     def tool_done(self, name, result=None, tool_id=None):
+        """Mark a tool done. Viewless: updates ToolCall, no buffer write."""
         self.renderer.tool_done(name, result, tool_id)
 
     def tool_error(self, name, result=None, tool_id=None):
+        """Mark a tool errored. Viewless: updates ToolCall, no buffer write."""
         self.renderer.tool_error(name, result, tool_id)
 
     def text(self, content):
+        """Append assistant text. Viewless: records events, no buffer write."""
         self.renderer.text(content)
 
     def meta(self, duration, cost=None, usage=None):
+        """Finish the live turn. Viewless: records meta, skips buffer flush."""
         self.renderer.meta(duration, cost, usage)
 
     def interrupted(self, show_banner=True):
+        """Mark the turn interrupted. Viewless: records state, no buffer write."""
         self.renderer.interrupted(show_banner)
 
     def apply_plan_todos(self, entries):
+        """Replace live todos. Viewless: records todos, no buffer write."""
         self.renderer.apply_plan_todos(entries)
 
     def clear(self, keep_supportive=True):
+        """Clear the transcript. Viewless: drops conversations, no buffer write."""
         self.renderer.clear(keep_supportive)
 
     def permission_request(self, pid, tool, tool_input, callback):
+        """Queue/show a permission modal. Viewless: records request, no chrome."""
         self.modals.permission_request(pid, tool, tool_input, callback)
 
     def question_request(self, qid, questions, callback):
+        """Show a question modal. Viewless: records request, no chrome."""
         self.modals.question_request(qid, questions, callback)
 
     def plan_approval_request(self, plan_id, plan_file, allowed_prompts, callback):
+        """Show a plan-approval modal. Viewless: records request, no chrome."""
         self.modals.plan_approval_request(plan_id, plan_file, allowed_prompts, callback)
 
     def advance_spinner(self, frames=None):
+        """Advance the working spinner. Viewless: no-op."""
         self.renderer.advance_spinner(frames)
 
     def set_retry_hint(self, text):
+        """Set the live retry hint. Viewless: records hint, no buffer write."""
         self.renderer.set_retry_hint(text)
 
     def enter_input_mode(self):
+        """Open the ◎ composer. Viewless: no-op (restored via surface_restore)."""
         self.composer.enter_input_mode()
 
     def reset_active_states(self, soft=False):
+        """Reset composer + pending tools. Viewless: state only, no buffer patch."""
         self.renderer.reset_active_states(soft)
 
     # --- extra OutputView API Session already calls ------------------------
 
     def show(self, focus=True, panel=None):
+        """Ensure a sheet exists. Viewless: creates one (bind path, not a no-op)."""
         self.sheet.show(focus=focus, panel=panel)
 
     def set_name(self, name):
+        """Set the tab base name. Viewless: stored, title write skipped."""
         self.sheet.set_name(name)
 
     def refresh_title(self):
@@ -199,6 +388,7 @@ class SubmarineOutputView(FormatHelpers):
         return self.composer.exit_input_mode(keep_text=keep_text)
 
     def is_input_mode(self):
+        """Composer flag. Viewless: False after detach (draft lives on the surface)."""
         return self.composer.is_input_mode()
 
     def get_input_text(self):
@@ -244,6 +434,7 @@ class SubmarineOutputView(FormatHelpers):
         self.renderer.refresh_preserving_input()
 
     def refresh_background_hints(self):
+        """Refresh ⚙ hints in the composer prefix. Viewless: no-op."""
         self.composer.refresh_background_hints()
 
     def reset_input_mode(self, reenter=False):
@@ -258,18 +449,22 @@ class SubmarineOutputView(FormatHelpers):
         return Composer.collapse_trailing_blank_lines(view, keep=keep)
 
     def set_pending_context(self, context_items):
+        """Show 📎 chips. Viewless: no-op."""
         self.composer.set_pending_context(context_items)
 
     def draft_end(self):
         return self.composer.draft_end()
 
     def find_tool_by_id(self, tool_id):
+        """Lookup a tool by id. Viewless: same, state-only."""
         return self.renderer.find_tool_by_id(tool_id)
 
     def active_background_tools(self):
+        """List BACKGROUND tools. Viewless: same, state-only."""
         return self.renderer.active_background_tools()
 
     def remove_tool(self, target):
+        """Drop a tool event. Viewless: mutates events, no buffer patch."""
         self.renderer.remove_tool(target)
 
     def clear_keep_last(self):
@@ -279,6 +474,7 @@ class SubmarineOutputView(FormatHelpers):
         self.renderer.undo_clear()
 
     def repaint_from_state(self):
+        """Reproject conversations onto the bound view. Viewless: no-op."""
         self.renderer.repaint_from_state()
 
     def handle_permission_key(self, key):
@@ -297,6 +493,7 @@ class SubmarineOutputView(FormatHelpers):
         self.modals.clear_stale_permission(current_pid)
 
     def clear_all_permissions(self):
+        """Dismiss pending permissions. Viewless: drops live requests, no buffer."""
         self.modals.clear_all_permissions()
 
     @classmethod
@@ -306,14 +503,17 @@ class SubmarineOutputView(FormatHelpers):
     # --- ChromePort --------------------------------------------------------
 
     def sleep_banner(self, show=True, text=""):
+        """Sleep phantom. Viewless: no-op."""
         self._set_banner("_sleep_phantom", keys.PHANTOM_SLEEP, text, show)
 
     def connecting_banner(self, show=True):
+        """Connecting phantom. Viewless: no-op."""
         self._set_banner(
             "_sleep_phantom", keys.PHANTOM_SLEEP,
             "↻ connecting…" if show else "", show)
 
     def queue_chips(self, prompts=None):
+        """Queued-prompt chips. Viewless: no-op."""
         items = list(prompts or [])
         if not items:
             self._set_banner("_queue_phantom", keys.PHANTOM_QUEUE, "", False)
@@ -341,6 +541,7 @@ class SubmarineOutputView(FormatHelpers):
         self._set_banner("_queue_phantom", keys.PHANTOM_QUEUE, html, True)
 
     def wakeup_banner(self, fire_at=None):
+        """Wake countdown phantom. Viewless: no-op."""
         if not fire_at:
             self._set_banner("_wakeup_phantom", keys.PHANTOM_WAKEUP, "", False)
             return
@@ -354,6 +555,7 @@ class SubmarineOutputView(FormatHelpers):
             "↻ wake in %ds" % remain, True)
 
     def set_status(self, text):
+        """Status-bar text. Viewless: no-op."""
         view = self.view
         if not view or not view.is_valid():
             return
@@ -363,9 +565,11 @@ class SubmarineOutputView(FormatHelpers):
             pass
 
     def refresh_tab_title(self):
+        """Rewrite the tab title. Viewless: no-op."""
         self.sheet.update_title()
 
     def set_unread(self, on):
+        """Stamp unread on the bound view. Viewless: skips the view setting."""
         view = self.view
         if view:
             # Tab glyph is derived from session.unread; stamp a view key too.
@@ -401,6 +605,7 @@ class SubmarineOutputView(FormatHelpers):
         self.set_status(text)
 
     def clear_phantoms(self, names=None):
+        """Erase chrome phantoms. Viewless: drop PhantomSet refs, no view API."""
         pairs = [
             ("_sleep_phantom", keys.PHANTOM_SLEEP),
             ("_queue_phantom", keys.PHANTOM_QUEUE),
@@ -433,10 +638,12 @@ class SubmarineOutputView(FormatHelpers):
                 self.renderer._media_phantom_set.update([])
         except Exception:
             pass
+        if not self._has_view():
+            self._drop_phantom_set_refs()
 
     def _set_banner(self, attr, name, text, on):
         view = self.view
-        if not view or not view.is_valid() or sublime is None:
+        if not self._has_view() or sublime is None:
             return
         ps = getattr(self, attr, None)
         if ps is None:
@@ -466,15 +673,18 @@ class SubmarineOutputView(FormatHelpers):
     # --- persist stamps (PersistPort-shaped helpers on the view) -----------
 
     def stamp(self, key, value):
+        """Write a view setting. Viewless: no-op."""
         if self.view:
             keys.write_setting(self.view.settings(), key, value)
 
     def read_stamp(self, key, default=None):
+        """Read a view setting. Viewless: returns default."""
         if not self.view:
             return default
         return keys.read_setting(self.view.settings(), key, default)
 
     def clear_stamp(self, key):
+        """Erase a view setting. Viewless: no-op."""
         if self.view:
             keys.erase_setting(self.view.settings(), key)
 
