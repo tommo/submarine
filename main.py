@@ -21,8 +21,6 @@ from core.registry import (
     find_live_by_session_id,
     iter_sessions,
     register_session,
-    relink_all_parents,
-    unregister_view,
 )
 from core.session import Session
 from plat.constants import DEFAULT_SESSION_NAME, SETTINGS_FILE
@@ -274,14 +272,18 @@ def create_session(
     if show is None:
         show = not restoring
 
-    old_active = None
+    old_session = None
     try:
-        old_active = keys.read_setting(window.settings(), keys.ACTIVE_VIEW)
+        old_agent = keys.read_setting(window.settings(), keys.ACTIVE_AGENT)
+        if old_agent:
+            old_session = default_registry.by_agent_id(old_agent)
+        if old_session is None:
+            old_active = keys.read_setting(window.settings(), keys.ACTIVE_VIEW)
+            if old_active:
+                old_session = default_registry.for_view_id(old_active)
     except Exception:
-        old_active = None
-    if old_active and not restoring:
-        old_session = default_registry.get_session_for_view_id(old_active)
-        if old_session is not None:
+        old_session = None
+    if old_session is not None and not restoring:
             try:
                 old_session.output.set_name(
                     getattr(old_session, "display_name", None)
@@ -359,7 +361,7 @@ def get_session_for_view(view):
     if view is None:
         return None
     try:
-        return default_registry.get_session_for_view_id(view.id())
+        return default_registry.for_view(view)
     except Exception:
         return None
 
@@ -386,15 +388,25 @@ def get_active_session(window):
                 return session
     if working is not None:
         return working
-    active_view_id = keys.read_setting(window.settings(), keys.ACTIVE_VIEW)
-    if active_view_id:
-        session = default_registry.get_session_for_view_id(active_view_id)
+    active_agent = keys.read_setting(window.settings(), keys.ACTIVE_AGENT)
+    if active_agent:
+        session = default_registry.by_agent_id(active_agent)
         if (
             session is not None
             and getattr(session, "window", None) == window
             and not getattr(session, "quick_mode", False)
         ):
             return session
+    else:
+        active_view_id = keys.read_setting(window.settings(), keys.ACTIVE_VIEW)
+        if active_view_id:
+            session = default_registry.for_view_id(active_view_id)
+            if (
+                session is not None
+                and getattr(session, "window", None) == window
+                and not getattr(session, "quick_mode", False)
+            ):
+                return session
     for session in default_registry.sessions_for_window(window):
         if not getattr(session, "quick_mode", False):
             return session
@@ -411,9 +423,10 @@ def get_active_session(window):
 def _bind_registry():
     """Keep the process-level registry on sublime so soft reloads see it."""
     sublime._submarine_registry = default_registry  # type: ignore[attr-defined]
-    sublime._submarine_sessions = default_registry.sessions  # type: ignore[attr-defined]
-    sublime._submarine_agents = default_registry.agents  # type: ignore[attr-defined]
-    sublime._submarine_background = default_registry.background  # type: ignore[attr-defined]
+    sublime._submarine_by_agent = default_registry.by_agent  # type: ignore[attr-defined]
+    sublime._submarine_binding = default_registry.binding  # type: ignore[attr-defined]
+    sublime._submarine_sessions = default_registry.by_agent  # type: ignore[attr-defined]
+    sublime._submarine_agents = default_registry.by_agent  # type: ignore[attr-defined]
 
 
 def _abort_session_ui(s):
@@ -434,67 +447,62 @@ def _abort_session_ui(s):
 
 def _drop_stale_sessions():
     """Drop Python refs without terminating live bridges (reload invariant)."""
-    prev = getattr(sublime, "_submarine_sessions", None)
-    if not isinstance(prev, dict):
-        prev = getattr(sublime, "_claude_sessions", None)
-    if isinstance(prev, dict) and prev:
-        log_plugin("plugin_loaded: dropping %d stale session(s)" % len(prev))
-        for s in list(prev.values()):
-            _abort_session_ui(s)
-            try:
-                if getattr(s, "client", None):
-                    s.client = None
-            except Exception:
-                pass
-            try:
-                v = s.output.view if getattr(s, "output", None) else None
-                if v is not None and v.is_valid():
-                    _clear_view_phantoms(v)
-            except Exception:
-                pass
-        prev.clear()
+    seen = set()
 
-    held = getattr(sublime, "_submarine_registry", None)
-    if held is not None and held is not default_registry:
+    def _drop_session(s):
+        if s is None or id(s) in seen:
+            return
+        if not hasattr(s, "output") and not hasattr(s, "client"):
+            return
+        seen.add(id(s))
+        _abort_session_ui(s)
         try:
-            for s in list(held.iter_sessions()):
-                _abort_session_ui(s)
-                try:
-                    if getattr(s, "client", None):
-                        s.client = None
-                except Exception:
-                    pass
-            held.clear()
+            if getattr(s, "client", None):
+                s.client = None
+        except Exception:
+            pass
+        try:
+            v = s.output.view if getattr(s, "output", None) else None
+            if v is not None and v.is_valid():
+                _clear_view_phantoms(v)
         except Exception:
             pass
 
-    if default_registry.sessions:
+    held = getattr(sublime, "_submarine_registry", None)
+    if held is not None:
+        try:
+            live = list(held.iter_sessions())
+            if live:
+                log_plugin("plugin_loaded: dropping %d stale session(s)" % len(live))
+            for s in live:
+                _drop_session(s)
+            if held is not default_registry:
+                held.clear()
+        except Exception:
+            pass
+
+    if default_registry.by_agent:
         log_plugin(
             "plugin_loaded: clearing %d live registry session(s)"
-            % len(default_registry.sessions)
+            % len(default_registry.by_agent)
         )
         for s in list(default_registry.iter_sessions()):
-            _abort_session_ui(s)
-            try:
-                if getattr(s, "client", None):
-                    s.client = None
-            except Exception:
-                pass
+            _drop_session(s)
         default_registry.clear()
 
-    bg = getattr(sublime, "_submarine_background", None)
-    if not isinstance(bg, dict):
-        bg = getattr(sublime, "_claude_background", None)
-    if isinstance(bg, dict) and bg:
-        log_plugin("plugin_loaded: dropping %d background session(s)" % len(bg))
-        for s in list(bg.values()):
-            _abort_session_ui(s)
+    for attr in (
+        "_submarine_sessions", "_claude_sessions",
+        "_submarine_by_agent", "_submarine_background", "_claude_background",
+        "_submarine_agents", "_claude_agents",
+    ):
+        prev = getattr(sublime, attr, None)
+        if isinstance(prev, dict) and prev:
+            for s in list(prev.values()):
+                _drop_session(s)
             try:
-                if getattr(s, "client", None):
-                    s.client = None
+                prev.clear()
             except Exception:
                 pass
-        bg.clear()
 
 
 def _clear_view_phantoms(view):
@@ -535,9 +543,6 @@ def _startup_settle_views():
         _startup_strip_composers()
         from ui.listeners import settle_startup_output_views
         settle_startup_output_views()
-        n = relink_all_parents()
-        if n:
-            log_plugin("startup settle: relinked %d parent view_id(s)" % n)
     except Exception as e:
         log_plugin("startup settle: %s" % e)
 

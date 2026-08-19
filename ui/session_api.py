@@ -17,7 +17,21 @@ def _sublime():
 
 
 def sessions_map() -> dict:
-    """view_id → Session. Prefers the new map; falls back to the old one."""
+    """view_id → Session derived from the live binding."""
+    try:
+        from core.registry import default_registry
+        out = {}
+        binding = getattr(default_registry, "binding", None)
+        by_agent = getattr(default_registry, "by_agent", None)
+        if isinstance(binding, dict) and isinstance(by_agent, dict):
+            for vid, aid in binding.items():
+                s = by_agent.get(aid)
+                if s is not None:
+                    out[vid] = s
+            if out or by_agent:
+                return out
+    except Exception:
+        pass
     sm = _sublime()
     if sm is None:
         return {}
@@ -53,18 +67,34 @@ def get_session_for_view(view) -> Optional[Any]:
         return None
     try:
         from core.registry import default_registry
-        getter = getattr(default_registry, "get_by_view", None) or getattr(
-            default_registry, "session_for_view", None)
-        if callable(getter):
-            hit = getter(vid)
+        fn = getattr(default_registry, "for_view", None)
+        if callable(fn):
+            hit = fn(view)
             if hit is not None:
                 return hit
-        by_view = getattr(default_registry, "by_view", None)
-        if isinstance(by_view, dict) and vid in by_view:
-            return by_view[vid]
+        fn = getattr(default_registry, "for_view_id", None) or getattr(
+            default_registry, "get_session_for_view_id", None)
+        if callable(fn):
+            hit = fn(vid)
+            if hit is not None:
+                return hit
     except Exception:
         pass
     return sessions_map().get(vid)
+
+
+def get_session_by_agent_id(agent_id: str) -> Optional[Any]:
+    if not agent_id:
+        return None
+    try:
+        from core.registry import default_registry
+        fn = getattr(default_registry, "by_agent_id", None) or getattr(
+            default_registry, "get_session_by_agent_id", None)
+        if callable(fn):
+            return fn(agent_id)
+    except Exception:
+        pass
+    return None
 
 
 def get_active_session(window) -> Optional[Any]:
@@ -86,7 +116,12 @@ def get_active_session(window) -> Optional[Any]:
         if s is not None:
             return s
     try:
-        from .keys import ACTIVE_VIEW, read_setting
+        from .keys import ACTIVE_AGENT, ACTIVE_VIEW, read_setting
+        aid = read_setting(window.settings(), ACTIVE_AGENT)
+        if aid is not None:
+            s = get_session_by_agent_id(aid)
+            if s is not None:
+                return s
         vid = read_setting(window.settings(), ACTIVE_VIEW)
         if vid is not None:
             return sessions_map().get(vid)
@@ -174,8 +209,15 @@ def remember_active_session(window, view) -> None:
     if not window or not view:
         return
     try:
-        from .keys import ACTIVE_VIEW, write_setting
-        write_setting(window.settings(), ACTIVE_VIEW, view.id())
+        from .keys import ACTIVE_AGENT, write_setting
+        aid = None
+        try:
+            st = view.settings()
+            aid = st.get("submarine_agent_id") or st.get("claude_agent_id")
+        except Exception:
+            aid = None
+        if aid:
+            write_setting(window.settings(), ACTIVE_AGENT, aid)
     except Exception:
         pass
 

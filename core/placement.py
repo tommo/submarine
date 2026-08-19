@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+_ACTIVE_AGENT = "submarine_active_agent"
 _ACTIVE_VIEW = "submarine_active_view"
 _ACTIVE_GROUP = "submarine_active_group"
 _LEGACY_VIEW = "claude_active_view"
@@ -33,7 +34,22 @@ def remember_active_session(window, view) -> None:
         return
     if not _is_session_view(view):
         return
-    window.settings().set(_ACTIVE_VIEW, view.id())
+    aid = None
+    try:
+        from core.registry import default_registry
+        s = default_registry.for_view(view)
+        if s is not None:
+            aid = getattr(s, "agent_id", None)
+    except Exception:
+        aid = None
+    if not aid:
+        try:
+            st = view.settings()
+            aid = st.get("submarine_agent_id") or st.get("claude_agent_id")
+        except Exception:
+            aid = None
+    if aid:
+        window.settings().set(_ACTIVE_AGENT, aid)
     try:
         group, _index = window.get_view_index(view)
     except Exception:
@@ -48,6 +64,32 @@ def last_session_group(window) -> Optional[int]:
     if not window:
         return None
     settings = window.settings()
+    aid = settings.get(_ACTIVE_AGENT)
+    if aid:
+        try:
+            from core.registry import default_registry
+            s = default_registry.by_agent_id(aid)
+            v = None
+            if s is not None:
+                v = getattr(getattr(s, "output", None), "view", None)
+            if v is not None and v.is_valid():
+                group, _ = window.get_view_index(v)
+                if group is not None and group >= 0:
+                    return int(group)
+        except Exception:
+            pass
+        try:
+            for v in window.views():
+                if not v.is_valid():
+                    continue
+                st = v.settings()
+                got = st.get("submarine_agent_id") or st.get("claude_agent_id")
+                if got == aid:
+                    group, _ = window.get_view_index(v)
+                    if group is not None and group >= 0:
+                        return int(group)
+        except Exception:
+            pass
     vid = settings.get(_ACTIVE_VIEW)
     if vid is None:
         vid = settings.get(_LEGACY_VIEW)

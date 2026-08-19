@@ -30,6 +30,7 @@ PARENT_AGENT_ID = "submarine_parent_agent_id"
 QUESTION_INPUT_MODE = "submarine_question_input_mode"
 
 # Window settings
+ACTIVE_AGENT = "submarine_active_agent"
 ACTIVE_VIEW = "submarine_active_view"
 CREATING_SESSION = "submarine_creating_session"
 PENDING_CONTEXT_SESSION = "submarine_pending_context_session"

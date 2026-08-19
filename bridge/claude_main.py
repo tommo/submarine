@@ -214,16 +214,15 @@ class Bridge:
         resume_id = params.get("resume")
         fork_session = params.get("fork_session", False)
         cwd = params.get("cwd")
-        view_id = params.get("view_id")
+        agent_id = params.get("agent_id")
         self.cwd = cwd  # Store for later use (e.g., in can_use_tool)
-        self._view_id = view_id  # Store for spawn_session to pass to subsessions
+        self._agent_id = agent_id  # Store for spawn_session to pass to subsessions
         # Vision MCP tool — default off for Claude/SDK; host may opt in.
         self._mcp_enable_read_image = bool(params.get("mcp_enable_read_image", False))
         # Quick Agent: narrow MCP surface (only quick_done auto-allowed).
         self._quick_mode = bool(params.get("quick_mode", False))
 
         # Generate a proper UUID for Claude CLI (--session-id requires valid UUID format)
-        # view_id is Sublime's view ID (integer), not suitable for Claude's session_id
         # For fresh sessions, generate new UUID; for resume, use existing resume_id
         if resume_id:
             session_id = resume_id
@@ -278,24 +277,24 @@ class Bridge:
         addon = settings.get("system_prompt_addon")
 
         session_id_info = f"sublime.{session_id}"
-        view_id_info = view_id or session_id
-        parent_view_id = params.get("parent_view_id")
+        agent_id_info = agent_id or session_id
+        parent_agent_id = params.get("parent_agent_id")
         session_guide = f"""
 
 ## Session Info
 
 Session ID: {session_id_info}
-View ID: {view_id_info}
+Agent ID: {agent_id_info}
 """
-        if parent_view_id is not None:
-            session_guide += f"Parent View ID: {parent_view_id}\n"
+        if parent_agent_id:
+            session_guide += f"Parent Agent ID: {parent_agent_id}\n"
 
         subsession_id = params.get("subsession_id")
         self._subsession_id = subsession_id  # Store for signal_complete tool
         subsession_guide = ""
         if subsession_id:
             subsession_guide = (
-                f"\nYou are subsession {subsession_id} (view_id={view_id_info}). "
+                f"\nYou are subsession {subsession_id} (agent_id={agent_id_info}). "
                 f"When done, call MCP signal_complete(result_summary=…) — not prose alone.\n"
             )
 
@@ -447,10 +446,10 @@ View ID: {view_id_info}
         mcp_server_path = os.path.join(plugin_dir, "mcp", "server.py")
 
         if os.path.exists(mcp_server_path):
-            # Pass view_id so MCP server can inject it into spawn_session calls
+            # Pass agent_id so MCP server can inject it into spawn_session calls
             args = [mcp_server_path]
-            if self._view_id:
-                args.append(f"--view-id={self._view_id}")
+            if self._agent_id:
+                args.append(f"--agent-id={self._agent_id}")
             if getattr(self, "_mcp_enable_read_image", False):
                 args.append("--enable-read-image")
             servers["submarine"] = {

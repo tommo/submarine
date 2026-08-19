@@ -391,11 +391,19 @@ def _dump_json(window, data, name, status):
 
 
 class SubmarineDevtoolsSnapshotCommand(sublime_plugin.WindowCommand):
-    def run(self, view_id=None):
-        if view_id is None:
+    def run(self, agent_id=None):
+        view_id = None
+        if agent_id is None:
             s = get_active_session(self.window)
-            if s and s.output and s.output.view:
-                view_id = s.output.view.id()
+            if s:
+                agent_id = getattr(s, "agent_id", None)
+                if s.output and s.output.view:
+                    view_id = s.output.view.id()
+        else:
+            from core.registry import default_registry
+            s = default_registry.by_agent_id(agent_id)
+            if s is not None:
+                view_id = default_registry.bound_view_id(s)
         data = _devtools().snapshot(view_id)
         _dump_json(
             self.window, data, "Submarine Devtools Snapshot",
@@ -411,11 +419,19 @@ class SubmarineDevtoolsSessionsCommand(sublime_plugin.WindowCommand):
 
 
 class SubmarineDevtoolsComposerCommand(sublime_plugin.WindowCommand):
-    def run(self, view_id=None):
-        if view_id is None:
+    def run(self, agent_id=None):
+        view_id = None
+        if agent_id is None:
             s = get_active_session(self.window)
-            if s and s.output and s.output.view:
-                view_id = s.output.view.id()
+            if s:
+                agent_id = getattr(s, "agent_id", None)
+                if s.output and s.output.view:
+                    view_id = s.output.view.id()
+        else:
+            from core.registry import default_registry
+            s = default_registry.by_agent_id(agent_id)
+            if s is not None:
+                view_id = default_registry.bound_view_id(s)
         data = _devtools().composer_dump(view_id)
         _dump_json(
             self.window, data, "Submarine Devtools Composer",

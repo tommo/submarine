@@ -336,7 +336,7 @@ class CodexBridge(BaseBridge):
         cwd = params.get("cwd", os.getcwd())
         model = params.get("model")
         permission_mode = params.get("permission_mode", "default")
-        view_id = params.get("view_id", "")
+        agent_id = params.get("agent_id", "")
 
         # Build config overrides
         config = []
@@ -367,8 +367,8 @@ class CodexBridge(BaseBridge):
         )
         if os.path.exists(mcp_server_path):
             args = [mcp_server_path]
-            if view_id:
-                args.append(f"--view-id={view_id}")
+            if agent_id:
+                args.append(f"--agent-id={agent_id}")
             if params.get("mcp_enable_read_image"):
                 args.append("--enable-read-image")
             # Pass as TOML config overrides

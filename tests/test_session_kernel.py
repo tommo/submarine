@@ -167,28 +167,28 @@ class TestOneLiveSession(unittest.TestCase):
 
         reg = SessionRegistry()
         first = make_session(
-            registry=reg, resume_id="sid-1", view_id=10, initialized=True)
+            registry=reg, resume_id="sid-1", initialized=True)
         first.session_id = "sid-1"
         first.client = FakeClient()
         first.initialized = True
-        reg.register_session(first)
+        reg.register(first)
         again = create_session(
             FakeOutput(), FakeChrome(), FakeScheduler(), DictPersist(),
-            registry=reg, resume_id="sid-1", view_id=11)
+            registry=reg, resume_id="sid-1")
         self.assertIs(again, first)
 
     def test_fork_makes_a_new_session(self):
         from tests.fakes import FakeChrome, FakeOutput, FakeScheduler
 
         reg = SessionRegistry()
-        first = make_session(registry=reg, resume_id="sid-1", view_id=10)
+        first = make_session(registry=reg, resume_id="sid-1")
         first.session_id = "sid-1"
         first.initialized = True
         first.client = FakeClient()
-        reg.register_session(first)
+        reg.register(first)
         forked = create_session(
             FakeOutput(), FakeChrome(), FakeScheduler(), DictPersist(),
-            registry=reg, resume_id="sid-1", fork=True, view_id=11)
+            registry=reg, resume_id="sid-1", fork=True)
         self.assertIsNot(forked, first)
         self.assertIsNone(forked.session_id)
 
@@ -256,6 +256,23 @@ class TestInitializeParams(unittest.TestCase):
         s.start()
         params = [t[1] for t in client.sent if t[0] == "initialize"][0]
         self.assertEqual(params.get("model"), "grok-4.6")
+
+    def test_init_params_carry_agent_id_not_view_id(self):
+        client = FakeClient()
+        s = make_session(
+            client=client,
+            cwd="/tmp/proj",
+            initial_context={"parent_agent_id": "agent-parent"},
+        )
+        s.start()
+        params = [t[1] for t in client.sent if t[0] == "initialize"][0]
+        self.assertEqual(params["agent_id"], s.agent_id)
+        self.assertTrue(str(s.agent_id).startswith("agent-"))
+        self.assertEqual(params["parent_agent_id"], "agent-parent")
+        self.assertNotIn("view_id", params)
+        self.assertNotIn("parent_view_id", params)
+        self.assertFalse(hasattr(s, "view_id"))
+        self.assertFalse(hasattr(s, "parent_view_id"))
 
 
 class TestSessionStore(unittest.TestCase):

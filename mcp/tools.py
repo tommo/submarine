@@ -115,15 +115,10 @@ def _spawn_codegen(args: Dict[str, Any]) -> str:
     parts = ["prompt=%r" % (args.get("prompt") or "")]
     for key in (
         "name", "profile", "backend",
-        "fork_from_agent_id", "fork_from_view_id", "_caller_view_id",
+        "fork_from_agent_id", "_caller_agent_id",
     ):
         if args.get(key) is not None:
-            if key == "fork_from_view_id":
-                parts.append("%s=%r" % (key, int(args[key])))
-            elif key == "_caller_view_id":
-                parts.append("%s=%r" % (key, int(args[key])))
-            else:
-                parts.append("%s=%r" % (key, args[key]))
+            parts.append("%s=%r" % (key, args[key]))
     parts.append("fork_current=%r" % bool(args.get("fork_current", False)))
     parts.append("wait_for_completion=%r" % bool(args.get("wait_for_completion", False)))
     return "return spawn_session(%s)" % ", ".join(parts)
@@ -133,10 +128,8 @@ def _send_codegen(args: Dict[str, Any]) -> str:
     parts = ["prompt=%r" % (args.get("prompt") or "")]
     if args.get("agent_id"):
         parts.append("agent_id=%r" % args["agent_id"])
-    if args.get("view_id") is not None:
-        parts.append("view_id=%r" % args.get("view_id"))
-    if args.get("_caller_view_id") is not None:
-        parts.append("_caller_view_id=%r" % int(args["_caller_view_id"]))
+    if args.get("_caller_agent_id") is not None:
+        parts.append("_caller_agent_id=%r" % args["_caller_agent_id"])
     return "return send_to_session(%s)" % ", ".join(parts)
 
 
@@ -144,8 +137,6 @@ def _read_session_codegen(args: Dict[str, Any]) -> str:
     parts = []  # type: List[str]
     if args.get("agent_id"):
         parts.append("agent_id=%r" % args["agent_id"])
-    if args.get("view_id") is not None:
-        parts.append("view_id=%r" % args.get("view_id"))
     parts.append("lines=%r" % args.get("lines"))
     return "return read_session_output(%s)" % ", ".join(parts)
 
@@ -388,17 +379,16 @@ TOOL_TABLE = {
     },
     "spawn_session": {
         "description": (
-            "Spawn a subsession. Returns stable agent_id (+ runtime view_id).\n"
+            "Spawn a subsession. Returns stable agent_id.\n"
             "\n"
-            "ALWAYS address workers by agent_id — view_id changes after Sublime restart.\n"
+            "ALWAYS address workers by agent_id.\n"
             "Workflow for base context then workers:\n"
             "  1) spawn_session(prompt=…, name=\"explorer\", backend=X)  # returns agent_id\n"
             "  2) spawn workers with fork_from_agent_id=<explorer agent_id>\n"
             "\n"
             "Fork rules:\n"
             "  - fork_current: fork THIS (caller) session\n"
-            "  - fork_from_agent_id: fork any open session (preferred)\n"
-            "  - fork_from_view_id: legacy only\n"
+            "  - fork_from_agent_id: fork any open session\n"
             "  - Prefer list_sessions + send_to_session(agent_id=…) over re-spawning.\n"
             "\n"
             "Host appends signal_complete reminder. Parent linkage uses parent_agent_id."
@@ -416,11 +406,7 @@ TOOL_TABLE = {
                 "fork_current": {"type": "boolean", "description": "Fork caller's history into the child (default false)."},
                 "fork_from_agent_id": {
                     "type": "string",
-                    "description": "Fork that session by stable agent_id (preferred over view_id).",
-                },
-                "fork_from_view_id": {
-                    "type": "integer",
-                    "description": "Legacy: fork by runtime view_id (breaks after ST restart).",
+                    "description": "Fork that session by stable agent_id.",
                 },
                 "wait_for_completion": {
                     "type": "boolean",
@@ -433,11 +419,10 @@ TOOL_TABLE = {
     },
     "send_to_session": {
         "description": (
-            "Send a message by stable agent_id (preferred). The target sees a "
+            "Send a message by stable agent_id. The target sees a "
             "[from agent <your agent_id>] header (or [from user] if no caller "
             "session) so it can tell ◎ user input from inter-agent mail; reply "
-            "with send_to_session(agent_id=that id). view_id is runtime-only "
-            "and invalid after ST restart — always list_sessions first if "
+            "with send_to_session(agent_id=that id). Always list_sessions first if "
             "unsure. Sleeping workers auto-wake. If the target is mid-turn, "
             "the prompt is queued and runs after the current turn — do not "
             "wait for signal_complete to retry. Prefer reuse over spawn."
@@ -445,8 +430,7 @@ TOOL_TABLE = {
         "schema": {
             "type": "object",
             "properties": {
-                "agent_id": {"type": "string", "description": "Stable id from spawn_session / list_sessions (preferred)"},
-                "view_id": {"type": "integer", "description": "Legacy runtime view handle — do not cache across restarts"},
+                "agent_id": {"type": "string", "description": "Stable id from spawn_session / list_sessions"},
                 "prompt": {"type": "string", "description": "Message to send"},
             },
             "required": ["prompt"],
@@ -455,24 +439,22 @@ TOOL_TABLE = {
     },
     "list_sessions": {
         "description": (
-            "List your subsessions with agent_id (stable), view_id (runtime), "
-            "sleeping/working, context_budget. Always use agent_id for "
-            "send_to_session / fork_from_agent_id — never cache view_id across "
-            "Sublime restarts."
+            "List your subsessions with agent_id, sleeping/working, "
+            "context_budget. Always use agent_id for send_to_session / "
+            "fork_from_agent_id."
         ),
         "schema": _EMPTY_SCHEMA,
         "codegen": _simple("list_sessions"),
     },
     "read_session_output": {
         "description": (
-            "Read subsession output by agent_id (preferred). Also returns "
+            "Read subsession output by agent_id. Also returns "
             "context_budget/headroom for continue vs fork strategy."
         ),
         "schema": {
             "type": "object",
             "properties": {
-                "agent_id": {"type": "string", "description": "Stable agent_id (preferred)"},
-                "view_id": {"type": "integer", "description": "Legacy runtime view_id"},
+                "agent_id": {"type": "string", "description": "Stable agent_id"},
                 "lines": {"type": "integer", "description": "Number of lines from end (default: all)"},
             },
             "required": [],
@@ -671,10 +653,9 @@ TOOL_TABLE = {
         "description": (
             "Identity for THIS Sublime session (MCP is bound to your sheet).\n"
             "\n"
-            "Returns agent_id (stable), view_id (runtime only), parent_agent_id, "
-            "sleeping, backend, context_budget. Prefer agent_id everywhere. "
-            "Do NOT search files for parent — call this. Parent routing for "
-            "signal_complete is automatic."
+            "Returns agent_id, parent_agent_id, sleeping, backend, "
+            "context_budget. Do NOT search files for parent — call this. "
+            "Parent routing for signal_complete is automatic."
         ),
         "schema": _EMPTY_SCHEMA,
         "codegen": _simple("session_info"),
@@ -684,7 +665,7 @@ TOOL_TABLE = {
             "Signal that this subsession has completed.\n"
             "\n"
             "ONLY for sessions spawned via spawn_session. Host looks up "
-            "parent_view_id from this sheet — do NOT search for parent ids. "
+            "parent_agent_id from this sheet — do NOT search for parent ids. "
             "session_id defaults to this MCP session (omit it). Host attaches "
             "context_budget and notifies the parent only after *this* turn is "
             "fully idle (so parallel toolcalls with your final message do not "
@@ -699,10 +680,10 @@ TOOL_TABLE = {
             "type": "object",
             "properties": {
                 "session_id": {
-                    "type": "integer",
+                    "type": "string",
                     "description": (
-                        "Optional. Defaults to this session's view_id "
-                        "(MCP --view-id). Omit unless overriding."
+                        "Optional. Defaults to this session's agent_id "
+                        "(MCP --agent-id). Omit unless overriding."
                     ),
                 },
                 "result_summary": {
@@ -718,8 +699,8 @@ TOOL_TABLE = {
         "description": (
             "Wait for a child agent to complete (host-local; fires on signal_complete).\n"
             "\n"
-            "Prefer agent_id from spawn_session (stable). subsession_id is the "
-            "same value for new spawns. Do NOT use runtime view_id.\n"
+            "Prefer agent_id from spawn_session. subsession_id is the "
+            "same value for new spawns.\n"
             "\n"
             "Example:\n"
             "  r = spawn_session(prompt=\"Design solution\", name=\"architect\")\n"
@@ -790,7 +771,7 @@ TOOL_TABLE = {
 TOOL_SCHEMAS = {name: spec["schema"] for name, spec in TOOL_TABLE.items()}
 TOOL_CODEGEN = {name: spec["codegen"] for name, spec in TOOL_TABLE.items()}
 
-# tools/call names that get --view-id injected as _caller_view_id / session_id.
+# tools/call names that get --agent-id injected as _caller_agent_id / session_id.
 CALLER_INJECT_TOOLS = frozenset((
     "spawn_session",
     "send_to_session",

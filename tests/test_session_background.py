@@ -40,7 +40,6 @@ class _Session:
         self.agent_id = aid
         self.session_id = sid
         self.output = _Output(view)
-        self.view_id = view.id()
         self.client = object()
         self.initialized = True
         self.working = False

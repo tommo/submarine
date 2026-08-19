@@ -36,14 +36,13 @@ _IMAGE_EXTS = (
 _READ_IMAGE_MAX_BYTES = 4 * 1024 * 1024
 _READ_IMAGE_MAX_EDGE = 1600
 
-CALLER_VIEW_ID: int | None = None
+CALLER_AGENT_ID: str | None = None
 ENABLE_READ_IMAGE = False
 for _arg in sys.argv[1:]:
-    if _arg.startswith("--view-id="):
-        try:
-            CALLER_VIEW_ID = int(_arg.split("=", 1)[1])
-        except ValueError:
-            pass
+    if _arg.startswith("--agent-id="):
+        val = _arg.split("=", 1)[1].strip()
+        if val:
+            CALLER_AGENT_ID = val
     elif _arg in ("--enable-read-image", "--enable-read-image=1",
                   "--enable-read-image=true"):
         ENABLE_READ_IMAGE = True
@@ -55,7 +54,7 @@ for _arg in sys.argv[1:]:
 def send_to_sublime(
     code: str = "",
     tool: str | None = None,
-    view_id: int | None = None,
+    agent_id: str | None = None,
 ) -> dict:
     """One newline-terminated JSON request per connection."""
     if not hasattr(socket, "AF_UNIX"):
@@ -64,8 +63,8 @@ def send_to_sublime(
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.connect(SOCKET_PATH)
         msg: dict[str, Any] = {"code": code, "tool": tool}
-        if view_id is not None:
-            msg["view_id"] = view_id
+        if agent_id is not None:
+            msg["agent_id"] = agent_id
         sock.sendall((json.dumps(msg) + "\n").encode())
         response_bytes = b""
         while True:
@@ -229,13 +228,13 @@ def handle_read_image(args: dict) -> dict:
 
 
 def _inject_caller(tool_name: str, args: dict) -> None:
-    if CALLER_VIEW_ID is None:
+    if CALLER_AGENT_ID is None:
         return
     if tool_name == "signal_complete" and args.get("session_id") is None:
-        args["session_id"] = CALLER_VIEW_ID
+        args["session_id"] = CALLER_AGENT_ID
     elif tool_name in CALLER_INJECT_TOOLS and tool_name != "signal_complete":
-        if "_caller_view_id" not in args:
-            args["_caller_view_id"] = CALLER_VIEW_ID
+        if "_caller_agent_id" not in args:
+            args["_caller_agent_id"] = CALLER_AGENT_ID
 
 
 def handle_request(request: dict) -> dict | None:
@@ -283,13 +282,13 @@ def handle_request(request: dict) -> dict | None:
 
             if tool_name == "sublime_eval":
                 result = send_to_sublime(code=args.get("code") or "",
-                                         view_id=CALLER_VIEW_ID)
+                                         agent_id=CALLER_AGENT_ID)
             elif tool_name == "sublime_tool":
                 result = send_to_sublime(tool=args.get("name") or "",
-                                         view_id=CALLER_VIEW_ID)
+                                         agent_id=CALLER_AGENT_ID)
             else:
                 code = route(tool_name, args)
-                result = send_to_sublime(code=code, view_id=CALLER_VIEW_ID)
+                result = send_to_sublime(code=code, agent_id=CALLER_AGENT_ID)
         except ValueError as e:
             return make_response(req_id, error=str(e))
 

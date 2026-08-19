@@ -243,7 +243,7 @@ class SessionMixin:
                 os.chdir(self.cwd)
             except OSError:
                 pass
-        self._view_id = params.get("view_id")
+        self._agent_id = params.get("agent_id")
         # Optional vision MCP tool — default from class (Grok=on); host may
         # override via mcp_enable_read_image (settings auto/true/false).
         if "mcp_enable_read_image" in params:
@@ -457,8 +457,8 @@ class SessionMixin:
         mcp_server_path = os.path.join(plugin_dir, "mcp", "server.py")
         if os.path.exists(mcp_server_path):
             args = [mcp_server_path]
-            if self._view_id is not None:
-                args.append(f"--view-id={self._view_id}")
+            if self._agent_id is not None:
+                args.append(f"--agent-id={self._agent_id}")
             if self._mcp_enable_read_image:
                 args.append("--enable-read-image")
             servers.append({

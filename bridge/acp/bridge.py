@@ -84,7 +84,7 @@ class AcpBridge(TransportMixin, SessionMixin, UpdatesMixin,
         self.effort: str = ""  # reasoning effort (low/medium/high/…); empty = agent default
         self.cwd: str = os.getcwd()
         self.agent_mode: str = ""
-        self._view_id: Optional[Any] = None
+        self._agent_id: Optional[Any] = None
         # Vision MCP + negotiated ACP caps
         self._mcp_enable_read_image: bool = bool(
             getattr(self, "MCP_ENABLE_READ_IMAGE", False))

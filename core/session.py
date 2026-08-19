@@ -110,7 +110,6 @@ class Session:
         profile=None,  # type: Optional[Dict]
         initial_context=None,  # type: Optional[Dict]
         backend="claude",  # type: str
-        view_id=None,  # type: Optional[int]
         cwd=None,  # type: Optional[str]
         additional_dirs=None,  # type: Optional[List[str]]
         settings=None,  # type: Optional[dict]
@@ -156,7 +155,6 @@ class Session:
         self.fork = bool(fork)
         self.profile = profile
         self.initial_context = initial_context
-        self.view_id = view_id
         self.effort = None  # type: Optional[str]
         self.available_models = []  # type: list
         self.model = None  # type: Optional[str]
@@ -166,22 +164,31 @@ class Session:
         self.context_usage = None  # type: Optional[dict]
         self.permission_mode = None  # type: Optional[str]
 
+        self.agent_id = new_agent_id()
+        self.subsession_id = None
+        self.parent_agent_id = None
         if initial_context:
             self.agent_id = (
                 initial_context.get("agent_id")
                 or initial_context.get("subsession_id")
-                or new_agent_id()
+                or self.agent_id
             )
             self.subsession_id = (
                 initial_context.get("subsession_id") or self.agent_id
             )
-            self.parent_view_id = initial_context.get("parent_view_id")
             self.parent_agent_id = initial_context.get("parent_agent_id")
-        else:
-            self.agent_id = new_agent_id()
-            self.subsession_id = None
-            self.parent_view_id = None
-            self.parent_agent_id = None
+        elif resume_id and not fork:
+            try:
+                saved = self.store.find(resume_id)
+            except Exception:
+                saved = None
+            if saved:
+                if saved.get("agent_id"):
+                    self.agent_id = saved.get("agent_id")
+                if saved.get("subsession_id"):
+                    self.subsession_id = saved.get("subsession_id")
+                if saved.get("parent_agent_id"):
+                    self.parent_agent_id = saved.get("parent_agent_id")
 
         self.last_activity = time.time()
         self.last_access = self.last_activity
@@ -441,7 +448,7 @@ class Session:
             "additional_dirs": list(self.additional_dirs),
             "allowed_tools": allowed_tools,
             "permission_mode": permission_mode,
-            "view_id": str(self.view_id) if self.view_id is not None else None,
+            "agent_id": self.agent_id,
             "mcp_enable_read_image": self._mcp_enable_read_image(chosen_raw),
         }  # type: Dict[str, Any]
         if self.resume_id:
@@ -452,8 +459,8 @@ class Session:
                 init_params["resume_session_at"] = resume_session_at
         if self.subsession_id:
             init_params["subsession_id"] = self.subsession_id
-        if self.parent_view_id is not None:
-            init_params["parent_view_id"] = self.parent_view_id
+        if self.parent_agent_id:
+            init_params["parent_agent_id"] = self.parent_agent_id
 
         effort = self._resolve_effort(spec)
         self.effort = effort
@@ -697,10 +704,7 @@ class Session:
         except Exception:
             pass
 
-        if (
-            getattr(self, "parent_agent_id", None)
-            or getattr(self, "parent_view_id", None)
-        ):
+        if getattr(self, "parent_agent_id", None):
             if not getattr(self, "_pending_signal_complete", None):
                 try:
                     self.registry.fire_subsession_waits(self, None)
@@ -1514,10 +1518,9 @@ def create_session(
     s = Session(
         output, chrome, scheduler, persist,
         registry=reg, resume_id=resume_id, fork=fork, **kwargs)
-    if s.view_id is not None:
-        try:
-            s._persist_view_identity()
-        except Exception:
-            pass
-        reg.register_session(s)
+    try:
+        s._persist_view_identity()
+    except Exception:
+        pass
+    reg.register(s)
     return s

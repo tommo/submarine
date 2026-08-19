@@ -476,19 +476,29 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
         for session in default_registry.sessions_for_window(self.window):
             vid = None
             try:
-                vid = session.output.view.id() if session.output and session.output.view else session.view_id
+                if session.output and session.output.view:
+                    vid = session.output.view.id()
+                if vid is None:
+                    vid = default_registry.bound_view_id(session)
             except Exception:
-                vid = session.view_id
+                vid = default_registry.bound_view_id(session)
             sessions_in_window.append((vid, session))
 
+        active_agent = keys.read_setting(self.window.settings(), keys.ACTIVE_AGENT)
         active_view_id = keys.read_setting(self.window.settings(), keys.ACTIVE_VIEW)
         items = []
         actions = []
         active_session = None
-        for view_id, s in sessions_in_window:
-            if view_id == active_view_id:
-                active_session = s
-                break
+        if active_agent:
+            for view_id, s in sessions_in_window:
+                if getattr(s, "agent_id", None) == active_agent:
+                    active_session = s
+                    break
+        if active_session is None:
+            for view_id, s in sessions_in_window:
+                if view_id == active_view_id:
+                    active_session = s
+                    break
 
         current_view = self.window.active_view()
         in_output_view = current_view and keys.is_output_view(current_view)

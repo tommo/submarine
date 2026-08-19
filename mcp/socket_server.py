@@ -44,9 +44,10 @@ SYMBOL_EXTS = {
 }
 
 _SESSIONS_ATTRS = ("_submarine_sessions", "_claude_sessions")
-_AGENTS_ATTRS = ("_submarine_agents", "_claude_agents")
+_AGENTS_ATTRS = ("_submarine_agents", "_claude_agents", "_submarine_by_agent")
 _EXEC_VIEW_KEYS = ("submarine_executing_view", "claude_executing_view")
 _ACTIVE_VIEW_KEYS = ("submarine_active_view", "claude_active_view")
+_ACTIVE_AGENT_KEYS = ("submarine_active_agent",)
 
 _server = None  # type: Optional[MCPSocketServer]
 _host_waits = []  # type: List[dict]
@@ -118,7 +119,8 @@ def _window_setting(window, keys: Tuple[str, ...]) -> Any:
 
 
 def _runtime_view_id(session) -> Optional[int]:
-    fn = _try_import("core.registry.runtime_view_id")
+    fn = _try_import("core.registry.bound_view_id") or _try_import(
+        "core.registry.runtime_view_id")
     if fn is not None:
         try:
             return fn(session)
@@ -129,7 +131,7 @@ def _runtime_view_id(session) -> Optional[int]:
             return session.output.view.id()
     except Exception:
         pass
-    return getattr(session, "view_id", None)
+    return None
 
 
 def _is_sleeping(session) -> bool:
@@ -140,17 +142,24 @@ def _is_sleeping(session) -> bool:
 
 
 def _get_session_by_agent_id(agent_id: str):
-    fn = _try_import("core.registry.get_session_by_agent_id")
+    fn = (
+        _try_import("core.registry.by_agent_id")
+        or _try_import("core.registry.get_session_by_agent_id")
+    )
     if fn is not None:
         try:
             return fn(str(agent_id))
         except Exception:
             pass
     agents = _agents_map()
-    view_id = agents.get(str(agent_id))
-    if view_id is not None:
-        return _sessions_map().get(view_id)
-    for session in _sessions_map().values():
+    hit = agents.get(str(agent_id))
+    if hit is not None and not isinstance(hit, (int, str)):
+        return hit
+    if isinstance(hit, int):
+        return _sessions_map().get(hit)
+    for session in list(agents.values()) + list(_sessions_map().values()):
+        if session is None or isinstance(session, (int, str)):
+            continue
         if str(getattr(session, "agent_id", "") or "") == str(agent_id):
             return session
         if str(getattr(session, "subsession_id", "") or "") == str(agent_id):
@@ -214,9 +223,9 @@ class MCPSocketServer:
         self.socket = None  # type: Optional[socket.socket]
         self.running = False
         self.thread = None  # type: Optional[threading.Thread]
-        self._caller_view_id = None  # type: Optional[int]
+        self._caller_agent_id = None  # type: Optional[str]
         self._cached_window = None
-        self._cached_window_vid = None
+        self._cached_window_aid = None
 
     def start(self) -> None:
         self.running = True
@@ -279,7 +288,7 @@ class MCPSocketServer:
             request = json.loads(data.strip())
             code = request.get("code", "")
             tool = request.get("tool")
-            view_id = request.get("view_id")
+            agent_id = request.get("agent_id")
             op = request.get("op")
 
             result = {"result": None, "error": None}  # type: Dict[str, Any]
@@ -291,7 +300,7 @@ class MCPSocketServer:
                         result["result"] = self._debug_op(request)
                     else:
                         result["result"] = self._eval(
-                            code, tool, caller_view_id=view_id)
+                            code, tool, caller_agent_id=agent_id)
                     done.set()
                 except Exception as e:
                     result["error"] = str(e)
@@ -391,24 +400,46 @@ class MCPSocketServer:
 
     def _get_window(self):
         cached = getattr(self, "_cached_window", None)
-        cached_vid = getattr(self, "_cached_window_vid", None)
-        if cached and cached_vid == self._caller_view_id:
+        cached_aid = getattr(self, "_cached_window_aid", None)
+        if cached and cached_aid == self._caller_agent_id:
             try:
                 if cached.is_valid():
                     return cached
             except Exception:
                 pass
-        if self._caller_view_id:
-            for w in sublime.windows():
-                for v in w.views():
-                    if v.id() == self._caller_view_id:
+        if self._caller_agent_id:
+            session = _get_session_by_agent_id(str(self._caller_agent_id))
+            if session is not None:
+                try:
+                    w = getattr(session, "window", None)
+                    if w is not None:
                         self._cached_window = w
-                        self._cached_window_vid = self._caller_view_id
+                        self._cached_window_aid = self._caller_agent_id
                         return w
+                except Exception:
+                    pass
+                try:
+                    v = session.output.view if session.output else None
+                    if v is not None and v.is_valid():
+                        w = v.window()
+                        if w is not None:
+                            self._cached_window = w
+                            self._cached_window_aid = self._caller_agent_id
+                            return w
+                except Exception:
+                    pass
+            if str(self._caller_agent_id).isdigit():
+                vid = int(self._caller_agent_id)
+                for w in sublime.windows():
+                    for v in w.views():
+                        if v.id() == vid:
+                            self._cached_window = w
+                            self._cached_window_aid = self._caller_agent_id
+                            return w
         return sublime.active_window()
 
-    def _eval(self, code: str, tool: str = None, caller_view_id: int = None):
-        self._caller_view_id = caller_view_id
+    def _eval(self, code: str, tool: str = None, caller_agent_id: str = None):
+        self._caller_agent_id = caller_agent_id
         if tool:
             window = self._get_window()
             if window and window.folders():
@@ -425,7 +456,7 @@ class MCPSocketServer:
         exec_globals = self._build_exec_globals()
         window = self._get_window()
         exec_globals["cwd"] = window.folders()[0] if window and window.folders() else None
-        exec_globals["AGENT_ID"] = str(caller_view_id) if caller_view_id else None
+        exec_globals["AGENT_ID"] = str(caller_agent_id) if caller_agent_id else None
 
         if "return " in code:
             lines = code.split("\n")
@@ -503,8 +534,11 @@ class MCPSocketServer:
                 row, col = active_view.rowcol(active_view.sel()[0].begin())
             lines.append("Active: %s:%d:%d" % (active_view.file_name(), row + 1, col + 1))
         try:
-            sid = _window_setting(window, _ACTIVE_VIEW_KEYS)
-            sess = _sessions_map().get(sid) if sid else None
+            sid = _window_setting(window, _ACTIVE_AGENT_KEYS)
+            sess = _get_session_by_agent_id(str(sid)) if sid else None
+            if sess is None:
+                vid = _window_setting(window, _ACTIVE_VIEW_KEYS)
+                sess = _get_session_for_view_id(vid) if vid is not None else None
             et = getattr(sess, "edit_target", None) if sess else None
             if et:
                 lines.append("Edit target: %s" % et)
@@ -884,10 +918,10 @@ class MCPSocketServer:
         return out
 
     def _sublime_eval(self, code: str = "") -> Any:
-        return self._eval(code or "", caller_view_id=self._caller_view_id)
+        return self._eval(code or "", caller_agent_id=self._caller_agent_id)
 
     def _sublime_tool(self, name: str = "") -> Any:
-        return self._eval("", tool=name, caller_view_id=self._caller_view_id)
+        return self._eval("", tool=name, caller_agent_id=self._caller_agent_id)
 
     # ─── Session tools ────────────────────────────────────────────────────
 
@@ -982,9 +1016,8 @@ class MCPSocketServer:
         backend: str = None,
         fork_current: bool = False,
         wait_for_completion: bool = False,
-        fork_from_view_id: int = None,
         fork_from_agent_id: str = None,
-        _caller_view_id: int = None,
+        _caller_agent_id: str = None,
     ) -> dict:
         create_session = (
             _try_import("commands.session_cmds.create_session")
@@ -1004,13 +1037,11 @@ class MCPSocketServer:
             return {"error": "No window"}
         fork_srcs = sum(1 for x in (
             fork_current,
-            fork_from_view_id is not None,
             bool(fork_from_agent_id),
         ) if x)
         if fork_srcs > 1:
             return {
-                "error": "Pass only one of fork_current, fork_from_agent_id, "
-                         "or fork_from_view_id",
+                "error": "Pass only one of fork_current or fork_from_agent_id",
             }
 
         profile_config = None
@@ -1026,11 +1057,10 @@ class MCPSocketServer:
 
         resume_id = None
         fork = False
-        fork_source_view_id = None
         fork_source_backend = None
 
         def _resolve_fork_source(source_session, label: str):
-            nonlocal resume_id, fork, fork_source_view_id, fork_source_backend, backend
+            nonlocal resume_id, fork, fork_source_backend, backend
             if not source_session:
                 return {"error": "Cannot fork: %s not found" % label}
             sid = getattr(source_session, "session_id", None)
@@ -1050,7 +1080,6 @@ class MCPSocketServer:
                 }
             resume_id = sid
             fork = True
-            fork_source_view_id = _runtime_view_id(source_session)
             fork_source_backend = src_backend
             return None
 
@@ -1060,19 +1089,9 @@ class MCPSocketServer:
                 "agent_id %s" % fork_from_agent_id)
             if err:
                 return err
-        elif fork_from_view_id is not None:
-            try:
-                fork_from_view_id = int(fork_from_view_id)
-            except (TypeError, ValueError):
-                return {"error": "Invalid fork_from_view_id: %r" % fork_from_view_id}
-            err = _resolve_fork_source(
-                _get_session_for_view_id(fork_from_view_id),
-                "view_id %s" % fork_from_view_id)
-            if err:
-                return err
         elif fork_current:
-            caller_vid = _caller_view_id or self._caller_view_id
-            caller_session = _get_session_for_view_id(caller_vid) if caller_vid else None
+            caller_aid = _caller_agent_id or self._caller_agent_id
+            caller_session = _get_session_by_agent_id(str(caller_aid)) if caller_aid else None
             if not caller_session:
                 get_active = (
                     _try_import("commands.session_cmds.get_active_session")
@@ -1097,23 +1116,18 @@ class MCPSocketServer:
         agent_id = _new_agent_id()
         subsession_id = agent_id
         parent_session = None
-        caller_vid = _caller_view_id or self._caller_view_id
-        if caller_vid:
-            parent_session = _get_session_for_view_id(caller_vid)
+        caller_aid = _caller_agent_id or self._caller_agent_id
+        if caller_aid:
+            parent_session = _get_session_by_agent_id(str(caller_aid))
         if not parent_session:
             parent_session, _ = self._get_session_for_tool()
-        parent_view_id = None
         parent_agent_id = None
         if parent_session:
             parent_agent_id = getattr(parent_session, "agent_id", None)
-            parent_view_id = _runtime_view_id(parent_session) or caller_vid
-        else:
-            parent_view_id = caller_vid
 
         initial_context = {
             "agent_id": agent_id,
             "subsession_id": subsession_id,
-            "parent_view_id": parent_view_id,
             "parent_agent_id": parent_agent_id,
         }
         session = create_session(
@@ -1126,7 +1140,6 @@ class MCPSocketServer:
                 session.output.set_name(name)
             except Exception:
                 pass
-        view_id = _runtime_view_id(session)
         try:
             persist = getattr(session, "_persist_view_identity", None)
             if persist:
@@ -1146,19 +1159,15 @@ class MCPSocketServer:
             "spawned": True,
             "name": name or "(unnamed)",
             "agent_id": agent_id,
-            "view_id": view_id,
             "subsession_id": subsession_id,
             "parent_agent_id": parent_agent_id,
-            "parent_view_id": parent_view_id,
             "backend": backend,
             "fork": fork,
             "profile": profile,
         }
-        if fork_source_view_id is not None:
-            out["forked_from_view_id"] = fork_source_view_id
-            out["forked_from_backend"] = fork_source_backend
         if fork_from_agent_id:
             out["forked_from_agent_id"] = fork_from_agent_id
+            out["forked_from_backend"] = fork_source_backend
         return out
 
     @staticmethod
@@ -1178,13 +1187,17 @@ class MCPSocketServer:
         stamp = _try_import("core.registry.stamp_sender_prompt")
         display = _try_import("core.registry.sender_display_prompt")
         caller = None
-        vid = getattr(self, "_caller_view_id", None)
-        if vid is not None:
-            caller = _get_session_for_view_id(vid)
+        aid = getattr(self, "_caller_agent_id", None)
+        if aid is not None:
+            caller = _get_session_by_agent_id(str(aid))
         if caller is None:
             ev = _window_setting(self._get_window(), _EXEC_VIEW_KEYS)
             if ev is not None:
                 caller = _get_session_for_view_id(ev)
+        if caller is None:
+            ea = _window_setting(self._get_window(), _ACTIVE_AGENT_KEYS)
+            if ea is not None:
+                caller = _get_session_by_agent_id(str(ea))
         if stamp is None:
             return prompt, prompt
         stamped = stamp(
@@ -1200,41 +1213,31 @@ class MCPSocketServer:
         self,
         prompt: str,
         agent_id: str = None,
-        view_id: int = None,
-        _caller_view_id: int = None,
+        _caller_agent_id: str = None,
     ) -> dict:
-        if _caller_view_id is not None:
-            self._caller_view_id = _caller_view_id
+        if _caller_agent_id is not None:
+            self._caller_agent_id = _caller_agent_id
         if not prompt:
             return {"error": "prompt is required"}
-        if agent_id is None and view_id is None:
+        if agent_id is None:
             return {
-                "error": "Pass agent_id (preferred) or view_id",
-                "hint": "view_id is runtime-only and changes after ST restart",
+                "error": "Pass agent_id",
+                "hint": "Call list_sessions for agent_id",
             }
         prompt, display = self._stamp_send_prompt(prompt)
-        if agent_id is not None:
-            session = _get_session_by_agent_id(str(agent_id))
-            if not session:
-                return {
-                    "error": "Session not found for agent_id %r" % agent_id,
-                    "hint": "Call list_sessions; do not reuse pre-restart view_ids",
-                }
-        else:
-            session = _get_session_by_ref(view_id)
-            if not session:
-                return {
-                    "error": "Session not found for view_id %s" % view_id,
-                    "hint": "Prefer agent_id; view_id changes after ST restart.",
-                }
-        rid = _runtime_view_id(session)
+        session = _get_session_by_agent_id(str(agent_id))
+        if not session:
+            return {
+                "error": "Session not found for agent_id %r" % agent_id,
+                "hint": "Call list_sessions",
+            }
         aid = getattr(session, "agent_id", None)
         name = session.name or "(unnamed)"
         if session.working or getattr(session, "_compacting", False):
             session.queue_prompt(prompt)
             return {
                 "sent": True, "queued": True, "agent_id": aid,
-                "view_id": rid, "name": name,
+                "name": name,
                 "message": "Target is mid-turn; prompt queued and will run next.",
             }
         sleeping = _is_sleeping(session)
@@ -1242,14 +1245,14 @@ class MCPSocketServer:
             if not getattr(session, "session_id", None):
                 return {
                     "error": "Session sleeping but has no session_id — cannot wake",
-                    "agent_id": aid, "view_id": rid,
+                    "agent_id": aid,
                 }
             session.wake()
             return {
                 "_wait_for_init": True, "_session": session, "_prompt": prompt,
                 "_display_prompt": display, "_wait_for_completion": False,
                 "sent": True, "waking": True, "agent_id": aid,
-                "view_id": rid, "name": name,
+                "name": name,
             }
         if not session.initialized:
             if session.client or getattr(session, "session_id", None):
@@ -1257,11 +1260,11 @@ class MCPSocketServer:
                     "_wait_for_init": True, "_session": session, "_prompt": prompt,
                     "_display_prompt": display, "_wait_for_completion": False,
                     "sent": True, "waking": True, "agent_id": aid,
-                    "view_id": rid, "name": name,
+                    "name": name,
                 }
-            return {"error": "Session not initialized", "agent_id": aid, "view_id": rid}
+            return {"error": "Session not initialized", "agent_id": aid}
         session.query(prompt, display_prompt=display)
-        return {"sent": True, "agent_id": aid, "view_id": rid, "name": name}
+        return {"sent": True, "agent_id": aid, "name": name}
 
     @staticmethod
     def _session_context_budget(session) -> dict:
@@ -1273,24 +1276,22 @@ class MCPSocketServer:
         return {"summary": "ctx:unknown", "has_usage": False}
 
     def _list_sessions(self) -> dict:
-        caller_id = self._caller_view_id
-        caller = _get_session_for_view_id(caller_id) if caller_id is not None else None
+        caller_id = self._caller_agent_id
+        caller = _get_session_by_agent_id(str(caller_id)) if caller_id is not None else None
         parent_agent_id = getattr(caller, "agent_id", None) if caller else None
         list_children = _try_import("core.registry.list_children_of")
         if list_children is not None:
-            children = list_children(
-                parent_view_id=caller_id, parent_agent_id=parent_agent_id)
+            children = list_children(parent_agent_id=parent_agent_id)
         else:
             children = []
-            for session in _sessions_map().values():
+            iter_fn = _try_import("core.registry.iter_sessions")
+            live = list(iter_fn()) if iter_fn is not None else list(_sessions_map().values())
+            for session in live:
                 if parent_agent_id and getattr(session, "parent_agent_id", None) == parent_agent_id:
-                    children.append(session)
-                elif caller_id is not None and getattr(session, "parent_view_id", None) == caller_id:
                     children.append(session)
         sessions = []  # type: List[dict]
         lines = []  # type: List[str]
         for session in children:
-            view_id = _runtime_view_id(session)
             sleeping = _is_sleeping(session)
             phase = getattr(session, "turn_phase", None) or (
                 "waiting" if session.working else "idle")
@@ -1305,19 +1306,17 @@ class MCPSocketServer:
             aid = getattr(session, "agent_id", None) or ""
             budget_s = budget.get("summary") or ""
             phase_s = " %s" % phase if session.working else ""
-            lines.append("%s %s [%s] %s%s%s" % (
-                status, aid, view_id, name, phase_s,
+            lines.append("%s %s %s%s%s" % (
+                status, aid, name, phase_s,
                 (" · %s" % budget_s) if budget_s else ""))
             sessions.append({
                 "agent_id": aid,
-                "view_id": view_id,
                 "name": name,
                 "working": bool(session.working),
                 "sleeping": sleeping,
                 "turn_phase": phase,
                 "subsession_id": getattr(session, "subsession_id", None) or aid,
                 "parent_agent_id": getattr(session, "parent_agent_id", None),
-                "parent_view_id": getattr(session, "parent_view_id", None),
                 "backend": getattr(session, "backend", None),
                 "forkable": bool(getattr(session, "session_id", None)),
                 "context_budget": budget,
@@ -1327,8 +1326,7 @@ class MCPSocketServer:
             })
         if not lines:
             return {
-                "summary": "No subsessions (use agent_id from spawn; "
-                           "view_id alone is not stable across ST restart)",
+                "summary": "No subsessions (use agent_id from spawn)",
                 "sessions": [],
                 "count": 0,
             }
@@ -1337,22 +1335,19 @@ class MCPSocketServer:
     def _read_session_output(
         self,
         agent_id: str = None,
-        view_id: int = None,
         lines: int = None,
         max_chars: int = 30000,
     ) -> dict:
-        ref = agent_id if agent_id is not None else view_id
-        session = _get_session_by_ref(ref)
+        session = _get_session_by_agent_id(str(agent_id)) if agent_id else None
         if not session:
             return {
-                "error": "Session not found for %r" % ref,
-                "hint": "Prefer agent_id from list_sessions; view_id is runtime-only",
+                "error": "Session not found for %r" % agent_id,
+                "hint": "Use agent_id from list_sessions",
                 "available_agent_ids": list(_agents_map()),
             }
-        rid = _runtime_view_id(session)
         aid = getattr(session, "agent_id", None)
         if not session.output or not session.output.view:
-            return {"error": "Session output view not found", "agent_id": aid, "view_id": rid}
+            return {"error": "Session output view not found", "agent_id": aid}
         view = session.output.view
         content = view.substr(sublime.Region(0, view.size()))
         if lines:
@@ -1380,7 +1375,6 @@ class MCPSocketServer:
         budget = self._session_context_budget(session)
         return {
             "agent_id": aid,
-            "view_id": rid,
             "name": session.name or "(unnamed)",
             "working": bool(session.working),
             "sleeping": _is_sleeping(session),
@@ -1396,9 +1390,14 @@ class MCPSocketServer:
 
     def _caller_or_active_session(self):
         session = None
-        view_id = getattr(self, "_caller_view_id", None)
-        if view_id is not None:
-            session = _get_session_for_view_id(view_id)
+        aid = getattr(self, "_caller_agent_id", None)
+        if aid is not None:
+            session = _get_session_by_agent_id(str(aid))
+        if session is None:
+            window = self._get_window()
+            ea = _window_setting(window, _ACTIVE_AGENT_KEYS)
+            if ea is not None:
+                session = _get_session_by_agent_id(str(ea))
         if session is None:
             window = self._get_window()
             vid = _window_setting(window, _EXEC_VIEW_KEYS)
@@ -1410,9 +1409,13 @@ class MCPSocketServer:
         session = self._caller_or_active_session()
         if session is None:
             window = self._get_window()
-            sid = _window_setting(window, _ACTIVE_VIEW_KEYS)
-            if sid is not None:
-                session = _get_session_for_view_id(sid)
+            ea = _window_setting(window, _ACTIVE_AGENT_KEYS)
+            if ea is not None:
+                session = _get_session_by_agent_id(str(ea))
+            if session is None:
+                sid = _window_setting(window, _ACTIVE_VIEW_KEYS)
+                if sid is not None:
+                    session = _get_session_for_view_id(sid)
         if session is None:
             return {"error": "No active Submarine session"}
         docs = getattr(session, "profile_docs", None) or []
@@ -1429,9 +1432,13 @@ class MCPSocketServer:
         session = self._caller_or_active_session()
         if session is None:
             window = self._get_window()
-            sid = _window_setting(window, _ACTIVE_VIEW_KEYS)
-            if sid is not None:
-                session = _get_session_for_view_id(sid)
+            ea = _window_setting(window, _ACTIVE_AGENT_KEYS)
+            if ea is not None:
+                session = _get_session_by_agent_id(str(ea))
+            if session is None:
+                sid = _window_setting(window, _ACTIVE_VIEW_KEYS)
+                if sid is not None:
+                    session = _get_session_for_view_id(sid)
         if session is None:
             return {"error": "No active Submarine session"}
         docs = getattr(session, "profile_docs", None) or []
@@ -1470,8 +1477,12 @@ class MCPSocketServer:
                 ),
                 "rejected": True,
             }
+        vid = None
+        if self._caller_agent_id:
+            s = _get_session_by_agent_id(str(self._caller_agent_id))
+            vid = _runtime_view_id(s) if s else None
         result = complete(
-            status=status, message=message, view_id=self._caller_view_id)
+            status=status, message=message, view_id=vid)
         if result.get("ok"):
             st = result.get("status", "completed")
             msg = result.get("message") or ""
@@ -1537,6 +1548,10 @@ class MCPSocketServer:
                 owner = resolve(session, _sessions_map())
             except Exception:
                 owner = None
+            if owner is None:
+                paid = getattr(session, "parent_agent_id", None)
+                if paid:
+                    owner = _get_session_by_agent_id(str(paid))
             if owner is None and is_skeptic is not None:
                 try:
                     if is_skeptic(session):
@@ -1553,8 +1568,8 @@ class MCPSocketServer:
             return {
                 "ok": False,
                 "error": (
-                    "No session for goal_verdict (caller view not bound). "
-                    "Ensure the submarine MCP server was started with --view-id=… "
+                    "No session for goal_verdict (caller not bound). "
+                    "Ensure the submarine MCP server was started with --agent-id=… "
                     "and the goal is open on that session."
                 ),
                 "rejected": True,
@@ -1672,69 +1687,71 @@ class MCPSocketServer:
 
     # ─── Session helpers / wait / signal ──────────────────────────────────
 
-    def _get_session_for_tool(self, session_id: int = None):
+    def _get_session_for_tool(self, session_id=None):
         if session_id is not None:
             session = _get_session_by_ref(session_id)
             if session is None:
                 return None, {
                     "error": "Session not found: %s" % session_id,
-                    "available_sessions": list(_sessions_map()),
+                    "available_sessions": list(_agents_map()),
                 }
             return session, None
+        aid = getattr(self, "_caller_agent_id", None)
+        if aid:
+            session = _get_session_by_agent_id(str(aid))
+            if session is not None:
+                return session, None
         window = self._get_window()
         if not window:
             return None, {"error": "No active window"}
-        view_id = getattr(self, "_caller_view_id", None)
-        sessions = _sessions_map()
-        if not view_id or view_id not in sessions:
-            view_id = _window_setting(window, _EXEC_VIEW_KEYS)
-        if not view_id or view_id not in sessions:
-            view_id = _window_setting(window, _ACTIVE_VIEW_KEYS)
-        if not view_id or view_id not in sessions:
-            available = list(sessions)
-            if len(available) == 1:
-                view_id = available[0]
-            else:
-                return None, {
-                    "error": "No session context available",
-                    "hint": "Multiple sessions active. Focus the target session window.",
-                    "available_sessions": available,
-                }
-        return sessions[view_id], None
+        ea = _window_setting(window, _ACTIVE_AGENT_KEYS)
+        if ea:
+            session = _get_session_by_agent_id(str(ea))
+            if session is not None:
+                return session, None
+        vid = _window_setting(window, _EXEC_VIEW_KEYS)
+        if vid is not None:
+            session = _get_session_for_view_id(vid)
+            if session is not None:
+                return session, None
+        vid = _window_setting(window, _ACTIVE_VIEW_KEYS)
+        if vid is not None:
+            session = _get_session_for_view_id(vid)
+            if session is not None:
+                return session, None
+        iter_fn = _try_import("core.registry.iter_sessions")
+        live = list(iter_fn()) if iter_fn is not None else list(_sessions_map().values())
+        live = [s for s in live if s is not None and not isinstance(s, (int, str))]
+        if len(live) == 1:
+            return live[0], None
+        return None, {
+            "error": "No session context available",
+            "hint": "Multiple sessions active. Focus the target session window.",
+            "available_sessions": [
+                getattr(s, "agent_id", None) for s in live
+            ],
+        }
 
     def _session_info(self) -> dict:
-        view_id = getattr(self, "_caller_view_id", None)
-        if view_id is None:
-            return {"error": "No caller view_id (MCP not bound to a session)"}
-        try:
-            view_id = int(view_id)
-        except (TypeError, ValueError):
-            return {"error": "Invalid caller view_id: %r" % view_id}
-        session = _get_session_for_view_id(view_id)
+        aid = getattr(self, "_caller_agent_id", None)
+        if aid is None:
+            return {"error": "No caller agent_id (MCP not bound to a session)"}
+        session = _get_session_by_agent_id(str(aid))
         if not session:
             return {
-                "error": "Session %s not found" % view_id,
-                "view_id": view_id,
+                "error": "Session %s not found" % aid,
+                "agent_id": aid,
                 "available_agent_ids": list(_agents_map()),
             }
-        relink = _try_import("core.registry.relink_parent_view")
-        if relink is not None:
-            try:
-                relink(session)
-            except Exception:
-                pass
-        parent_view_id = getattr(session, "parent_view_id", None)
         parent_agent_id = getattr(session, "parent_agent_id", None)
         subsession_id = getattr(session, "subsession_id", None)
         agent_id = getattr(session, "agent_id", None)
         budget = self._session_context_budget(session)
         return {
             "agent_id": agent_id,
-            "view_id": view_id,
             "parent_agent_id": parent_agent_id,
-            "parent_view_id": parent_view_id,
             "subsession_id": subsession_id or agent_id,
-            "is_subsession": bool(parent_agent_id or parent_view_id or subsession_id),
+            "is_subsession": bool(parent_agent_id or subsession_id),
             "name": session.name or "(unnamed)",
             "backend": getattr(session, "backend", None) or "claude",
             "initialized": bool(getattr(session, "initialized", False)),
@@ -1762,12 +1779,10 @@ class MCPSocketServer:
         parent, error = self._get_session_for_tool()
         if error:
             return error
-        parent_view_id = _runtime_view_id(parent) or getattr(self, "_caller_view_id", None)
         register = _try_import("core.registry.register_subsession_wait")
         if register is not None:
             wait_id = register(
                 child_id=child_id,
-                parent_view_id=parent_view_id,
                 parent_agent_id=getattr(parent, "agent_id", None),
                 wake_prompt=wake_prompt,
             )
@@ -1776,7 +1791,6 @@ class MCPSocketServer:
             _host_waits.append({
                 "wait_id": wait_id,
                 "child_id": str(child_id),
-                "parent_view_id": parent_view_id,
                 "parent_agent_id": getattr(parent, "agent_id", None),
                 "wake_prompt": wake_prompt,
             })
@@ -1787,7 +1801,6 @@ class MCPSocketServer:
             "agent_id": child_id,
             "subsession_id": child_id,
             "parent_agent_id": getattr(parent, "agent_id", None),
-            "parent_view_id": parent_view_id,
             "host_local": True,
         }
 
@@ -1808,10 +1821,7 @@ class MCPSocketServer:
         remaining = []
         for wait in list(_host_waits):
             if str(wait.get("child_id")) in child_ids:
-                parent = (
-                    _get_session_for_view_id(wait.get("parent_view_id"))
-                    or _get_session_by_agent_id(str(wait.get("parent_agent_id") or ""))
-                )
+                parent = _get_session_by_agent_id(str(wait.get("parent_agent_id") or ""))
                 body = wait.get("wake_prompt") or default_body
                 if summary and summary not in (body or ""):
                     body = "%s\n\n%s" % (body, summary)
@@ -1834,10 +1844,10 @@ class MCPSocketServer:
 
     def _signal_complete(self, session_id=None, result_summary: str = None) -> dict:
         if session_id is None:
-            session_id = getattr(self, "_caller_view_id", None)
+            session_id = getattr(self, "_caller_agent_id", None)
         if session_id is None:
             return {
-                "error": "session_id missing and no MCP caller view_id — "
+                "error": "session_id missing and no MCP caller agent_id — "
                          "cannot route signal_complete",
             }
         session = _get_session_by_ref(session_id)
@@ -1847,23 +1857,14 @@ class MCPSocketServer:
                 "available_agent_ids": list(_agents_map()),
             }
         resolve_parent = _try_import("core.registry.resolve_parent_session")
-        relink = _try_import("core.registry.relink_parent_view")
-        if relink is not None:
-            try:
-                relink(session)
-            except Exception:
-                pass
         if resolve_parent is not None:
             try:
                 parent_session = resolve_parent(session)
             except Exception:
                 parent_session = None
         else:
-            parent_session = (
-                _get_session_by_agent_id(str(getattr(session, "parent_agent_id", "") or ""))
-                or _get_session_for_view_id(getattr(session, "parent_view_id", None))
-            )
-        parent_view_id = getattr(session, "parent_view_id", None)
+            parent_session = _get_session_by_agent_id(
+                str(getattr(session, "parent_agent_id", "") or ""))
         parent_agent_id = getattr(session, "parent_agent_id", None)
         subsession_id = (
             getattr(session, "subsession_id", None)
@@ -1877,22 +1878,19 @@ class MCPSocketServer:
                         getattr(session, "agent_id", session_id), parent_agent_id)
                 ),
             }
-        parent_view_id = _runtime_view_id(parent_session) or parent_view_id
         if (not getattr(parent_session, "initialized", False)
                 and not _is_sleeping(parent_session)):
             if not getattr(parent_session, "client", None):
-                return {"error": "Parent session %s has no client connection" % parent_view_id}
-            return {"error": "Parent session %s not initialized" % parent_view_id}
+                return {"error": "Parent session %s has no client connection" % parent_agent_id}
+            return {"error": "Parent session %s not initialized" % parent_agent_id}
 
-        view_id = _runtime_view_id(session) or session_id
         budget = self._session_context_budget(session)
         budget_line = budget.get("summary") or "ctx:unknown"
         child_busy = bool(getattr(session, "working", False))
         pending = {
             "result_summary": result_summary,
             "subsession_id": subsession_id,
-            "parent_view_id": parent_view_id,
-            "view_id": view_id,
+            "parent_agent_id": parent_agent_id,
             "gen": int(getattr(session, "_signal_complete_gen", 0) or 0) + 1,
             "started": time.time(),
         }
@@ -1907,13 +1905,12 @@ class MCPSocketServer:
         def _build_wake():
             b = self._session_context_budget(session)
             line = b.get("summary") or "ctx:unknown"
-            vid = pending.get("view_id") or view_id
             sid = pending.get("subsession_id") or subsession_id
             summary = pending.get("result_summary")
             child_aid = getattr(session, "agent_id", None) or sid
             wake = (
-                "✅ Subsession %s completed (agent_id=%s, view_id=%s)\n"
-                "context_budget: %s" % (child_aid, child_aid, vid, line)
+                "✅ Subsession %s completed (agent_id=%s)\n"
+                "context_budget: %s" % (child_aid, child_aid, line)
             )
             if b.get("headroom"):
                 wake += (
@@ -1951,7 +1948,7 @@ class MCPSocketServer:
             if not getattr(parent_session, "client", None) or not getattr(
                     parent_session, "initialized", False):
                 if elapsed > max_wait_s:
-                    _log("signal_complete: parent %s never ready — drop" % parent_view_id)
+                    _log("signal_complete: parent %s never ready — drop" % parent_agent_id)
                     session._pending_signal_complete = None
                     return
                 sublime.set_timeout(try_deliver, parent_poll_ms)
@@ -2001,8 +1998,7 @@ class MCPSocketServer:
                 if child_busy else "Parent notified when free."
             ),
             "subsession_id": subsession_id,
-            "parent_view_id": parent_view_id,
-            "view_id": view_id,
+            "parent_agent_id": parent_agent_id,
             "result_summary": result_summary,
             "context_budget": budget,
             "context_summary": budget_line,

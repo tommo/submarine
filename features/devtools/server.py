@@ -135,24 +135,26 @@ def reload_plugin(mode: str = "soft", **kwargs: Any) -> dict:
     return package_reloader.schedule_reload(mode=mode, **kwargs)
 
 
-def goal_command(args: str = "status", view_id: Optional[int] = None) -> dict:
+def goal_command(args: str = "status", agent_id: Optional[str] = None) -> dict:
     """Run /goal harness on a host session (same as typing /goal in the sheet)."""
-    sess, vid = _resolve_session(view_id)
+    sess, vid = _resolve_session(agent_id)
     if not sess:
         return {
             "ok": False,
             "error": "no session",
-            "view_id": view_id,
-            "available": list(((getattr(sublime, "_submarine_sessions", None) or getattr(sublime, "_claude_sessions", None) or {})).keys()),
+            "agent_id": agent_id,
+            "available": list(getattr(sublime, "_submarine_by_agent", None)
+                              or getattr(sublime, "_submarine_sessions", None)
+                              or getattr(sublime, "_claude_sessions", None)
+                              or {}),
         }
     if not hasattr(sess, "handle_goal_command"):
-        return {"ok": False, "error": "session has no handle_goal_command (stale class? reload)", "view_id": vid}
+        return {"ok": False, "error": "session has no handle_goal_command (stale class? reload)", "agent_id": agent_id}
     try:
         sess.handle_goal_command(args or "status")
-        gt = getattr(sess, "goal_tracker", None)
         return {
             "ok": True,
-            "view_id": vid,
+            "agent_id": getattr(sess, "agent_id", None),
             "args": args,
             "goal": _goal_dump(sess),
             "working": bool(getattr(sess, "working", False)),
@@ -161,17 +163,29 @@ def goal_command(args: str = "status", view_id: Optional[int] = None) -> dict:
         }
     except Exception as e:
         log(f"goal_command error: {e}", level="error")
-        return {"ok": False, "error": str(e), "traceback": traceback.format_exc(), "view_id": vid}
+        return {"ok": False, "error": str(e), "traceback": traceback.format_exc(), "agent_id": getattr(sess, "agent_id", None)}
 
 
 def sessions_dump() -> dict:
     """All host sessions (not just MCP-spawned subsessions)."""
-    reg = (getattr(sublime, "_submarine_sessions", None) or getattr(sublime, "_claude_sessions", None) or {})
-    rows = []
-    for vid, s in list(reg.items()):
-        rows.append(_session_row(vid, s))
-    rows.sort(key=lambda r: (not r.get("working"), r.get("view_id") or 0))
-    return {"count": len(rows), "sessions": rows, "log_path": _log_path}
+    try:
+        from core.registry import default_registry
+        live = list(default_registry.iter_sessions())
+        rows = []
+        for s in live:
+            vid = default_registry.bound_view_id(s)
+            rows.append(_session_row(vid, s))
+        rows.sort(key=lambda r: (not r.get("working"), r.get("agent_id") or ""))
+        return {"count": len(rows), "sessions": rows, "log_path": _log_path}
+    except Exception:
+        reg = (getattr(sublime, "_submarine_sessions", None) or getattr(sublime, "_claude_sessions", None) or {})
+        rows = []
+        for vid, s in list(reg.items()):
+            if s is None or isinstance(s, (int, str)):
+                continue
+            rows.append(_session_row(vid, s))
+        rows.sort(key=lambda r: (not r.get("working"), str(r.get("agent_id") or r.get("view_id") or "")))
+        return {"count": len(rows), "sessions": rows, "log_path": _log_path}
 
 
 def snapshot(view_id: Optional[int] = None) -> dict:
@@ -266,7 +280,7 @@ def dispatch(action: str, **kwargs: Any) -> Any:
             })
         if action == "goal":
             args = kwargs.get("args") or kwargs.get("message") or kwargs.get("cmd") or "status"
-            return goal_command(args=args, view_id=kwargs.get("view_id"))
+            return goal_command(args=args, agent_id=kwargs.get("agent_id"))
         return {"error": f"unknown action: {action}", "help": help_text()}
     except Exception as e:
         log(f"dispatch error: {e}", level="error", action=action)
@@ -294,36 +308,41 @@ def _tail_file(path: str, n: int) -> List[str]:
         return [f"<read error: {e}>"]
 
 
-def _resolve_session(view_id: Optional[int] = None):
-    reg = (getattr(sublime, "_submarine_sessions", None) or getattr(sublime, "_claude_sessions", None) or {})
-    if view_id is not None:
-        try:
-            vid = int(view_id)
-        except (TypeError, ValueError):
-            return None, view_id
-        return reg.get(vid), vid
-
-    win = sublime.active_window()
-    if win:
-        v = win.active_view()
-        if v and v.id() in reg:
-            return reg[v.id()], v.id()
-        aid = win.settings().get("submarine_active_view")
-        if aid and aid in reg:
-            return reg[aid], aid
-    # Prefer a working non-quick session, else any
-    working = None
-    any_s = None
-    for vid, s in reg.items():
-        any_s = (s, vid)
-        if getattr(s, "working", False) and not getattr(s, "quick_mode", False):
-            working = (s, vid)
-            break
-    if working:
-        return working
-    if any_s:
-        return any_s
-    return None, None
+def _resolve_session(ref=None):
+    try:
+        from core.registry import default_registry
+        if ref is not None:
+            s = default_registry.by_agent_id(str(ref))
+            if s is not None:
+                return s, default_registry.bound_view_id(s)
+            s = default_registry.for_view_id(ref)
+            if s is not None:
+                return s, default_registry.bound_view_id(s)
+        win = sublime.active_window()
+        if win:
+            v = win.active_view()
+            s = default_registry.for_view(v) if v else None
+            if s is not None:
+                return s, default_registry.bound_view_id(s)
+            aid = win.settings().get("submarine_active_agent")
+            if aid:
+                s = default_registry.by_agent_id(str(aid))
+                if s is not None:
+                    return s, default_registry.bound_view_id(s)
+        working = None
+        any_s = None
+        for s in default_registry.iter_sessions():
+            any_s = (s, default_registry.bound_view_id(s))
+            if getattr(s, "working", False) and not getattr(s, "quick_mode", False):
+                working = any_s
+                break
+        if working:
+            return working
+        if any_s:
+            return any_s
+        return None, None
+    except Exception:
+        return None, None
 
 
 def _session_row(vid: int, s, deep: bool = False) -> dict:
@@ -334,6 +353,7 @@ def _session_row(vid: int, s, deep: bool = False) -> dict:
         view = None
 
     row = {
+        "agent_id": getattr(s, "agent_id", None),
         "view_id": vid,
         "name": getattr(s, "name", None),
         "backend": getattr(s, "backend", None),
@@ -344,7 +364,7 @@ def _session_row(vid: int, s, deep: bool = False) -> dict:
         "sleeping": bool(getattr(s, "sleeping", False)
                          or (view and view.settings().get("submarine_sleeping"))),
         "query_count": getattr(s, "query_count", None),
-        "parent_view_id": getattr(s, "parent_view_id", None),
+        "parent_agent_id": getattr(s, "parent_agent_id", None),
         "composer_allowed": getattr(s, "_composer_allowed", None),
         "input_mode_entered": getattr(s, "_input_mode_entered", None),
         "client_alive": None,

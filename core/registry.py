@@ -1,19 +1,15 @@
-"""Stable agent identity + runtime view_id mapping.
+"""Stable agent identity + display-only view binding.
 
-view_id is a Sublime runtime handle — it changes on restart and must not be
-the public identity for MCP tools. agent_id is host-stable (persisted on the
-view and in sessions.json).
+agent_id is the only session handle (host-stable, persisted in
+.sessions.json). view_id is a Sublime runtime display binding — it
+answers "which view currently shows this session" and is never stored
+on the Session.
 
-The three maps used to hang on the `sublime` module so they survived import
-cache (not ST restart). `default_registry` replaces that: the ST entry point
-must keep a reference across package reloads (e.g. re-bind it onto the
-`sublime` module in plugin_loaded). Tests and plain python3 get a process-
-local instance; call default_registry.clear() on plugin_loaded.
+  by_agent:  agent_id (str) -> Session   # ALL live sessions
+  binding:   view_id (int) -> agent_id   # display binding only
+  waits:     child_id -> [wait entries]  # parent_agent_id only
 
-  sessions:    view_id (int) -> Session     # ST lookup
-  agents:      agent_id (str) -> view_id    # stable → runtime
-  background:  agent_id (str) -> Session    # live, no sheet
-  waits:       child_id -> [wait entries]   # host wait_for_subsession
+"Background" is derived: live and not in binding.values().
 """
 from __future__ import annotations
 
@@ -106,14 +102,25 @@ def sender_display_prompt(stamped):
     return "📬 from %s" % token
 
 
-def _session_view_id(session):
+_legacy_view_ref_logged = False
+
+
+def _log_legacy_view_ref():
+    # type: () -> None
+    """Once per process — integer resolve_ref is deprecated."""
+    global _legacy_view_ref_logged
+    if _legacy_view_ref_logged:
+        return
+    _legacy_view_ref_logged = True
+    try:
+        from plat.log import log_plugin
+        log_plugin("resolve_ref: integer view_id is deprecated; use agent_id")
+    except Exception:
+        pass
+
+
+def _output_view_id(session):
     # type: (Any) -> Optional[int]
-    vid = getattr(session, "view_id", None)
-    if vid is not None:
-        try:
-            return int(vid)
-        except (TypeError, ValueError):
-            pass
     view = getattr(getattr(session, "output", None), "view", None)
     if not view:
         return None
@@ -127,7 +134,6 @@ def _session_view_id(session):
 
 def _clear_output_view(session):
     # type: (Any) -> None
-    session.view_id = None
     output = getattr(session, "output", None)
     if output is None:
         return
@@ -210,121 +216,215 @@ def mark_child_parent_notified(child_session):
 
 
 class SessionRegistry:
-    """Three maps + subsession wait entries. Plain class, no sublime."""
+    """by_agent + binding + subsession wait entries. Plain class, no sublime."""
 
     def __init__(self, keep_running_on_close=True):
         # type: (bool) -> None
-        self.sessions = {}  # type: dict
-        self.agents = {}  # type: dict
-        self.background = {}  # type: dict
+        self.by_agent = {}  # type: dict
+        self.binding = {}  # type: dict
         self.waits = {}  # type: dict
         self.keep_running_default = keep_running_on_close
+
+    @property
+    def sessions(self):
+        # type: () -> dict
+        """Derived view_id → Session for currently bound sheets."""
+        out = {}
+        for vid, aid in self.binding.items():
+            s = self.by_agent.get(aid)
+            if s is not None:
+                out[vid] = s
+        return out
+
+    @property
+    def agents(self):
+        # type: () -> dict
+        """Derived agent_id → view_id reverse of binding."""
+        return {aid: vid for vid, aid in self.binding.items()}
+
+    @property
+    def background(self):
+        # type: () -> dict
+        """Live sessions not currently bound to a view."""
+        bound = set(self.binding.values())
+        return {
+            aid: s for aid, s in self.by_agent.items()
+            if aid not in bound
+        }
 
     def clear(self):
         # type: () -> None
         """Drop all mappings (plugin reload / hard reset)."""
-        self.sessions.clear()
-        self.agents.clear()
-        self.background.clear()
+        self.by_agent.clear()
+        self.binding.clear()
         self.waits.clear()
 
-    def register_session(self, session):
+    def register(self, session):
         # type: (Any) -> None
-        """Bind session into view_id and agent_id maps."""
-        vid = _session_view_id(session)
-        if vid is None:
+        """Put session in by_agent. Does not bind a view."""
+        if session is None:
             return
         aid = getattr(session, "agent_id", None)
         if not aid:
             aid = new_agent_id()
             session.agent_id = aid
+        for existing_aid, s in list(self.by_agent.items()):
+            if s is session and existing_aid != aid:
+                self.by_agent.pop(existing_aid, None)
+                for vid, baid in list(self.binding.items()):
+                    if baid == existing_aid:
+                        self.binding[vid] = aid
+        self.by_agent[aid] = session
 
-        old_vid = self.agents.get(aid)
-        if old_vid is not None and old_vid != vid:
-            old = self.sessions.get(old_vid)
-            if old is session or old is None:
-                self.sessions.pop(old_vid, None)
-
-        for a, v in list(self.agents.items()):
-            if v == vid and a != aid:
-                self.agents.pop(a, None)
-
-        self.sessions[vid] = session
-        self.agents[aid] = vid
-        self.background.pop(aid, None)
-        session.backgrounded = False
-        session.view_id = vid
-        try:
-            self.relink_parent_view(session)
-        except Exception:
-            pass
-
-    def unregister_view(self, view_id):
-        # type: (int) -> None
-        session = self.sessions.pop(view_id, None)
-        if session is None:
-            for a, v in list(self.agents.items()):
-                if v == view_id:
-                    self.agents.pop(a, None)
+    def bind(self, agent_id, view_id):
+        # type: (str, int) -> None
+        """Bind agent to view. Evicts whatever agent currently holds the view."""
+        if not agent_id or view_id is None:
             return
-        aid = getattr(session, "agent_id", None)
-        if aid and self.agents.get(aid) == view_id:
-            self.agents.pop(aid, None)
+        try:
+            vid = int(view_id)
+        except (TypeError, ValueError):
+            return
+        aid = str(agent_id)
+        prev = self.binding.get(vid)
+        if prev and prev != aid:
+            prev_s = self.by_agent.get(prev)
+            if prev_s is not None:
+                prev_s.backgrounded = True
+        for v, a in list(self.binding.items()):
+            if a == aid and v != vid:
+                self.binding.pop(v, None)
+        self.binding[vid] = aid
+        session = self.by_agent.get(aid)
+        if session is not None:
+            session.backgrounded = False
 
-    def get_session_for_view_id(self, view_id):
-        # type: (int) -> Optional[Any]
-        return self.sessions.get(view_id)
+    def unbind(self, agent_id):
+        # type: (str) -> None
+        """Drop every binding for this agent. Session stays in by_agent."""
+        if not agent_id:
+            return
+        aid = str(agent_id)
+        for v, a in list(self.binding.items()):
+            if a == aid:
+                self.binding.pop(v, None)
+        session = self.by_agent.get(aid)
+        if session is not None:
+            session.backgrounded = True
 
-    def get_session_by_agent_id(self, agent_id):
+    def by_agent_id(self, agent_id):
         # type: (str) -> Optional[Any]
         """Resolve stable agent_id (also accepts subsession_id alias)."""
         if not agent_id:
             return None
         aid = str(agent_id).strip()
-        vid = self.agents.get(aid)
-        if vid is not None:
-            s = self.sessions.get(vid)
-            if s is not None:
-                return s
-        bg = self.background.get(aid)
-        if bg is not None:
-            return bg
-        for s in self.sessions.values():
-            if getattr(s, "agent_id", None) == aid:
-                self.register_session(s)
-                return s
-            if getattr(s, "subsession_id", None) == aid:
-                self.register_session(s)
-                return s
-        for s in list(self.background.values()):
+        s = self.by_agent.get(aid)
+        if s is not None:
+            return s
+        for s in list(self.by_agent.values()):
             if getattr(s, "agent_id", None) == aid:
                 return s
             if getattr(s, "subsession_id", None) == aid:
                 return s
         return None
 
-    def get_session_by_ref(self, ref):
+    def for_view(self, view):
         # type: (Any) -> Optional[Any]
-        """Resolve agent_id (str) or view_id (int / digit-string)."""
+        if view is None:
+            return None
+        try:
+            return self.for_view_id(view.id())
+        except Exception:
+            return None
+
+    def for_view_id(self, view_id):
+        # type: (Any) -> Optional[Any]
+        if view_id is None:
+            return None
+        try:
+            vid = int(view_id)
+        except (TypeError, ValueError):
+            return None
+        aid = self.binding.get(vid)
+        if not aid:
+            return None
+        return self.by_agent.get(aid)
+
+    def bound_view_id(self, session):
+        # type: (Any) -> Optional[int]
+        """Reverse lookup: which view currently shows this session."""
+        if session is None:
+            return None
+        aid = getattr(session, "agent_id", None)
+        if aid:
+            for vid, a in self.binding.items():
+                if a == aid:
+                    return vid
+        return _output_view_id(session)
+
+    def register_session(self, session):
+        # type: (Any) -> None
+        """Register into by_agent and bind the output view if present."""
+        self.register(session)
+        vid = _output_view_id(session)
+        if vid is None:
+            return
+        aid = getattr(session, "agent_id", None)
+        if aid:
+            self.bind(aid, vid)
+
+    def unregister_view(self, view_id):
+        # type: (int) -> None
+        """Drop the display binding. Bound non-background sessions leave by_agent."""
+        if view_id is None:
+            return
+        try:
+            vid = int(view_id)
+        except (TypeError, ValueError):
+            return
+        aid = self.binding.pop(vid, None)
+        if not aid:
+            return
+        session = self.by_agent.get(aid)
+        if session is not None and not getattr(session, "backgrounded", False):
+            self.by_agent.pop(aid, None)
+
+    def get_session_for_view_id(self, view_id):
+        # type: (int) -> Optional[Any]
+        return self.for_view_id(view_id)
+
+    def get_session_by_agent_id(self, agent_id):
+        # type: (str) -> Optional[Any]
+        return self.by_agent_id(agent_id)
+
+    def resolve_ref(self, ref):
+        # type: (Any) -> Optional[Any]
+        """Resolve agent_id (str). Int / digit-string is a deprecated binding lookup."""
         if ref is None or ref == "":
             return None
         if isinstance(ref, bool):
             return None
         if isinstance(ref, int):
-            return self.get_session_for_view_id(ref)
+            _log_legacy_view_ref()
+            return self.for_view_id(ref)
         s = str(ref).strip()
         if not s:
             return None
         if s.isdigit():
-            return self.get_session_for_view_id(int(s))
-        return self.get_session_by_agent_id(s)
+            _log_legacy_view_ref()
+            return self.for_view_id(int(s))
+        return self.by_agent_id(s)
+
+    def get_session_by_ref(self, ref):
+        # type: (Any) -> Optional[Any]
+        return self.resolve_ref(ref)
 
     def iter_sessions(self):
         # type: () -> List[Any]
         """All live sessions, including background (no sheet)."""
         out = []
         seen = set()
-        for s in list(self.sessions.values()) + list(self.background.values()):
+        for s in list(self.by_agent.values()):
             if s is None or id(s) in seen:
                 continue
             seen.add(id(s))
@@ -366,19 +466,15 @@ class SessionRegistry:
 
     def detach_session(self, session):
         # type: (Any) -> bool
-        """Drop the sheet, keep the live session in the background map."""
+        """Drop the sheet, keep the live session (derived background)."""
         if not session:
             return False
         aid = getattr(session, "agent_id", None)
         if not aid:
             aid = new_agent_id()
             session.agent_id = aid
-        vid = _session_view_id(session)
-        if vid is not None:
-            if self.sessions.get(vid) is session:
-                self.sessions.pop(vid, None)
-            if self.agents.get(aid) == vid:
-                self.agents.pop(aid, None)
+        self.register(session)
+        self.unbind(aid)
         try:
             if hasattr(session, "reset_phantoms_for_new_view"):
                 session.reset_phantoms_for_new_view()
@@ -386,7 +482,6 @@ class SessionRegistry:
             pass
         _clear_output_view(session)
         session.backgrounded = True
-        self.background[aid] = session
         return True
 
     def close_or_detach_session(self, session, view=None):
@@ -416,46 +511,21 @@ class SessionRegistry:
                 vid = view.id()
         except Exception:
             vid = None
+        if vid is None:
+            vid = self.bound_view_id(session)
         if vid is not None:
             self.unregister_view(vid)
-        else:
-            try:
-                ov = getattr(session, "output", None)
-                v = getattr(ov, "view", None) if ov else None
-                if v:
-                    self.unregister_view(v.id())
-                elif getattr(session, "view_id", None) is not None:
-                    self.unregister_view(int(session.view_id))
-            except Exception:
-                pass
+        aid = getattr(session, "agent_id", None)
+        if aid:
+            self.by_agent.pop(aid, None)
         return "stop"
-
-    def relink_parent_view(self, session):
-        # type: (Any) -> Optional[int]
-        """Refresh session.parent_view_id from parent_agent_id."""
-        parent = self.resolve_parent_session(session)
-        if not parent:
-            return getattr(session, "parent_view_id", None)
-        pvid = _session_view_id(parent)
-        if pvid is not None:
-            session.parent_view_id = pvid
-            return pvid
-        return getattr(session, "parent_view_id", None)
 
     def resolve_parent_session(self, child):
         # type: (Any) -> Optional[Any]
-        """Find parent session via stable parent_agent_id, else parent_view_id."""
+        """Find parent session via stable parent_agent_id."""
         paid = getattr(child, "parent_agent_id", None)
         if paid:
-            p = self.get_session_by_agent_id(paid)
-            if p is not None:
-                return p
-        pvid = getattr(child, "parent_view_id", None)
-        if pvid is not None:
-            try:
-                return self.get_session_for_view_id(int(pvid))
-            except (TypeError, ValueError):
-                pass
+            return self.by_agent_id(paid)
         return None
 
     def is_child_of(self, session, parent_view_id=None, parent_agent_id=None):
@@ -463,65 +533,55 @@ class SessionRegistry:
         if parent_agent_id:
             if getattr(session, "parent_agent_id", None) == parent_agent_id:
                 return True
-        if parent_view_id is not None:
-            if getattr(session, "parent_view_id", None) == parent_view_id:
-                return True
-            if parent_agent_id is None:
-                parent = self.get_session_for_view_id(parent_view_id)
-                if parent:
-                    paid = getattr(parent, "agent_id", None)
-                    if paid and getattr(session, "parent_agent_id", None) == paid:
-                        return True
+        if parent_view_id is not None and parent_agent_id is None:
+            parent = self.for_view_id(parent_view_id)
+            if parent:
+                paid = getattr(parent, "agent_id", None)
+                if paid and getattr(session, "parent_agent_id", None) == paid:
+                    return True
         return False
 
     def list_children_of(self, parent_view_id=None, parent_agent_id=None):
         # type: (Optional[int], Optional[str]) -> List[Any]
         if parent_view_id is not None and not parent_agent_id:
-            parent = self.get_session_for_view_id(parent_view_id)
+            parent = self.for_view_id(parent_view_id)
             if parent:
                 parent_agent_id = getattr(parent, "agent_id", None)
         out = []
-        for vid, s in self.sessions.items():
-            if parent_view_id is not None and vid == parent_view_id:
+        for s in self.iter_sessions():
+            if parent_agent_id and getattr(s, "agent_id", None) == parent_agent_id:
                 continue
             if self.is_child_of(s, parent_view_id=parent_view_id, parent_agent_id=parent_agent_id):
-                self.relink_parent_view(s)
                 out.append(s)
         return out
 
-    def relink_all_parents(self):
-        # type: () -> int
-        """After multi-tab restore, re-resolve parent_view_id for all children."""
-        n = 0
-        for s in list(self.sessions.values()):
-            if getattr(s, "parent_agent_id", None) or getattr(s, "parent_view_id", None):
-                before = getattr(s, "parent_view_id", None)
-                after = self.relink_parent_view(s)
-                if after and after != before:
-                    n += 1
-                self.register_session(s)
-        return n
-
     def runtime_view_id(self, session):
         # type: (Any) -> Optional[int]
-        return _session_view_id(session)
+        return self.bound_view_id(session)
 
     def register_subsession_wait(
         self,
         child_id,  # type: str
-        parent_view_id=None,  # type: Optional[int]
         parent_agent_id=None,  # type: Optional[str]
         wake_prompt="",  # type: str
+        parent_view_id=None,  # type: Optional[int]
     ):
         # type: (...) -> str
-        """Register a parent waiter for child agent_id/subsession_id."""
+        """Register a parent waiter for child agent_id/subsession_id.
+
+        parent_view_id is accepted and ignored (legacy callers).
+        """
         key = str(child_id).strip()
         wid = "wait-%s" % uuid.uuid4().hex[:10]
+        paid = parent_agent_id
+        if not paid and parent_view_id is not None:
+            parent = self.for_view_id(parent_view_id)
+            if parent:
+                paid = getattr(parent, "agent_id", None)
         entry = {
             "wait_id": wid,
             "child_id": key,
-            "parent_view_id": parent_view_id,
-            "parent_agent_id": parent_agent_id,
+            "parent_agent_id": paid,
             "wake_prompt": wake_prompt or "",
             "created": time.time(),
         }
@@ -552,12 +612,6 @@ class SessionRegistry:
             v = getattr(child_session, attr, None)
             if v:
                 aliases.append(str(v))
-        try:
-            vid = _session_view_id(child_session)
-            if vid is not None:
-                aliases.append(str(vid))
-        except Exception:
-            pass
 
         entries = self.pop_subsession_waits(aliases)
         if not entries:
@@ -569,19 +623,13 @@ class SessionRegistry:
             parent = None
             paid = entry.get("parent_agent_id")
             if paid:
-                parent = self.get_session_by_agent_id(paid)
-            if parent is None and entry.get("parent_view_id") is not None:
-                parent = self.get_session_for_view_id(entry["parent_view_id"])
+                parent = self.by_agent_id(paid)
             if parent is None:
                 parent = self.resolve_parent_session(child_session)
             if parent is None:
                 continue
 
-            parent_key = (
-                getattr(parent, "agent_id", None)
-                or _session_view_id(parent)
-                or id(parent)
-            )
+            parent_key = getattr(parent, "agent_id", None) or id(parent)
             if parent_key in delivered_parents:
                 continue
 
@@ -634,6 +682,41 @@ def clear_registries():
     default_registry.clear()
 
 
+def register(session):
+    # type: (Any) -> None
+    default_registry.register(session)
+
+
+def bind(agent_id, view_id):
+    # type: (str, int) -> None
+    default_registry.bind(agent_id, view_id)
+
+
+def unbind(agent_id):
+    # type: (str) -> None
+    default_registry.unbind(agent_id)
+
+
+def by_agent_id(agent_id):
+    # type: (str) -> Optional[Any]
+    return default_registry.by_agent_id(agent_id)
+
+
+def for_view(view):
+    # type: (Any) -> Optional[Any]
+    return default_registry.for_view(view)
+
+
+def for_view_id(view_id):
+    # type: (Any) -> Optional[Any]
+    return default_registry.for_view_id(view_id)
+
+
+def bound_view_id(session):
+    # type: (Any) -> Optional[int]
+    return default_registry.bound_view_id(session)
+
+
 def register_session(session):
     # type: (Any) -> None
     default_registry.register_session(session)
@@ -646,17 +729,22 @@ def unregister_view(view_id):
 
 def get_session_for_view_id(view_id):
     # type: (int) -> Optional[Any]
-    return default_registry.get_session_for_view_id(view_id)
+    return default_registry.for_view_id(view_id)
 
 
 def get_session_by_agent_id(agent_id):
     # type: (str) -> Optional[Any]
-    return default_registry.get_session_by_agent_id(agent_id)
+    return default_registry.by_agent_id(agent_id)
+
+
+def resolve_ref(ref):
+    # type: (Any) -> Optional[Any]
+    return default_registry.resolve_ref(ref)
 
 
 def get_session_by_ref(ref):
     # type: (Any) -> Optional[Any]
-    return default_registry.get_session_by_ref(ref)
+    return default_registry.resolve_ref(ref)
 
 
 def iter_sessions():
@@ -689,11 +777,6 @@ def close_or_detach_session(session, view=None):
     return default_registry.close_or_detach_session(session, view)
 
 
-def relink_parent_view(session):
-    # type: (Any) -> Optional[int]
-    return default_registry.relink_parent_view(session)
-
-
 def resolve_parent_session(child):
     # type: (Any) -> Optional[Any]
     return default_registry.resolve_parent_session(child)
@@ -709,23 +792,18 @@ def list_children_of(parent_view_id=None, parent_agent_id=None):
     return default_registry.list_children_of(parent_view_id, parent_agent_id)
 
 
-def relink_all_parents():
-    # type: () -> int
-    return default_registry.relink_all_parents()
-
-
 def runtime_view_id(session):
     # type: (Any) -> Optional[int]
-    return default_registry.runtime_view_id(session)
+    return default_registry.bound_view_id(session)
 
 
-def register_subsession_wait(child_id, parent_view_id=None, parent_agent_id=None, wake_prompt=""):
-    # type: (str, Optional[int], Optional[str], str) -> str
+def register_subsession_wait(child_id, parent_agent_id=None, wake_prompt="", parent_view_id=None):
+    # type: (str, Optional[str], str, Optional[int]) -> str
     return default_registry.register_subsession_wait(
         child_id=child_id,
-        parent_view_id=parent_view_id,
         parent_agent_id=parent_agent_id,
         wake_prompt=wake_prompt,
+        parent_view_id=parent_view_id,
     )
 
 

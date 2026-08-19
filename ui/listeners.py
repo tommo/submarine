@@ -35,6 +35,7 @@ from .session_api import (
     close_or_detach_session,
     create_session,
     detach_session,
+    get_session_by_agent_id,
     get_session_for_view,
     in_startup_quiet,
     keep_running_on_close,
@@ -230,11 +231,13 @@ class SubmarineEventListener(sublime_plugin.EventListener):
                     except Exception:
                         pass
                 aid = getattr(session, "agent_id", None)
-                if aid and sublime is not None:
-                    bg = getattr(sublime, "_submarine_background", None) or getattr(
-                        sublime, "_claude_background", None)
-                    if isinstance(bg, dict):
-                        bg.pop(aid, None)
+                if aid:
+                    try:
+                        from core.registry import default_registry
+                        default_registry.by_agent.pop(aid, None)
+                        default_registry.unbind(aid)
+                    except Exception:
+                        pass
 
         if command in ("close", "close_file", "close_by_index"):
             view = window.active_view()
@@ -394,7 +397,10 @@ class SubmarineOutputEventListener(sublime_plugin.ViewEventListener):
         is_real_active = bool(active and active.id() == self.view.id())
         if not is_real_active:
             return
-        old_active = keys.read_setting(window.settings(), keys.ACTIVE_VIEW)
+        old_agent = keys.read_setting(window.settings(), keys.ACTIVE_AGENT)
+        old_view_id = None
+        if not old_agent:
+            old_view_id = keys.read_setting(window.settings(), keys.ACTIVE_VIEW)
         remember_active_session(window, self.view)
         s = get_session_for_view(self.view)
         if not s:
@@ -421,20 +427,23 @@ class SubmarineOutputEventListener(sublime_plugin.ViewEventListener):
             if len(sel) == 0 and sublime is not None:
                 self.view.sel().clear()
                 self.view.sel().add(sublime.Region(input_start, input_start))
-        if old_active and old_active != self.view.id():
-            old_session = sessions_map().get(old_active)
-            if old_session:
-                try:
-                    old_session.output.set_name(
-                        getattr(old_session, "display_name", None) or old_session.name)
-                except Exception:
-                    pass
+        old_session = None
+        if old_agent:
+            old_session = get_session_by_agent_id(old_agent)
+        elif old_view_id and old_view_id != self.view.id():
+            old_session = sessions_map().get(old_view_id)
+        if old_session is not None and old_session is not s:
+            try:
+                old_session.output.set_name(
+                    getattr(old_session, "display_name", None) or old_session.name)
+            except Exception:
+                pass
 
     def _restore_session(self, window, paint=True):
         if self.view and keys.read_setting(self.view.settings(), keys.QUICK):
             return
         view = self.view
-        if view.id() in sessions_map():
+        if get_session_for_view(view):
             return
         if keys.read_setting(view.settings(), keys.RECONNECTING):
             return
@@ -506,7 +515,6 @@ class SubmarineOutputEventListener(sublime_plugin.ViewEventListener):
                 or (matched or {}).get("parent_agent_id")
                 or None
             )
-            session.parent_view_id = None
             if resume_id:
                 session.session_id = resume_id
             try:

@@ -159,6 +159,7 @@ def main(argv=None) -> int:
     p.add_argument("--tail", type=int, default=80)
     p.add_argument("--grep", default=None)
     p.add_argument("--view-id", type=int, default=None)
+    p.add_argument("--agent-id", default=None)
     p.add_argument("--hard", action="store_true", help="reload: full ignored_packages cycle")
     p.add_argument("--mode", default=None, help="reload mode: soft|hard")
     p.add_argument("--wait", type=float, default=2.0, help="reload: seconds to wait then re-ping")
@@ -204,6 +205,7 @@ def main(argv=None) -> int:
     else:
         kwargs = {}
         view_id = args.view_id
+        agent_id = args.agent_id
         if args.rest and action in ("snapshot", "composer", "sessions"):
             try:
                 view_id = int(args.rest[0])
@@ -211,6 +213,8 @@ def main(argv=None) -> int:
                 pass
         if view_id is not None:
             kwargs["view_id"] = view_id
+        if agent_id is not None:
+            kwargs["agent_id"] = agent_id
         if action == "log":
             kwargs["tail"] = args.tail
             if args.grep:
@@ -219,8 +223,8 @@ def main(argv=None) -> int:
             kwargs["message"] = " ".join(args.rest) if args.rest else ""
         if action == "goal":
             kwargs["args"] = " ".join(args.rest) if args.rest else "status"
-            if view_id is not None:
-                kwargs["view_id"] = view_id
+            if agent_id is not None:
+                kwargs["agent_id"] = agent_id
         body = debug_call(action, kwargs)
 
     text = json.dumps(body, indent=2, default=str)

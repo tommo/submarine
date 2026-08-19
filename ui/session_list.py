@@ -26,6 +26,7 @@ from .session_api import (
     create_session,
     find_live_by_session_id,
     get_active_session,
+    get_session_by_agent_id,
     iter_sessions,
     load_bookmarks,
     load_saved_sessions,
@@ -272,13 +273,14 @@ def collect_live(window) -> List[dict]:
         try:
             view = s.output.view if s.output else None
             view_ok = bool(view and view.is_valid())
-            view_id = view.id() if view_ok else id(s)
+            view_id = view.id() if view_ok else None
         except Exception:
             view_ok = False
-            view_id = id(s)
+            view_id = None
         out.append({
             "kind": "live",
             "session_id": getattr(s, "session_id", None),
+            "agent_id": getattr(s, "agent_id", None),
             "view_id": view_id,
             "name": session_title(s),
             "backend": getattr(s, "backend", None) or "claude",
@@ -512,11 +514,14 @@ def row_at_line(index: List[dict], line: int) -> Optional[dict]:
 
 
 def focus_live(window, row: dict) -> bool:
+    aid = row.get("agent_id")
     vid = row.get("view_id")
     sid = row.get("session_id")
     sessions = sessions_map()
     session = None
-    if vid is not None and vid in sessions:
+    if aid:
+        session = get_session_by_agent_id(aid)
+    if session is None and vid is not None and vid in sessions:
         session = sessions[vid]
     if session is None and sid:
         try:
@@ -538,8 +543,10 @@ def focus_live(window, row: dict) -> bool:
     try:
         remember_active_session(win, view)
     except Exception:
-        from .keys import ACTIVE_VIEW, write_setting
-        write_setting(win.settings(), ACTIVE_VIEW, view.id())
+        from .keys import ACTIVE_AGENT, write_setting
+        aid = getattr(session, "agent_id", None)
+        if aid:
+            write_setting(win.settings(), ACTIVE_AGENT, aid)
     reveal_session_bottom(session)
     return True
 
@@ -663,7 +670,7 @@ def open_row(window, row: dict) -> bool:
     if not row:
         return False
     global _last_open
-    key = (row.get("session_id"), row.get("view_id"), row.get("kind"))
+    key = (row.get("session_id"), row.get("agent_id") or row.get("view_id"), row.get("kind"))
     now = time.time()
     if key == _last_open[1] and (now - _last_open[0]) < 0.4:
         return True
@@ -697,6 +704,11 @@ def reveal_row(window, row: dict) -> bool:
 def _live_session_for_row(row: dict):
     if not row:
         return None
+    aid = row.get("agent_id")
+    if aid:
+        session = get_session_by_agent_id(aid)
+        if session is not None:
+            return session
     sessions = sessions_map()
     vid = row.get("view_id")
     if vid is not None and vid in sessions:
@@ -881,6 +893,7 @@ class SubmarineSessionJsonlCommand(sublime_plugin.WindowCommand):
         row = {
             "kind": "live",
             "session_id": s.session_id,
+            "agent_id": getattr(s, "agent_id", None),
             "backend": getattr(s, "backend", None) or "claude",
             "view_id": view.id() if view and view.is_valid() else None,
             "project": "",

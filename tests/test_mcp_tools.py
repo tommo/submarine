@@ -152,13 +152,21 @@ def test_debug_ops_are_not_in_the_catalog():
         assert not desc["name"].startswith("debug_")
 
 
+def test_send_and_read_schemas_drop_view_id():
+    for name in ("send_to_session", "read_session_output"):
+        props = TOOL_SCHEMAS[name]["properties"]
+        assert "view_id" not in props
+        assert "_caller_view_id" not in props
+        assert "fork_from_view_id" not in props
+
+
 def test_spawn_schema_has_no_persona_or_checkpoint():
     props = TOOL_SCHEMAS["spawn_session"]["properties"]
     assert "persona_id" not in props
     assert "checkpoint" not in props
     assert set(props) == {
         "prompt", "name", "profile", "backend",
-        "fork_current", "fork_from_agent_id", "fork_from_view_id",
+        "fork_current", "fork_from_agent_id",
         "wait_for_completion",
     }
 
@@ -244,7 +252,7 @@ def test_router_codegen_spawn_session_no_removed_args():
         "backend": "grok",
         "fork_from_agent_id": "aa11",
         "wait_for_completion": True,
-        "_caller_view_id": 7,
+        "_caller_agent_id": "agent-abc",
     })
     call = _assert_call(src, "spawn_session")
     kw = _kw(call)
@@ -253,9 +261,11 @@ def test_router_codegen_spawn_session_no_removed_args():
     assert kw["backend"] == "grok"
     assert kw["fork_from_agent_id"] == "aa11"
     assert kw["wait_for_completion"] is True
-    assert kw["_caller_view_id"] == 7
+    assert kw["_caller_agent_id"] == "agent-abc"
     assert "persona_id" not in kw
     assert "checkpoint" not in kw
+    assert "fork_from_view_id" not in kw
+    assert "_caller_view_id" not in kw
 
 
 def test_router_codegen_set_and_cancel_timer():
