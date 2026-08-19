@@ -18,6 +18,10 @@ contexts:
     - match: '^\s+\(none\)$'
       scope: comment.line.session-list
 
+    - match: '^▸'
+      scope: keyword.bound.session-list
+      push: row_rest
+
     - match: '^●'
       scope: keyword.working.session-list
       push: row_rest

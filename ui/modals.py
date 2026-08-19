@@ -67,6 +67,26 @@ class ModalUI:
         except Exception:
             return True
 
+    def _notify_detached(self, kind: str) -> None:
+        """One-shot status bar for a request that arrived while viewless."""
+        if self._has_view() or sublime is None:
+            return
+        name = "session"
+        try:
+            name = getattr(self.owner.sheet, "_name", None) or name
+        except Exception:
+            pass
+        labels = {
+            "permission": "needs permission",
+            "plan": "needs plan approval",
+            "question": "has a question",
+        }
+        try:
+            sublime.status_message("Submarine: %s %s" % (
+                name, labels.get(kind, kind)))
+        except Exception:
+            pass
+
     def descriptors(self) -> List[dict]:
         """Serializable pending-modal list (kind + payload). Callbacks omitted."""
         out = []  # type: List[dict]
@@ -195,12 +215,14 @@ class ModalUI:
         )
         if self.pending_permission and self.pending_permission.callback:
             self._permission_queue.append(perm)
+            self._notify_detached("permission")
             return
         self.pending_permission = perm
         self.owner.composer.hide_composer_for_modal()
         self._render_permission()
         self.owner.composer.scroll_to_end()
         self._arm_perm_timeout(perm)
+        self._notify_detached("permission")
 
     def _arm_perm_timeout(self, perm):
         self._perm_timeout_token += 1
@@ -567,6 +589,7 @@ class ModalUI:
         self.owner.composer.hide_composer_for_modal()
         self._render_plan_approval()
         self.owner.composer.scroll_to_end()
+        self._notify_detached("plan")
 
     def _render_plan_approval(self):
         if not self.pending_plan or not self._has_view():
@@ -685,6 +708,7 @@ class ModalUI:
         self.owner.composer.hide_composer_for_modal()
         self.render_question()
         self.owner.composer.scroll_to_end(force=True)
+        self._notify_detached("question")
 
     def _question_block_text(self):
         q_req = self.pending_question

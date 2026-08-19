@@ -277,6 +277,13 @@ def collect_live(window) -> List[dict]:
         except Exception:
             view_ok = False
             view_id = None
+        bound = False
+        try:
+            from ui.host import is_single_mode
+            if is_single_mode() and view_ok:
+                bound = True
+        except Exception:
+            bound = False
         out.append({
             "kind": "live",
             "session_id": getattr(s, "session_id", None),
@@ -289,6 +296,7 @@ def collect_live(window) -> List[dict]:
             "same_window": True,
             "last_access": access_ts(s),
             "last_activity": float(getattr(s, "last_activity", 0) or 0),
+            "bound": bound,
         })
     # Input wait first, then awake, then sleeping; access time within each band.
     _band = {"input": 0, "unread": 0, "working": 1, "ready": 1, "sleeping": 2}
@@ -423,6 +431,8 @@ def _fmt_row(r: dict, starred: set, compact: bool = False, cols: int = 0) -> str
     live = r.get("kind") == "live"
     name = one_line_title(r.get("name") or "")
     mark = _mark(r["status"]) if live else "·"
+    if r.get("bound"):
+        mark = "▸"
     if compact:
         pre = f"{mark} {backend_abbrev(r.get('backend'))} "
         return pre + fit_title(name, _name_budget(pre, "", cols, True))
@@ -551,7 +561,8 @@ def focus_live(window, row: dict) -> bool:
     return True
 
 
-def reveal_live_session(window, session, focus: bool = True) -> bool:
+def reveal_live_session(window, session, focus: bool = True,
+                        force_sheet: bool = False) -> bool:
     """Show a live session, reattaching a sheet if it was backgrounded."""
     if not session or not window:
         return False
@@ -579,7 +590,7 @@ def reveal_live_session(window, session, focus: bool = True) -> bool:
         pass
     if not session.output:
         return False
-    session.output.show(focus=focus)
+    session.output.show(focus=focus, create=force_sheet)
     view = session.output.view
     if not view or not view.is_valid():
         return False
@@ -675,6 +686,17 @@ def open_row(window, row: dict) -> bool:
     if key == _last_open[1] and (now - _last_open[0]) < 0.4:
         return True
     _last_open = (now, key)
+    try:
+        from ui.host import HostView, is_single_mode
+        if is_single_mode():
+            if row.get("kind") == "live":
+                session = _live_session_for_row(row)
+                if session is not None:
+                    return bool(HostView.for_window(window).attach(
+                        window, session, focus=True))
+            return resume_saved(window, row)
+    except Exception:
+        pass
     if row.get("kind") == "live":
         if focus_live(window, row):
             return True
@@ -687,6 +709,24 @@ def reveal_row(window, row: dict) -> bool:
         return False
     keep = window.active_view()
     ok = False
+    try:
+        from ui.host import HostView, is_single_mode
+        if is_single_mode():
+            if row.get("kind") == "live":
+                session = _live_session_for_row(row)
+                if session is not None:
+                    ok = bool(HostView.for_window(window).attach(
+                        window, session, focus=False))
+            if not ok:
+                ok = resume_saved(window, row, focus=False)
+            if keep and keep.is_valid():
+                try:
+                    window.focus_view(keep)
+                except Exception:
+                    pass
+            return ok
+    except Exception:
+        pass
     if row.get("kind") == "live":
         session = _live_session_for_row(row)
         if session is not None:
@@ -738,6 +778,23 @@ def close_row(window, row: dict) -> bool:
                 view = session.output.view if session.output else None
             except Exception:
                 view = None
+            host_bound = False
+            try:
+                from ui.host import HostView, is_single_mode
+                if is_single_mode():
+                    hv = HostView.for_window(window)
+                    hv_view = hv._view
+                    if hv_view is not None:
+                        try:
+                            from core.registry import for_view
+                            if for_view(hv_view) is session:
+                                host_bound = True
+                            elif view is not None and view.id() == hv_view.id():
+                                host_bound = True
+                        except Exception:
+                            host_bound = False
+            except Exception:
+                host_bound = False
             try:
                 session.stop()
             except Exception:
@@ -752,7 +809,13 @@ def close_row(window, row: dict) -> bool:
                     bg.pop(aid, None)
             except Exception:
                 pass
-            if view:
+            if host_bound:
+                try:
+                    from ui.host import HostView
+                    HostView.for_window(window).detach_current(window)
+                except Exception:
+                    pass
+            elif view:
                 try:
                     if view.is_valid():
                         from .keys import SOFT_CLOSE, write_setting

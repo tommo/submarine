@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 # New keys (always written).
 OUTPUT = "submarine_output"
+HOST = "submarine_host"
 SESSION_ID = "submarine_session_id"
 AGENT_ID = "submarine_agent_id"
 BACKEND = "submarine_backend"

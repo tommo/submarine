@@ -51,7 +51,8 @@ class OutputSheet:
 
     # --- lifecycle ---------------------------------------------------------
 
-    def show(self, focus: bool = True, panel: Optional[str] = None) -> None:
+    def show(self, focus: bool = True, panel: Optional[str] = None,
+             create: bool = False) -> None:
         if panel:
             self._panel_name = panel
         panel_name = self._panel_name
@@ -62,6 +63,13 @@ class OutputSheet:
             if focus:
                 self.window.focus_view(self.view)
             return
+        if not create:
+            try:
+                from ui.host import is_single_mode
+                if is_single_mode():
+                    return
+            except Exception:
+                pass
         prev = self.window.active_view()
         self.view = self.window.new_file()
         self.view.set_name("Submarine")

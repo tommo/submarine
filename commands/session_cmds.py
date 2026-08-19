@@ -690,6 +690,14 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
             elif action == "sleep" and data:
                 data.sleep()
             elif action == "focus" and data:
+                try:
+                    from ui.host import HostView, is_single_mode
+                    if is_single_mode():
+                        HostView.for_window(self.window).attach(
+                            self.window, data)
+                        return
+                except Exception:
+                    pass
                 data.output.show()
 
         _ph = []

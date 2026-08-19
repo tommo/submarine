@@ -21,6 +21,12 @@ class FakeSettings:
     def has(self, k):
         return k in _settings_store
 
+    def add_on_change(self, key, fn):
+        pass
+
+    def clear_on_change(self, key):
+        pass
+
 
 def install():
     """Alias used by UI tests."""

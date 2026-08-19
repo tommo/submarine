@@ -373,9 +373,14 @@ class SubmarineOutputView(FormatHelpers):
 
     # --- extra OutputView API Session already calls ------------------------
 
-    def show(self, focus=True, panel=None):
-        """Ensure a sheet exists. Viewless: creates one (bind path, not a no-op)."""
-        self.sheet.show(focus=focus, panel=panel)
+    def show(self, focus=True, panel=None, create=False):
+        """Ensure a sheet exists. Viewless: creates one (bind path, not a no-op).
+
+        `create=True` forces a new_file even in single mode (host bootstrap
+        / tabs restore). Default `create=False` is a no-op in single mode
+        when no view is bound, so detached sessions stay headless.
+        """
+        self.sheet.show(focus=focus, panel=panel, create=create)
 
     def set_name(self, name):
         """Set the tab base name. Viewless: stored, title write skipped."""
@@ -577,7 +582,19 @@ class SubmarineOutputView(FormatHelpers):
                 view.settings().set("submarine_unread", bool(on))
             except Exception:
                 pass
+        elif on:
+            self._detached_status("finished")
         self.sheet.update_title()
+
+    def _detached_status(self, what):
+        """One-shot status bar. Never steals host focus."""
+        if sublime is None:
+            return
+        name = getattr(self.sheet, "_name", None) or "session"
+        try:
+            sublime.status_message("Submarine: %s %s" % (name, what))
+        except Exception:
+            pass
 
     # Back-compat aliases used before core/ports.py landed
     def show_sleep_banner(self, text="", on=True):

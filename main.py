@@ -108,7 +108,7 @@ def _plugin_settings_dict():
         "quota_service_url", "effort", "goal_skeptic_mode",
         "mcp_enable_read_image", "auto_retry_turns", "auto_retry_backoff_seconds",
         "custom_providers", "deepseek_api_key", "quick_agent", "env",
-        "submit_with_modifier", "models",
+        "submit_with_modifier", "models", "ui_mode",
     ):
         try:
             val = s.get(key)
@@ -252,6 +252,14 @@ def create_session(
         existing = find_live_by_session_id(resume_id)
         if existing is not None:
             try:
+                from ui.host import HostView, is_single_mode
+                if is_single_mode():
+                    HostView.for_window(window).attach(
+                        window, existing, focus=focus)
+                    return existing
+            except Exception:
+                pass
+            try:
                 from ui.session_list import reveal_live_session
                 if reveal_live_session(window, existing, focus=focus):
                     return existing
@@ -306,7 +314,17 @@ def create_session(
 
     keys.write_setting(window.settings(), keys.CREATING_SESSION, True)
     try:
-        if show:
+        attached = False
+        if show and attach_view is None:
+            try:
+                from ui.host import HostView, is_single_mode
+                if is_single_mode():
+                    HostView.for_window(window).attach(
+                        window, session, focus=focus)
+                    attached = True
+            except Exception:
+                attached = False
+        if show and not attached:
             session.output.show(focus=focus)
             view = session.output.view
             if resume_id and view is not None:
@@ -632,6 +650,13 @@ def plugin_loaded():
         log_plugin("devtools start failed: %s" % e)
 
     schedule_auto_sleep()
+    try:
+        from ui.host import ui_mode
+        sublime._submarine_ui_mode = ui_mode()  # type: ignore[attr-defined]
+        sublime.load_settings(SETTINGS_FILE).add_on_change(
+            "submarine_ui_mode", _on_ui_mode_change)
+    except Exception as e:
+        log_plugin("ui_mode watch: %s" % e)
     sublime.set_timeout(_startup_strip_composers, 0)
     sublime.set_timeout(_startup_strip_composers, 100)
     sublime.set_timeout(_startup_settle_views, int(_STARTUP_QUIET_S * 1000) + 50)
@@ -645,7 +670,27 @@ def _end_startup_quiet():
         pass
 
 
+def _on_ui_mode_change():
+    try:
+        from ui.host import apply_ui_mode, ui_mode
+        mode = ui_mode()
+        prev = getattr(sublime, "_submarine_ui_mode", None)
+        if prev == mode:
+            return
+        sublime._submarine_ui_mode = mode  # type: ignore[attr-defined]
+        if prev is None:
+            return
+        for w in sublime.windows():
+            apply_ui_mode(w, mode)
+    except Exception as e:
+        log_plugin("ui_mode change: %s" % e)
+
+
 def plugin_unloaded():
+    try:
+        sublime.load_settings(SETTINGS_FILE).clear_on_change("submarine_ui_mode")
+    except Exception:
+        pass
     try:
         for w in sublime.windows():
             for v in w.views():

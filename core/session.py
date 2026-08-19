@@ -142,6 +142,7 @@ class Session:
         )
         self.turn_phase = "idle"
         self.unread = False
+        self.surface = {}  # type: dict
         self.is_looping = False
         self.next_wake_at = None  # type: Optional[float]
         self.quick_mode = False
@@ -302,7 +303,12 @@ class Session:
         """None = stay awake; False = sleep; True = force sleep (2×)."""
         if self.sleep_disabled or self.quick_mode:
             return None
-        if not (self.initialized and not self.working and not self.is_sleeping):
+        if self.working:
+            return None
+        turn = getattr(self, "turn", None)
+        if turn is not None and getattr(turn, "busy", False):
+            return None
+        if not (self.initialized and not self.is_sleeping):
             return None
         if not timeout_min or timeout_min <= 0:
             return None
@@ -1323,6 +1329,29 @@ class Session:
         except Exception:
             pass
 
+    def _is_detached(self):
+        # type: () -> bool
+        """True when live in by_agent but not bound to a view."""
+        if self.quick_mode:
+            return False
+        aid = getattr(self, "agent_id", None)
+        if not aid:
+            return bool(getattr(self, "backgrounded", False))
+        try:
+            if aid not in self.registry.by_agent:
+                return bool(getattr(self, "backgrounded", False))
+            return self.registry.bound_view_id(self) is None
+        except Exception:
+            return bool(getattr(self, "backgrounded", False))
+
+    def _set_unread(self, on):
+        # type: (bool) -> None
+        self.unread = bool(on)
+        try:
+            self.chrome.set_unread(self.unread)
+        except Exception:
+            pass
+
     def _set_turn_phase(self, phase):
         # type: (str) -> None
         phase = phase or "idle"
@@ -1330,10 +1359,10 @@ class Session:
             return
         self.turn_phase = phase
         if phase == "idle":
-            try:
-                self.chrome.set_unread(False)
-            except Exception:
-                pass
+            if self._is_detached():
+                self._set_unread(True)
+            else:
+                self._set_unread(False)
         try:
             self.chrome.refresh_tab_title()
         except Exception:
@@ -1396,10 +1425,7 @@ class Session:
             self.output.refresh_background_hints()
         except Exception:
             pass
-        try:
-            self.chrome.set_unread(True)
-        except Exception:
-            pass
+        self._set_unread(True)
         for cb in list(self.on_bg_surface):
             try:
                 cb(self)

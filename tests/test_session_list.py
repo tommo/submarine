@@ -341,6 +341,13 @@ class TestRenderSessionList(unittest.TestCase):
         utext, _ = sl.render_list([urow], [], [], cols=80)
         self.assertIn("! ", utext)
         self.assertIn("new", utext)
+        bound_row = dict(urow)
+        bound_row["bound"] = True
+        bound_row["status"] = "ready"
+        btext, _ = sl.render_list([bound_row], [], [], cols=80)
+        self.assertIn("▸ ", btext)
+        self.assertTrue(any(ln.startswith("▸") for ln in btext.splitlines()))
+        self.assertFalse(any(ln.startswith("▸") for ln in utext.splitlines()))
         from tests.stubs import install
         sublime = install()
         ask = types.SimpleNamespace(

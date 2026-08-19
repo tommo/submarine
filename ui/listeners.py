@@ -183,6 +183,22 @@ def settle_startup_output_views() -> None:
         settle_active_output_view(w)
 
 
+def _forget_host_view(view) -> None:
+    try:
+        from ui.host import HostView
+        win = None
+        try:
+            win = view.window()
+        except Exception:
+            win = None
+        if win is not None:
+            HostView.for_window(win).forget_view(view)
+        else:
+            HostView.forget_view_id(view.id())
+    except Exception:
+        pass
+
+
 # Back-compat names used by old call sites
 settle_active_claude_view = settle_active_output_view
 settle_startup_claude_views = settle_startup_output_views
@@ -360,22 +376,35 @@ class SubmarineEventListener(sublime_plugin.EventListener):
                 )
             except Exception:
                 pass
+        is_host = False
+        try:
+            is_host = bool(keys.read_setting(view.settings(), keys.HOST))
+        except Exception:
+            is_host = False
         if keys.read_setting(view.settings(), keys.QUICK_SOFT_CLOSE):
             unregister_view(view.id())
+            if is_host:
+                _forget_host_view(view)
             return
         if keys.read_setting(view.settings(), keys.SOFT_CLOSE):
             unregister_view(view.id())
+            if is_host:
+                _forget_host_view(view)
             return
         session = get_session_for_view(view)
         if session:
             if keep_running_on_close(session):
                 detach_session(session)
+                if is_host:
+                    _forget_host_view(view)
                 return
             try:
                 session.stop()
             except Exception:
                 pass
             unregister_view(view.id())
+        if is_host:
+            _forget_host_view(view)
 
 
 class SubmarineOutputEventListener(sublime_plugin.ViewEventListener):
@@ -523,6 +552,14 @@ class SubmarineOutputEventListener(sublime_plugin.ViewEventListener):
             except Exception:
                 pass
             register_session(session)
+            try:
+                from ui.host import HostView, is_single_mode
+                if is_single_mode():
+                    hv = HostView.for_window(window)
+                    hv._view = view
+                    keys.write_setting(view.settings(), keys.HOST, True)
+            except Exception:
+                pass
             if keys.read_setting(view.settings(), keys.QUICK):
                 view.settings().set("color_scheme", keys.THEME_QUICK)
             else:

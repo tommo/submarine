@@ -24,6 +24,10 @@
     // Session list HISTORY rows (this project). Default 200.
     "session_list_history_limit": 200,
 
+    // One output view per window; session list swaps which session it shows.
+    // Options: "tabs" (default — one sheet per session), "single".
+    "ui_mode": "tabs",
+
     // Auto-sleep idle sessions after N minutes (0 = disabled). Timer starts
     // when a turn *ends* (not when sticky ◎ opens mid-stream).
     // "auto_sleep_minutes": 60,
