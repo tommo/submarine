@@ -452,6 +452,21 @@ class TestModeSwitch(_SingleViewCase):
         with_view = [s for s in sessions if s.output.view and s.output.view.is_valid()]
         self.assertEqual(len(with_view), 3)
 
+    def test_tabs_to_single_closes_orphan_output_views(self):
+        set_ui_mode_override("tabs")
+        win = RecordingWindow()
+        a = _session(win, "A")
+        a.output.show(focus=False, create=True)
+        default_registry.register_session(a)
+        orphan = win.new_file()
+        keys.write_setting(orphan.settings(), keys.OUTPUT, True)
+        self.assertEqual(len([v for v in win.views() if v.is_valid()]), 2)
+        apply_ui_mode(win, "single")
+        live = [v for v in win.views() if v.is_valid()]
+        self.assertEqual(len(live), 1)
+        self.assertTrue(orphan.closed)
+        self.assertIs(default_registry.for_view(live[0]), a)
+
 
 class TestHostClose(_SingleViewCase):
     def test_close_backgrounds_and_reopen_reattaches(self):

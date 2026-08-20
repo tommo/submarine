@@ -407,9 +407,16 @@ class BackgroundMixin:
         tool_use_id = info.get("tool_use_id") or f"bg-{task_id}"
         if self._should_skip_bg_notify(task_id, tool_use_id):
             return
-        slot = self._terminals.get(terminal_id) or {}
+        slot = (
+            self._terminals.get(terminal_id)
+            or getattr(self, "_detached_slots", {}).get(terminal_id)
+            or {}
+        )
+        snap = getattr(self, "_detached_snaps", {}).get(terminal_id) or {}
         out = (slot.get("stdout") or "") + (slot.get("stderr") or "")
-        es = slot.get("exit_status") or {}
+        if not out:
+            out = snap.get("output") or ""
+        es = slot.get("exit_status") or snap.get("exitStatus") or {}
         code = es.get("exitCode")
         if code is None and es.get("signal"):
             status = "failed"
@@ -422,3 +429,9 @@ class BackgroundMixin:
         summary = self._clip_bg_summary(raw, code)
         self._emit_bg_finished(
             task_id, tool_use_id, status, summary, output_file)
+        try:
+            getattr(self, "_detached_slots", {}).pop(terminal_id, None)
+            getattr(self, "_detached_snaps", {}).pop(terminal_id, None)
+            getattr(self, "_detached_procs", {}).pop(terminal_id, None)
+        except Exception:
+            pass

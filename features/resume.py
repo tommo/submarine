@@ -301,9 +301,8 @@ def load_turns(session_id: str, backend: str, cwd: str = "",
     if backend == "kimi":
         path = find_kimi_wire(session_id, cwd)
         return parse_kimi_wire(path) if path else []
-    if claude_jsonl and os.path.isfile(claude_jsonl):
-        return parse_claude_jsonl(claude_jsonl)
-    return []
+    path = claude_jsonl if claude_jsonl and os.path.isfile(claude_jsonl) else find_claude_jsonl(session_id, cwd)
+    return parse_claude_jsonl(path) if path else []
 
 
 def format_turn_body(turn: dict) -> str:
@@ -329,3 +328,88 @@ def format_turn_body(turn: dict) -> str:
     if reply:
         parts.append(reply)
     return "\n\n".join(parts)
+
+
+def paint_resume_preview(session) -> bool:
+    """Paint last turn(s) into a newly reopened history view. True if painted."""
+    if getattr(session, "quick_mode", False):
+        return False
+    if not getattr(session, "resume_id", None) or getattr(session, "fork", False):
+        return False
+    out = getattr(session, "output", None)
+    if out is None:
+        return False
+    if list(getattr(out, "conversations", None) or []):
+        return False
+    sid = getattr(session, "session_id", None) or session.resume_id or ""
+    backend = getattr(session, "backend", None) or "claude"
+    cwd = ""
+    try:
+        cwd = session._cwd() if hasattr(session, "_cwd") else (getattr(session, "cwd", None) or "")
+    except Exception:
+        cwd = getattr(session, "cwd", None) or ""
+    jsonl = ""
+    try:
+        finder = getattr(session, "_find_jsonl_path", None)
+        if callable(finder):
+            jsonl = finder() or ""
+    except Exception:
+        jsonl = ""
+    turns = load_turns(sid, backend, cwd, jsonl)
+    chosen = select_preview(turns)
+    if not chosen:
+        return False
+    for t in chosen:
+        prompt = display_prompt(t.get("prompt") or "") or "(turn)"
+        out.prompt(prompt)
+        body = format_turn_body(t)
+        if body:
+            out.text(body if body.endswith("\n") else body + "\n")
+        out.meta(0)
+    return True
+
+
+def _ensure_resume_input(session, n=0):
+    if getattr(session, "working", False):
+        return
+    out = getattr(session, "output", None)
+    try:
+        if out is not None and getattr(out, "is_input_mode", lambda: False)():
+            return
+    except Exception:
+        pass
+    try:
+        session._enter_input_if_idle()
+    except Exception:
+        pass
+    sched = getattr(session, "scheduler", None)
+    if n < 8 and sched is not None:
+        sched.call_later(120, lambda: _ensure_resume_input(session, n + 1))
+
+
+def _on_init_paint(session, result):
+    if isinstance(result, dict) and result.get("error"):
+        return
+    try:
+        paint_resume_preview(session)
+    except Exception as e:
+        try:
+            from plat.log import log_plugin
+            log_plugin("resume preview: %s" % e)
+        except Exception:
+            print("[Submarine] resume preview: %s" % e)
+    if not getattr(session, "resume_id", None) or getattr(session, "fork", False):
+        return
+    if getattr(session, "quick_mode", False):
+        return
+    sched = getattr(session, "scheduler", None)
+    if sched is not None:
+        sched.call_later(200, lambda: _ensure_resume_input(session, 0))
+
+
+def attach_resume_preview(session):
+    if getattr(session, "_resume_preview_attached", False):
+        return session
+    session._resume_preview_attached = True
+    session.on_init.append(lambda s, result: _on_init_paint(s, result))
+    return session

@@ -296,6 +296,14 @@ class TerminalMixin:
             out = (slot.get("stdout") or "") + (slot.get("stderr") or "")
             return {"output": out, "truncated": bool(slot["truncated"]),
                     "exitStatus": slot.get("exit_status")}
+        dslot = getattr(self, "_detached_slots", {}).get(tid)
+        if dslot is not None:
+            out = (dslot.get("stdout") or "") + (dslot.get("stderr") or "")
+            return {
+                "output": out,
+                "truncated": bool(dslot.get("truncated")),
+                "exitStatus": dslot.get("exit_status"),
+            }
         child = getattr(self, "_child_sessions", {}).get(tid)
         if child:
             self.file_log(
@@ -401,8 +409,29 @@ class TerminalMixin:
                 }
                 return {"exitCode": es.get("exitCode"),
                         "signal": es.get("signal")}
+            dslot = getattr(self, "_detached_slots", {}).get(tid)
+            if dslot is not None:
+                reader = dslot.get("reader")
+                proc = dslot.get("proc") or getattr(
+                    self, "_detached_procs", {}).get(tid)
+                try:
+                    if reader is not None and not reader.done():
+                        await asyncio.shield(reader)
+                    elif proc is not None and proc.returncode is None:
+                        await proc.wait()
+                except asyncio.CancelledError:
+                    return {"exitCode": None, "signal": "SIGTERM"}
+                except Exception as e:
+                    self.file_log(f"terminal/wait_for_exit detached {tid}: {e}")
+                es = dslot.get("exit_status") or {"exitCode": 0, "signal": None}
+                try:
+                    self._emit_bg_terminal_complete(tid)
+                except Exception as e:
+                    self.file_log(f"wait_for_exit detached complete {tid}: {e}")
+                return {"exitCode": es.get("exitCode"),
+                        "signal": es.get("signal")}
             snap = getattr(self, "_detached_snaps", {}).get(tid)
-            if snap:
+            if snap and snap.get("exitStatus"):
                 es = snap.get("exitStatus") or {"exitCode": 0, "signal": None}
                 return {"exitCode": es.get("exitCode"),
                         "signal": es.get("signal")}
@@ -505,29 +534,26 @@ class TerminalMixin:
         if not slot:
             return
         slot["detached"] = True
-        if slot.get("exit_status") is None:
-            slot["exit_status"] = {"exitCode": 0, "signal": None}
-        out = (slot.get("stdout") or "") + (slot.get("stderr") or "")
+        # Process is still running — do not invent exitCode 0 (that made
+        # wait_for_exit return early and dropped remaining stdout).
         if not hasattr(self, "_detached_snaps"):
             self._detached_snaps = {}
         if not hasattr(self, "_detached_procs"):
             self._detached_procs = {}
+        if not hasattr(self, "_detached_slots"):
+            self._detached_slots = {}
+        out = (slot.get("stdout") or "") + (slot.get("stderr") or "")
         self._detached_snaps[tid] = {
             "output": out,
             "truncated": bool(slot.get("truncated")),
-            "exitStatus": slot["exit_status"],
+            "exitStatus": slot.get("exit_status"),
         }
         extra = list(self._detached_snaps)[:-32]
         for old in extra:
             self._detached_snaps.pop(old, None)
-        reader = slot.get("reader")
-        if reader and not reader.done():
-            reader.cancel()
-            try:
-                await asyncio.wait_for(reader, timeout=0.5)
-            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
-                pass
+        # Keep the stdout reader alive so sleep&&echo still lands in slot.
         self._terminals.pop(tid, None)
+        self._detached_slots[tid] = slot
         proc = slot.get("proc")
         if proc is not None and proc.returncode is None:
             self._detached_procs[tid] = proc
@@ -544,6 +570,8 @@ class TerminalMixin:
             snap = getattr(self, "_detached_snaps", {}).get(tid)
             if snap is not None:
                 snap["exitStatus"] = es
+                snap["output"] = (slot.get("stdout") or "") + (
+                    slot.get("stderr") or "")
             getattr(self, "_detached_procs", {}).pop(tid, None)
             try:
                 self._emit_bg_terminal_complete(tid)

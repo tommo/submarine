@@ -120,6 +120,11 @@ def help_text() -> dict:
             "event message=...  (write agent note into ring)",
             "reload [mode=soft|hard]  (no ST restart)",
             "goal <objective> | status|pause|resume|clear  [view_id=]",
+            "capture            (ui_mode + views + list + host transcript)",
+            "views",
+            "session_list",
+            "output [view_id]   (transcript head/tail)",
+            "ui_mode [tabs|single]",
             "help",
         ],
         "cli": "python3 submarine_devtools.py <action> ...",
@@ -281,6 +286,23 @@ def dispatch(action: str, **kwargs: Any) -> Any:
         if action == "goal":
             args = kwargs.get("args") or kwargs.get("message") or kwargs.get("cmd") or "status"
             return goal_command(args=args, agent_id=kwargs.get("agent_id"))
+        if action in ("capture", "ui"):
+            return capture_dump(
+                tail=kwargs.get("tail", 1200),
+                list_lines=kwargs.get("list_lines", 24),
+            )
+        if action == "views":
+            return {"windows": views_dump()}
+        if action in ("session_list", "list_view"):
+            return session_list_dump(lines=kwargs.get("list_lines", 40))
+        if action in ("output", "transcript"):
+            return output_dump(
+                kwargs.get("view_id") or kwargs.get("agent_id"),
+                tail=kwargs.get("tail", 2000),
+            )
+        if action == "ui_mode":
+            mode = kwargs.get("mode") or kwargs.get("value") or kwargs.get("args")
+            return ui_mode_command(mode)
         return {"error": f"unknown action: {action}", "help": help_text()}
     except Exception as e:
         log(f"dispatch error: {e}", level="error", action=action)
@@ -352,6 +374,19 @@ def _session_row(vid: int, s, deep: bool = False) -> dict:
     except Exception:
         view = None
 
+    sleeping = bool(getattr(s, "is_sleeping", False))
+    if not sleeping and view is not None:
+        try:
+            sleeping = bool(view.settings().get("submarine_sleeping")
+                            or view.settings().get("claude_sleeping"))
+        except Exception:
+            pass
+    bound = False
+    try:
+        from core.registry import default_registry
+        bound = default_registry.bound_view_id(s) is not None
+    except Exception:
+        bound = bool(view and getattr(view, "is_valid", lambda: False)())
     row = {
         "agent_id": getattr(s, "agent_id", None),
         "view_id": vid,
@@ -361,8 +396,10 @@ def _session_row(vid: int, s, deep: bool = False) -> dict:
         "initialized": bool(getattr(s, "initialized", False)),
         "session_id": getattr(s, "session_id", None) or getattr(s, "submarine_session_id", None),
         "quick_mode": bool(getattr(s, "quick_mode", False)),
-        "sleeping": bool(getattr(s, "sleeping", False)
-                         or (view and view.settings().get("submarine_sleeping"))),
+        "sleeping": sleeping,
+        "unread": bool(getattr(s, "unread", False)),
+        "bound": bound,
+        "detached": (not bound) and not bool(getattr(s, "quick_mode", False)),
         "query_count": getattr(s, "query_count", None),
         "parent_agent_id": getattr(s, "parent_agent_id", None),
         "composer_allowed": getattr(s, "_composer_allowed", None),
@@ -370,6 +407,8 @@ def _session_row(vid: int, s, deep: bool = False) -> dict:
         "client_alive": None,
         "view_valid": bool(view and view.is_valid()) if view is not None else False,
         "view_size": view.size() if view and view.is_valid() else None,
+        "has_background": bool(getattr(getattr(s, "bg", None), "has_background", lambda: False)()),
+        "bg_tool_ids": list(getattr(getattr(s, "bg", None), "bg_task_ids", ()) or ())[:12],
     }
     try:
         c = getattr(s, "client", None)
@@ -537,9 +576,181 @@ def _windows_brief() -> List[dict]:
             "active_view_id": av.id() if av else None,
             "active_name": av.name() if av else None,
             "submarine_active_view": w.settings().get("submarine_active_view"),
+            "submarine_active_agent": w.settings().get("submarine_active_agent"),
             "view_count": len(w.views()),
             "submarine_views": sum(
                 1 for v in w.views() if v.settings().get("submarine_output")
             ),
         })
     return rows
+
+
+def _view_brief(v) -> dict:
+    st = v.settings()
+    return {
+        "id": v.id(),
+        "name": v.name(),
+        "size": v.size(),
+        "file": v.file_name(),
+        "output": bool(st.get("submarine_output") or st.get("claude_output")),
+        "host": bool(st.get("submarine_host")),
+        "slist": bool(st.get("submarine_session_list") or st.get("claude_session_list")),
+        "quick": bool(st.get("submarine_quick") or st.get("claude_quick")),
+        "backend": st.get("submarine_backend") or st.get("claude_backend"),
+        "sid": (st.get("submarine_session_id") or st.get("claude_session_id") or "") or None,
+        "sleeping": bool(st.get("submarine_sleeping") or st.get("claude_sleeping")),
+        "input_mode": st.get("submarine_input_mode"),
+        "syntax": st.get("syntax"),
+    }
+
+
+def views_dump() -> List[dict]:
+    rows = []
+    for w in sublime.windows():
+        av = w.active_view()
+        host_id = None
+        for v in w.views():
+            if v.settings().get("submarine_host"):
+                host_id = v.id()
+                break
+        rows.append({
+            "id": w.id(),
+            "folders": w.folders()[:6],
+            "active_view_id": av.id() if av else None,
+            "active_name": av.name() if av else None,
+            "active_agent": w.settings().get("submarine_active_agent"),
+            "host_view_id": host_id,
+            "views": [_view_brief(v) for v in w.views()],
+        })
+    return rows
+
+
+def session_list_dump(lines: int = 40) -> dict:
+    lines = max(1, min(int(lines or 40), 200))
+    for w in sublime.windows():
+        for v in w.views():
+            st = v.settings()
+            if not (st.get("submarine_session_list") or st.get("claude_session_list")):
+                continue
+            text = v.substr(sublime.Region(0, v.size()))
+            raw = st.get("submarine_session_list_rows") or st.get("claude_session_list_rows") or "[]"
+            try:
+                index = json.loads(raw) if isinstance(raw, str) else (raw or [])
+            except Exception:
+                index = []
+            sections = {}
+            for r in index:
+                sec = r.get("section") or "?"
+                sections[sec] = sections.get(sec, 0) + 1
+            preview = "\n".join(text.splitlines()[:lines])
+            return {
+                "present": True,
+                "view_id": v.id(),
+                "name": v.name(),
+                "size": v.size(),
+                "focused": bool(w.active_view() and w.active_view().id() == v.id()),
+                "n_rows": len(index),
+                "sections": sections,
+                "preview": preview,
+            }
+    return {"present": False}
+
+
+def output_dump(ref=None, tail: int = 2000) -> dict:
+    tail = max(80, min(int(tail or 2000), 20000))
+    sess, vid = _resolve_session(ref)
+    view = None
+    if sess is not None:
+        try:
+            view = sess.output.view if sess.output else None
+        except Exception:
+            view = None
+    if view is None or not getattr(view, "is_valid", lambda: False)():
+        for w in sublime.windows():
+            av = w.active_view()
+            if av and (av.settings().get("submarine_output") or av.settings().get("claude_output")):
+                view = av
+                break
+    if view is None or not view.is_valid():
+        return {"error": "no output view", "ref": ref}
+    size = view.size()
+    head_n = min(400, size)
+    text = view.substr(sublime.Region(0, size))
+    return {
+        "view_id": view.id(),
+        "name": view.name(),
+        "size": size,
+        "backend": view.settings().get("submarine_backend"),
+        "host": bool(view.settings().get("submarine_host")),
+        "sid": view.settings().get("submarine_session_id"),
+        "head": text[:head_n],
+        "tail": text[-tail:] if size else "",
+        "session": _session_row(vid, sess) if sess is not None else None,
+    }
+
+
+def _ui_mode_now() -> str:
+    try:
+        from ui.host import ui_mode
+        return ui_mode()
+    except Exception:
+        try:
+            from plat.constants import SETTINGS_FILE
+            return sublime.load_settings(SETTINGS_FILE).get("ui_mode", "tabs") or "tabs"
+        except Exception:
+            return "tabs"
+
+
+def capture_dump(tail: int = 1200, list_lines: int = 24) -> dict:
+    """One blob for an agent: mode, sheets, live sessions, list, host transcript."""
+    try:
+        from ui.host import HostView
+        hv_info = []
+        for w in sublime.windows():
+            hv = HostView.for_window(w)
+            view = getattr(hv, "_view", None)
+            hv_info.append({
+                "window_id": w.id(),
+                "host_view_id": view.id() if view and view.is_valid() else None,
+            })
+    except Exception as e:
+        hv_info = [{"error": str(e)}]
+    host_out = None
+    try:
+        from ui.host import is_single_mode
+        if is_single_mode():
+            host_out = output_dump(tail=tail)
+    except Exception:
+        host_out = None
+    if host_out is None:
+        host_out = output_dump(tail=tail)
+    return {
+        "ui_mode": _ui_mode_now(),
+        "ping": ping(),
+        "host": hv_info,
+        "windows": views_dump(),
+        "sessions": sessions_dump()["sessions"],
+        "session_list": session_list_dump(lines=list_lines),
+        "output": host_out,
+    }
+
+
+def ui_mode_command(mode=None) -> dict:
+    """Read or switch tabs|single (in-memory; does not write the settings file)."""
+    from plat.constants import SETTINGS_FILE
+    from ui.host import apply_ui_mode, ui_mode as _ui_mode
+    if not mode:
+        return {"ui_mode": _ui_mode(), "ok": True}
+    mode = str(mode).strip().lower()
+    if mode not in ("tabs", "single"):
+        return {"ok": False, "error": "mode must be tabs|single", "ui_mode": _ui_mode()}
+    try:
+        sublime.load_settings(SETTINGS_FILE).set("ui_mode", mode)
+    except Exception as e:
+        return {"ok": False, "error": str(e), "ui_mode": _ui_mode()}
+    for w in sublime.windows():
+        try:
+            apply_ui_mode(w, mode)
+        except Exception:
+            pass
+    return {"ok": True, "ui_mode": _ui_mode(), "capture": capture_dump()}

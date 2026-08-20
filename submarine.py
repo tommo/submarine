@@ -5,6 +5,13 @@ class and listener must be imported here (or via another root module).
 """
 from __future__ import annotations
 
+import os
+import sys
+
+_PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
+if _PLUGIN_DIR not in sys.path:
+    sys.path.insert(0, _PLUGIN_DIR)
+
 from main import (  # noqa: F401
     plugin_loaded,
     plugin_unloaded,
@@ -109,8 +116,10 @@ from commands import (  # noqa: F401
     SubmarineQuickAgentStopCommand,
     SubmarineQuickAgentNewSlotCommand,
     SubmarineSessionJsonlCommand,
+    SubmarineSessionListSetTextCommand,
     SubmarineSessionListCloseCommand,
     SubmarineSessionListRenameCommand,
+    SubmarineSessionListForkCommand,
     SubmarineSessionListJsonlCommand,
     SubmarineSessionListStarCommand,
     SubmarineSessionListRevealCommand,

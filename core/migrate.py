@@ -54,6 +54,19 @@ _DROPPED_SETTING_KEYS = frozenset((
 _TRAILING_COMMA = re.compile(r",(\s*[}\]])")
 
 
+def _plugin_parents(plugin_dir):
+    # type: (Optional[str]) -> List[str]
+    """Package dir parents: ST symlink path *and* the real checkout."""
+    if not plugin_dir:
+        return []
+    parents = []  # type: List[str]
+    for resolved in (os.path.abspath(plugin_dir), os.path.realpath(plugin_dir)):
+        parent = os.path.dirname(resolved)
+        if parent and parent not in parents:
+            parents.append(parent)
+    return parents
+
+
 def discover_legacy_dir(plugin_dir, override=None):
     # type: (str, Optional[str]) -> Optional[str]
     """First candidate that contains `.sessions.json`, else None."""
@@ -62,13 +75,16 @@ def discover_legacy_dir(plugin_dir, override=None):
         expanded = os.path.expanduser(str(override).strip())
         if expanded:
             candidates.append(expanded)
-    parent = os.path.dirname(os.path.abspath(plugin_dir or ""))
-    if parent:
+    for parent in _plugin_parents(plugin_dir):
         candidates.append(os.path.join(parent, "sublime-claude"))
         candidates.append(os.path.join(parent, "ClaudeCode"))
+    seen = set()  # type: set
     for path in candidates:
         try:
-            if path and os.path.isfile(os.path.join(path, SESSIONS_NAME)):
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            if os.path.isfile(os.path.join(path, SESSIONS_NAME)):
                 return path
         except Exception:
             continue
@@ -280,9 +296,16 @@ def run_migration(plugin_dir, user_packages_dir=None, override_dir=None):
             prev = safe_json_load(_marker_path(plugin_dir), default={})
             if not isinstance(prev, dict):
                 prev = {}
-            out = dict(prev)
-            out["already"] = True
-            return out
+            sess = prev.get("sessions") if isinstance(prev.get("sessions"), dict) else {}
+            incomplete = (
+                prev.get("legacy_dir") in (None, "")
+                and not sess.get("source_path")
+                and int(sess.get("imported") or 0) == 0
+            )
+            if not incomplete:
+                out = dict(prev)
+                out["already"] = True
+                return out
     except Exception:
         return {"already": True, "at": report["at"]}
 

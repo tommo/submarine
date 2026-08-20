@@ -224,7 +224,7 @@ class BackgroundTaskGate:
             )
         if tool_use_id:
             self.finalize_tool(
-                tool_use_id, keep=(status == "completed" and bool(output)))
+                tool_use_id, keep=(status == "completed"))
             self.bg_tools.pop(tool_use_id, None)
 
         # Always buffer. "notified" means shown/queried, not seen on the

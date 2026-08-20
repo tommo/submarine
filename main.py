@@ -10,8 +10,17 @@ onto the sublime module so they survive soft package reloads.
 from __future__ import annotations
 
 import os
+import sys
 import time
 from typing import Any, Callable, Dict, Optional
+
+# ST 3.8 loads this file as Submarine.main. Put the package root on sys.path
+# so `import plat` / `import core` resolve the same way tests do, and alias
+# this module as `main` so `from main import …` in commands/ is the same object.
+PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
+if PLUGIN_DIR not in sys.path:
+    sys.path.insert(0, PLUGIN_DIR)
+sys.modules.setdefault("main", sys.modules[__name__])
 
 import sublime
 
@@ -33,8 +42,6 @@ except Exception:  # pragma: no cover
     def log_plugin(message):  # type: ignore
         print("[Submarine] %s" % message)
 
-
-PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 
 _auto_sleep_timer = None  # type: Optional[Any]
 _PLUGIN_LOADED_AT = 0.0

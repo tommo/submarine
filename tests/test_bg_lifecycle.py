@@ -95,6 +95,7 @@ class LiveBridge(AcpBridge):
         self._released_terminals = set()
         self._detached_snaps = {}
         self._detached_procs = {}
+        self._detached_slots = {}
         self._child_sessions = {}
         self._bg_notified_tasks = set()
         self._bg_notified_tools = set()
@@ -310,6 +311,69 @@ class TestA1ShellBgSpawnToDone(unittest.TestCase):
                 (t[1] or {}).get("prompt") or ""
                 for t in s.client.sent if t[0] == "query"]
             self.assertTrue(any("task-notification" in p for p in prompts))
+
+
+class TestA1bDetachKeepsStdout(unittest.TestCase):
+    def test_emit_after_terminal_popped_uses_detached_slot(self):
+        from tests.test_bg_tool_gates import _FwdStub as Stub
+        b = Stub()
+        b._terminal_bg["term_z"] = {
+            "task_id": "acp-term-term_z",
+            "tool_use_id": "tool-x",
+            "cmd": "sleep 1 && echo HI",
+        }
+        b._terminals = {}
+        b._detached_slots["term_z"] = {
+            "stdout": "HI\n",
+            "stderr": "",
+            "exit_status": {"exitCode": 0, "signal": None},
+        }
+        bodies = []
+        b._write_bg_output_file = lambda prefix, body: (
+            bodies.append(body) or "/tmp/bg-out.log")
+        b._emit_bg_terminal_complete("term_z")
+        self.assertTrue(bodies)
+        self.assertIn("HI", bodies[0])
+        self.assertEqual(b._finished[-1][0], "acp-term-term_z")
+        self.assertEqual(b._finished[-1][2], "completed")
+        self.assertNotIn("term_z", b._detached_slots)
+
+    def test_detach_does_not_invent_success_exit(self):
+        from tests.test_bg_tool_gates import _FwdStub as Stub
+
+        async def go():
+            b = Stub()
+            slot = {
+                "proc": None, "stdout": "partial", "stderr": "",
+                "exit_status": None, "reader": None, "cmd": "sleep 9",
+            }
+            b._terminals["t1"] = slot
+            await b._detach_terminal("t1")
+            self.assertTrue(slot.get("detached"))
+            self.assertIsNone(slot.get("exit_status"))
+            self.assertNotIn("t1", b._terminals)
+            self.assertIs(b._detached_slots.get("t1"), slot)
+
+        asyncio.run(go())
+
+    def test_completed_empty_output_keeps_checkmark(self):
+        s = make_session(initialized=True, client=FakeClient(), backend="grok")
+        s.events.tool_use({
+            "name": "Bash", "id": "tool-empty", "background": True,
+            "input": {"command": "true", "run_in_background": True},
+        })
+        self.assertEqual(
+            s.output.find_tool_by_id("tool-empty").status, "background")
+        s.bg.on_task_notification({
+            "task_id": "acp-term-t",
+            "tool_use_id": "tool-empty",
+            "status": "completed",
+            "summary": "true",
+            "output_file": "",
+        })
+        tool = s.output.find_tool_by_id("tool-empty")
+        self.assertIsNotNone(tool)
+        self.assertEqual(tool.status, "done")
 
 
 class TestA2GrokSpawnSubagent(unittest.TestCase):

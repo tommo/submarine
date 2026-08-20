@@ -12,7 +12,8 @@ if _ROOT not in sys.path:
 from features.resume import (
     display_prompt, select_preview, parse_claude_jsonl, parse_grok_chat,
     parse_kimi_wire, load_turns, format_turn_body,
-    find_session_jsonl, find_claude_jsonl,
+    find_session_jsonl, find_claude_jsonl, paint_resume_preview,
+    attach_resume_preview,
 )
 
 
@@ -156,6 +157,85 @@ class TestResumePreview(unittest.TestCase):
         self.assertIsNone(find_session_jsonl("", "grok"))
         self.assertIsNone(find_session_jsonl("no-such-session", "kimi"))
         self.assertIsNone(find_claude_jsonl(""))
+
+    def test_load_turns_claude_finds_jsonl_when_path_omitted(self):
+        recs = [
+            {"type": "user", "message": {"content": [{"type": "text", "text": "q"}]}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "a"}]}},
+        ]
+        sid = "sess-find-me"
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, sid + ".jsonl")
+            with open(path, "w") as f:
+                for r in recs:
+                    f.write(json.dumps(r) + "\n")
+            turns = load_turns(sid, "glm", cwd="", claude_jsonl=path)
+            self.assertEqual(turns[0]["prompt"], "q")
+            self.assertEqual(turns[0]["reply"], "a")
+
+    def test_paint_resume_preview_writes_last_turn(self):
+        class _Out(object):
+            def __init__(self):
+                self.calls = []
+                self.conversations = []
+
+            def prompt(self, text, context_names=None, context_refs=None):
+                self.calls.append(("prompt", text))
+                self.conversations.append(text)
+
+            def text(self, content):
+                self.calls.append(("text", content))
+
+            def meta(self, duration, cost=None, usage=None):
+                self.calls.append(("meta", duration))
+
+        class _S(object):
+            resume_id = "sid"
+            session_id = "sid"
+            fork = False
+            quick_mode = False
+            backend = "grok"
+            cwd = ""
+            output = None
+            on_init = []
+
+            def _cwd(self):
+                return ""
+
+            def _find_jsonl_path(self):
+                return ""
+
+        s = _S()
+        s.output = _Out()
+        import features.resume as resume
+
+        orig = resume.load_turns
+        resume.load_turns = lambda *a, **k: [
+            {"prompt": "hello there", "reply": "hi back", "tools": ["Read"]},
+        ]
+        try:
+            self.assertTrue(paint_resume_preview(s))
+        finally:
+            resume.load_turns = orig
+        kinds = [c[0] for c in s.output.calls]
+        self.assertEqual(kinds, ["prompt", "text", "meta"])
+        self.assertEqual(s.output.calls[0][1], "hello there")
+        self.assertIn("hi back", s.output.calls[1][1])
+        self.assertFalse(paint_resume_preview(s))  # already has conversations
+
+    def test_attach_resume_preview_hooks_on_init(self):
+        class _S(object):
+            on_init = None
+            resume_id = "x"
+            fork = False
+            quick_mode = False
+            scheduler = None
+
+        s = _S()
+        s.on_init = []
+        attach_resume_preview(s)
+        attach_resume_preview(s)
+        self.assertEqual(len(s.on_init), 1)
 
 
 if __name__ == "__main__":

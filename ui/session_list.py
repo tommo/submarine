@@ -280,8 +280,10 @@ def collect_live(window) -> List[dict]:
         bound = False
         try:
             from ui.host import is_single_mode
-            if is_single_mode() and view_ok:
-                bound = True
+            if is_single_mode():
+                from core.registry import default_registry
+                bvid = default_registry.bound_view_id(s)
+                bound = bool(view_ok and bvid is not None and bvid == view_id)
         except Exception:
             bound = False
         out.append({
@@ -910,10 +912,6 @@ def fork_row(window, row: dict) -> bool:
         return False
     backend = (row or {}).get("backend") or "claude"
     name = ((row or {}).get("name") or "").strip() or "session"
-    try:
-        from core import create_session
-    except Exception:
-        from core.session import create_session
     forked = create_session(window, resume_id=sid, fork=True, backend=backend)
     if not forked:
         return False

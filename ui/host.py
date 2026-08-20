@@ -446,6 +446,7 @@ class HostView(object):
             except Exception:
                 pass
         self.attach(window, bound, focus=True)
+        self._close_orphan_output_views(window)
 
     def switch_to_tabs(self, window=None):
         # type: (Any) -> None
@@ -460,6 +461,7 @@ class HostView(object):
             try:
                 if host.is_valid():
                     bound = for_view(host)
+                    keys.erase_setting(host.settings(), keys.HOST)
             except Exception:
                 bound = None
         for s in sessions_for_window(window):
@@ -471,6 +473,37 @@ class HostView(object):
                 reveal_live_session(window, s, focus=False, force_sheet=True)
             except Exception:
                 pass
+
+    def _close_orphan_output_views(self, window):
+        # type: (Any) -> None
+        """Single-mode invariant: only the host output sheet stays."""
+        if not window:
+            return
+        host = self._view
+        host_id = None
+        try:
+            if host is not None and host.is_valid():
+                host_id = host.id()
+        except Exception:
+            host_id = None
+        try:
+            views = list(window.views())
+        except Exception:
+            return
+        for v in views:
+            try:
+                if not v.is_valid():
+                    continue
+                if not keys.is_output_view(v):
+                    continue
+                if keys.read_setting(v.settings(), keys.QUICK):
+                    continue
+                if host_id is not None and v.id() == host_id:
+                    continue
+                keys.write_setting(v.settings(), keys.SOFT_CLOSE, True)
+                v.close()
+            except Exception:
+                continue
 
     def _pick_bound(self, window, live):
         # type: (Any, list) -> Any
@@ -502,3 +535,8 @@ def apply_ui_mode(window, mode=None):
         hv.switch_to_single(window)
     else:
         hv.switch_to_tabs(window)
+    try:
+        from ui.session_list import schedule_session_list_refresh
+        schedule_session_list_refresh()
+    except Exception:
+        pass

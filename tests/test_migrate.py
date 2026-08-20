@@ -154,6 +154,20 @@ def test_discover_missing_returns_none(tmp_path):
     assert discover_legacy_dir(str(plugin), override=str(tmp_path / "nope")) is None
 
 
+def test_discover_follows_symlink_plugin_dir(tmp_path):
+    real_root = tmp_path / "real"
+    plugin = real_root / "submarine"
+    sibling = real_root / "sublime-claude"
+    plugin.mkdir(parents=True)
+    sibling.mkdir()
+    _write_json(str(sibling / ".sessions.json"), [{"session_id": "x"}])
+    pkgs = tmp_path / "Packages"
+    pkgs.mkdir()
+    link = pkgs / "Submarine"
+    os.symlink(str(plugin), str(link))
+    assert discover_legacy_dir(str(link)) == str(sibling)
+
+
 # ── marker / run_migration ───────────────────────────────────────────────────
 
 @pytest.fixture
@@ -185,6 +199,25 @@ def test_marker_second_call_imports_nothing(tmp_path, isolated_home):
     ids = {r["session_id"] for r in store.load()}
     assert ids == {"a", "b"}
     assert store.find("a")["state"] == "open"
+
+
+def test_incomplete_migration_retries_when_legacy_appears(tmp_path, isolated_home):
+    plugin = tmp_path / "plugin"
+    plugin.mkdir()
+    first = run_migration(str(plugin), override_dir=str(tmp_path / "absent"))
+    assert first.get("already") is not True
+    assert first["sessions"]["imported"] == 0
+    assert (plugin / MARKER_NAME).is_file()
+
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    _write_json(str(legacy / ".sessions.json"), [
+        {"session_id": "later", "last_activity": 5, "state": "open"},
+    ])
+    second = run_migration(str(plugin), override_dir=str(legacy))
+    assert second.get("already") is not True
+    assert second["sessions"]["imported"] == 1
+    assert _store(str(plugin)).find("later")["session_id"] == "later"
 
 
 def test_missing_legacy_dir_writes_marker(tmp_path, isolated_home):

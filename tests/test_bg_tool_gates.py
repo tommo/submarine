@@ -350,6 +350,7 @@ class _FwdStub(AcpBridge):
         self._released_terminals = set()
         self._detached_snaps = {}
         self._detached_procs = {}
+        self._detached_slots = {}
         self._child_sessions = {}
         self._bg_notified_tasks = set()
         self._bg_notified_tools = set()
@@ -684,10 +685,10 @@ class TestSubagentTerminalOutput(unittest.TestCase):
         result = asyncio.run(_go())
         self.assertNotIn("term_bg1", self.b._terminals)
         self.assertEqual(result.get("output"), "starting editor\n")
-        self.assertEqual(
-            (result.get("exitStatus") or {}).get("exitCode"), 0)
-        self.assertNotEqual(
-            (result.get("exitStatus") or {}).get("signal"), "SIGTERM")
+        es = result.get("exitStatus") or {}
+        self.assertNotEqual(es.get("signal"), "SIGTERM")
+        # still running — do not invent exitCode 0
+        self.assertIsNone(es.get("exitCode"))
 
     def test_unknown_subagent_id_is_still_running(self):
         async def _go():

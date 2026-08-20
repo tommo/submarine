@@ -9,6 +9,8 @@ def wire_session(session):
     from features.context import ContextManager
     attach_goal_harness(session)
     attach_scheduler(session)
+    from features.resume import attach_resume_preview
+    attach_resume_preview(session)
     if getattr(session, "context", None) is None:
         session.context = ContextManager(session)
     return session

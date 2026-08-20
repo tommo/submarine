@@ -4,6 +4,12 @@
 Usage:
   python3 submarine_devtools.py ping
   python3 submarine_devtools.py sessions
+  python3 submarine_devtools.py capture             # ui_mode + views + list + transcript
+  python3 submarine_devtools.py views
+  python3 submarine_devtools.py session_list
+  python3 submarine_devtools.py output [view_id]
+  python3 submarine_devtools.py ui_mode             # read
+  python3 submarine_devtools.py ui_mode single      # switch (in-memory)
   python3 submarine_devtools.py snapshot [view_id]
   python3 submarine_devtools.py composer [view_id]
   python3 submarine_devtools.py log [--tail N] [--grep SUBSTR]
@@ -169,7 +175,7 @@ def main(argv=None) -> int:
         "action",
         nargs="?",
         default="help",
-        help="ping|sessions|snapshot|composer|log|event|reload|goal|eval|install|help",
+        help="ping|sessions|capture|views|session_list|output|ui_mode|snapshot|composer|log|event|reload|goal|eval|install|help",
     )
     p.add_argument("rest", nargs="*", help="action args (view_id, message, code…)")
     args = p.parse_args(argv)
@@ -206,7 +212,7 @@ def main(argv=None) -> int:
         kwargs = {}
         view_id = args.view_id
         agent_id = args.agent_id
-        if args.rest and action in ("snapshot", "composer", "sessions"):
+        if args.rest and action in ("snapshot", "composer", "sessions", "output"):
             try:
                 view_id = int(args.rest[0])
             except ValueError:
@@ -219,12 +225,16 @@ def main(argv=None) -> int:
             kwargs["tail"] = args.tail
             if args.grep:
                 kwargs["grep"] = args.grep
+        if action in ("capture", "output") and args.tail:
+            kwargs["tail"] = args.tail
         if action == "event":
             kwargs["message"] = " ".join(args.rest) if args.rest else ""
         if action == "goal":
             kwargs["args"] = " ".join(args.rest) if args.rest else "status"
             if agent_id is not None:
                 kwargs["agent_id"] = agent_id
+        if action == "ui_mode":
+            kwargs["mode"] = " ".join(args.rest) if args.rest else None
         body = debug_call(action, kwargs)
 
     text = json.dumps(body, indent=2, default=str)
