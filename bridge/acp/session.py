@@ -368,11 +368,20 @@ class SessionMixin:
             "sessionId": resume_id,
             "cwd": self.cwd,
         }
-        if mcp_servers:
-            load_params["mcpServers"] = mcp_servers
+        load_params["mcpServers"] = list(mcp_servers or [])
         self._loading_session = True
         try:
-            result = await self._send_acp("session/load", load_params) or {}
+            try:
+                result = await self._send_acp("session/load", load_params) or {}
+            except Exception as e:
+                if mcp_servers and self._is_mcp_runtime_identity_error(e):
+                    self.file_log(
+                        f"session/load MCP rejected ({e}); retry mcpServers=[]")
+                    load_params = dict(load_params)
+                    load_params["mcpServers"] = []
+                    result = await self._send_acp("session/load", load_params) or {}
+                else:
+                    raise
             self.session_id = (
                 result.get("sessionId")
                 or result.get("session_id")
@@ -400,8 +409,8 @@ class SessionMixin:
                                additional_dirs: Optional[list] = None,
                                resume_failed: bool = False) -> None:
         new_params: Dict[str, Any] = {"cwd": self.cwd}
-        if mcp_servers:
-            new_params["mcpServers"] = mcp_servers
+        # Kimi 0.37: mcpServers is required (missing → Invalid params).
+        new_params["mcpServers"] = list(mcp_servers or [])
         if additional_dirs:
             new_params["additionalDirectories"] = list(additional_dirs)
         meta = self.build_session_meta(
@@ -409,7 +418,19 @@ class SessionMixin:
         if meta:
             new_params["_meta"] = meta
 
-        new_result = await self._send_acp("session/new", new_params) or {}
+        try:
+            new_result = await self._send_acp("session/new", new_params) or {}
+        except Exception as e:
+            # Kimi 0.37.2: type:stdio MCP is stripped then rejected
+            # ("does not declare a runtime identity"). Empty mcpServers works.
+            if mcp_servers and self._is_mcp_runtime_identity_error(e):
+                self.file_log(
+                    f"session/new MCP rejected ({e}); retry mcpServers=[]")
+                new_params = dict(new_params)
+                new_params["mcpServers"] = []
+                new_result = await self._send_acp("session/new", new_params) or {}
+            else:
+                raise
         self.session_id = (
             new_result.get("sessionId") or new_result.get("session_id")
         )
@@ -603,6 +624,19 @@ class SessionMixin:
     async def handle_shutdown(self, req_id: Optional[int],
                                params: dict) -> None:
         self.running = False
+        held = getattr(self, "_http_mcp_httpd", None) or []
+        for httpd in held:
+            try:
+                httpd.shutdown()
+            except Exception:
+                pass
+            try:
+                child = getattr(httpd, "child", None)
+                if child is not None:
+                    child.close()
+            except Exception:
+                pass
+        self._http_mcp_httpd = []
         for tid in list(self._terminals):
             try:
                 await self._terminal_close(tid)

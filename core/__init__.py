@@ -27,7 +27,7 @@ from .registry import (
     stamp_sender_prompt,
 )
 from .rewind import RewindService, is_synthetic_turn
-from .session import Session, create_session, fork_session_title
+from .session import Session, auto_sleep_due, create_session, fork_session_title
 from .turn import TurnController, TurnState
 
 __all__ = [
@@ -44,6 +44,7 @@ __all__ = [
     "SessionStore",
     "TurnController",
     "TurnState",
+    "auto_sleep_due",
     "create_session",
     "default_registry",
     "fork_session_title",

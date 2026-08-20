@@ -38,6 +38,12 @@ class TestHostDoesNotAdoptWorking(unittest.TestCase):
         self.assertNotIn("self._adopt_agent_turn(", body)
         self.assertNotIn("_bg_soft_fallback_query", body)
 
+    def test_query_queues_while_busy(self):
+        body = self._live(
+            os.path.join(_ROOT, "core", "session.py"), "query")
+        self.assertIn("should_queue_prompt", body)
+        self.assertIn("queue_prompt", body)
+
 
 class TestTurnControllerSingleBusy(unittest.TestCase):
     def test_working_is_busy(self):

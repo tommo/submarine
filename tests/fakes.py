@@ -73,6 +73,7 @@ class FakeOutput:
         self.permissions = []  # type: list
         self.questions = []  # type: list
         self.plans = []  # type: list
+        self._asking_cleared = 0
         self.spinners = 0
         self.retry_hints = []  # type: list
         self.input_enters = 0
@@ -137,6 +138,12 @@ class FakeOutput:
 
     def interrupted(self, show_banner=True):
         self.interrupts.append(show_banner)
+
+    def clear_asking_state(self):
+        self.permissions = []
+        self.questions = []
+        self.plans = []
+        self._asking_cleared = getattr(self, "_asking_cleared", 0) + 1
 
     def apply_plan_todos(self, entries):
         self.todos.append(entries)

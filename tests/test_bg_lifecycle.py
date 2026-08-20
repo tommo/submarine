@@ -103,6 +103,7 @@ class LiveBridge(AcpBridge):
         self.terminal_wait_timeout_s = 0
         self._prompt_fut = None
         self._prompt_cancelled = False
+        self._cancel_in_flight = False
         self._leftover_end_pending = False
         self._tool_results_sent = set()
         self._resumed = False

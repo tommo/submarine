@@ -58,6 +58,9 @@ class OutputPort(Protocol):
     def interrupted(self, show_banner: bool = True) -> None:
         ...
 
+    def clear_asking_state(self) -> None:
+        ...
+
     def apply_plan_todos(self, entries: list) -> None:
         ...
 

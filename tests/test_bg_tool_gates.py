@@ -43,6 +43,32 @@ class TestPeelUseTool(unittest.TestCase):
     def setUp(self):
         self.b = _NameOnly()
 
+    def test_format_acp_error_includes_kimi_details(self):
+        self.assertEqual(
+            self.b._format_acp_error({
+                "code": -32603,
+                "message": "Internal error",
+                "data": {
+                    "details":
+                    "ACP stdio MCP server sublime does not declare a runtime identity",
+                },
+            }),
+            "Internal error: ACP stdio MCP server sublime does not declare "
+            "a runtime identity",
+        )
+        self.assertTrue(self.b._is_mcp_runtime_identity_error(RuntimeError(
+            "Internal error: ACP stdio MCP server sublime does not "
+            "declare a runtime identity")))
+
+    def test_agent_busy_error_matches_kimi_invalid_request(self):
+        self.assertTrue(self.b._is_agent_busy_error(
+            RuntimeError(
+                "Invalid request: another turn is already in progress")))
+        self.assertTrue(self.b._is_agent_busy_error(
+            RuntimeError("turn.agent_busy")))
+        self.assertFalse(self.b._is_agent_busy_error(
+            RuntimeError("session not initialized")))
+
     def test_use_tool_peels_jar_kanban(self):
         name = self.b._normalize_tool_name({
             "title": "use_tool",
@@ -334,6 +360,7 @@ class _FwdStub(AcpBridge):
         self._systems = []
         self._prompt_fut = None
         self._prompt_cancelled = False
+        self._cancel_in_flight = False
         self._leftover_end_pending = False
         self._tool_results_sent = set()
         self.TOOL_TO_CANONICAL = dict(AcpBridge.TOOL_TO_CANONICAL)
@@ -449,6 +476,28 @@ class TestModalToolDedupe(unittest.TestCase):
             "title": "Ask: How do you want to handle the box3d swap?",
         })
         self.assertEqual(name, "ask_user")
+
+    def test_cancel_in_flight_drops_new_tool_call(self):
+        notes = []
+        orig = _patch_notify(notes)
+        try:
+            b = _FwdStub()
+            b._cancel_in_flight = True
+            b._prompt_cancelled = True
+            b._prompt_fut = None
+            b._forward_update({
+                "sessionId": "session_test",
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "call-after-esc",
+                    "title": "run_terminal_command",
+                    "rawInput": {"command": "echo no"},
+                },
+            })
+        finally:
+            _restore_notify(orig)
+        self.assertEqual(
+            [p.get("type") for _, p in notes], [])
 
     def test_completed_update_after_result_does_not_reopen(self):
         notes = []

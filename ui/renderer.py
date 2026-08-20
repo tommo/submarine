@@ -398,6 +398,10 @@ class TurnRenderer:
     def interrupted(self, show_banner=True):
         """Mark the turn interrupted. Viewless: records state, no buffer write."""
         if not self.current:
+            try:
+                self.owner.clear_asking_state()
+            except Exception:
+                pass
             return
         self.current.working = False
         for event in self.current.events:
@@ -840,13 +844,21 @@ class TurnRenderer:
     def reset_active_states(self, soft=False):
         """Reset composer + pending tools. Viewless: state only, no buffer patch."""
         self.owner.composer.reset_input_mode()
-        if self.owner.pending_permission:
-            if not soft:
-                self.owner.modals.remove_permission_block()
-            self.owner.pending_permission = None
-        self.owner.modals._permission_queue.clear()
         if soft:
+            self.owner.pending_permission = None
+            self.owner.modals._permission_queue.clear()
+            self.owner.pending_plan = None
+            self.owner.pending_question = None
+            try:
+                self.owner.composer._question_input_mode = False
+            except Exception:
+                pass
             return
+
+        try:
+            self.owner.clear_asking_state()
+        except Exception:
+            pass
         if self.current:
             had_pending = False
             for event in self.current.events:

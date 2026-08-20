@@ -150,6 +150,8 @@ class FsMixin:
         return note
 
     async def _acp_fs_write(self, params: dict) -> dict:
+        if self._cancel_in_flight:
+            raise ValueError("fs/write_text_file rejected: turn cancelled")
         path = params.get("path") or ""
         if not path or not os.path.isabs(path):
             raise ValueError(

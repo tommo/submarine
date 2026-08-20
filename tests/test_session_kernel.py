@@ -53,13 +53,27 @@ class TestQueryGenGuard(unittest.TestCase):
         s.query("first")
         first_cb = [t[2] for t in client.sent if t[0] == "query"][-1]
         g1 = s.turn.gen
-        s.query("second")
+        # Bypass the live-turn queue gate the way _fire_queued_now does.
+        s._firing_queue = True
+        try:
+            s.query("second")
+        finally:
+            s._firing_queue = False
         g2 = s.turn.gen
         self.assertNotEqual(g1, g2)
         first_cb({"status": "interrupted"})
         self.assertTrue(s.working)
         self.assertEqual(s.turn.kind, "live")
         self.assertEqual(s.turn.gen, g2)
+
+    def test_query_queues_while_busy(self):
+        client = FakeClient()
+        s = make_session(initialized=True, client=client)
+        s.query("first")
+        s.query("second")
+        queries = [t for t in client.sent if t[0] == "query"]
+        self.assertEqual(len(queries), 1)
+        self.assertIn("second", s._queued_prompts)
 
 
 class TestInterruptKeepsQueue(unittest.TestCase):

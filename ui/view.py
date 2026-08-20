@@ -335,6 +335,15 @@ class SubmarineOutputView(FormatHelpers):
         """Mark the turn interrupted. Viewless: records state, no buffer write."""
         self.renderer.interrupted(show_banner)
 
+    def clear_asking_state(self):
+        """Drop leftover question / permission / plan UI without callbacks."""
+        self.modals.clear_asking_state()
+        try:
+            if isinstance(getattr(self, "_surface", None), dict):
+                self._surface["modals"] = []
+        except Exception:
+            pass
+
     def apply_plan_todos(self, entries):
         """Replace live todos. Viewless: records todos, no buffer write."""
         self.renderer.apply_plan_todos(entries)

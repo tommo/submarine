@@ -275,36 +275,41 @@ class UpdatesMixin:
 
         upd = params.get("update", {})
         kind = upd.get("sessionUpdate")
-        # Only suppress streams while *our* host prompt is being cancelled.
-        # When idle / auto-continue after end_turn, _prompt_cancelled must not
-        # black-hole agent activity (that left the view empty while kimi worked).
+        # After Esc, Grok often returns cancelled then keeps sending tools.
+        # Hold the lid until the next handle_query actually starts.
+        # Do not clear that lid just because the prompt future settled —
+        # that re-opened leftover as a live turn.
         host_prompt_live = (
             self._prompt_fut is not None and not self._prompt_fut.done())
-        if self._prompt_cancelled and not host_prompt_live:
+        cancel_in_flight = bool(getattr(self, "_cancel_in_flight", False))
+        if (
+            self._prompt_cancelled
+            and not host_prompt_live
+            and not cancel_in_flight
+        ):
             # Stale cancel flag after prompt ended — clear so auto-continue paints.
             # Remember leftover_end so turn_completed can close interrupt busy
             # without firing after every successful Grok end_turn.
             self._prompt_cancelled = False
             self._leftover_end_pending = True
-        suppress = bool(self._prompt_cancelled and host_prompt_live)
-        # After user interrupt: drop *new* tool starts so ☐ rows don't appear
-        # post-[interrupted]. Still accept tool_call_update completions so
-        # already-open rows can settle.
-        if suppress and kind == "tool_call":
-            self.file_log(
-                f"drop tool_call after cancel: "
-                f"{(upd.get('title') or upd.get('toolCallId') or '')!r}")
+        suppress = bool(cancel_in_flight or (
+            self._prompt_cancelled and host_prompt_live))
+        # After user interrupt: drop *new* tool starts / leftover prose.
+        # Still accept tool_call_update completions so already-open rows settle.
+        if suppress and kind in (
+            "tool_call", "agent_message_chunk", "agent_thought_chunk",
+        ):
+            if kind == "tool_call":
+                self.file_log(
+                    f"drop tool_call after cancel: "
+                    f"{(upd.get('title') or upd.get('toolCallId') or '')!r}")
             return
         if kind == "agent_message_chunk":
-            if suppress:
-                return
             text = (upd.get("content") or {}).get("text", "")
             if text:
                 send_notification("message",
                                   {"type": "text_delta", "text": text})
         elif kind == "agent_thought_chunk":
-            if suppress:
-                return
             text = (upd.get("content") or {}).get("text", "")
             if text:
                 send_notification("message",

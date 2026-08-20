@@ -54,6 +54,9 @@ class BridgeEventRouter:
         elapsed=None,  # type: Optional[Callable[[], float]]
         is_compacting=None,  # type: Optional[Callable[[], bool]]
         interrupt_stream=None,  # type: Optional[Callable[[], bool]]
+        drop_asking=None,  # type: Optional[Callable]
+        is_asking_tool=None,  # type: Optional[Callable]
+        resume_drop_asking=None,  # type: Optional[Callable[[], bool]]
     ):
         self.output = output
         self.chrome = chrome
@@ -80,6 +83,9 @@ class BridgeEventRouter:
         self.elapsed = elapsed
         self.is_compacting = is_compacting
         self.interrupt_stream = interrupt_stream
+        self.drop_asking = drop_asking
+        self.is_asking_tool = is_asking_tool
+        self.resume_drop_asking = resume_drop_asking
         self.current_tool = None  # type: Optional[str]
         self._api_retry_hint = None  # type: Optional[str]
 
@@ -130,6 +136,15 @@ class BridgeEventRouter:
         pid = params.get("id")
         tool = params.get("tool", "Unknown")
         tool_input = params.get("input", {}) or {}
+        if self.drop_asking is not None and self.drop_asking(lambda: self.send(
+                "permission_response", {
+                    "id": pid,
+                    "allow": False,
+                    "always": False,
+                    "input": None,
+                    "message": "User denied permission",
+                })):
+            return
 
         def on_response(response, _tool=tool, _pid=pid, _inp=tool_input):
             allow = response in _PERM_ALLOW
@@ -156,6 +171,9 @@ class BridgeEventRouter:
         # type: (dict) -> None
         qid = params.get("id")
         questions = params.get("questions") or []
+        if self.drop_asking is not None and self.drop_asking(lambda: self.send(
+                "question_response", {"id": qid, "answers": None})):
+            return
         if not questions:
             self.send("question_response", {"id": qid, "answers": {}})
             return
@@ -175,6 +193,14 @@ class BridgeEventRouter:
         # type: (dict) -> None
         plan_id = params.get("id")
         tool_input = params.get("tool_input") or {}
+        if self.drop_asking is not None and self.drop_asking(lambda: self.send(
+                "plan_response", {
+                    "id": plan_id,
+                    "approved": False,
+                    "plan": "",
+                    "planFilePath": "",
+                })):
+            return
         plan_file = (
             tool_input.get("planFilePath")
             or tool_input.get("plan_file")
@@ -335,6 +361,13 @@ class BridgeEventRouter:
         background = bool(params.get("background"))
         tool_id = params.get("id")
         if not name or not str(name).strip():
+            return
+        if (
+            self.resume_drop_asking is not None
+            and self.resume_drop_asking()
+            and self.is_asking_tool is not None
+            and self.is_asking_tool(name)
+        ):
             return
         if params.get("replay"):
             try:

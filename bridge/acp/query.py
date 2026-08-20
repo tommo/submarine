@@ -1,8 +1,8 @@
 """Host query / interrupt and session/prompt (+ images).
 
 Invariants: Grok session/cancel is a notification (§9.3); do not
-re-send cancel after the turn ended (§9.4); agent_busy cancel+retry
-up to 3 times (§9.23); Kimi PREEMPT_PROMPT=False (§9.40).
+re-send cancel after the turn ended (§9.4); agent_busy wait then
+cancel+retry up to 8 times; Kimi PREEMPT_PROMPT=False (§9.40).
 """
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ class QueryMixin:
             or "another turn" in msg
             or "turn is active" in msg
             or "cannot launch a new turn" in msg
+            or "already in progress" in msg
         )
 
     async def _cancel_agent_turn(
@@ -89,20 +90,30 @@ class QueryMixin:
             send_error(req_id, -32000, "session not initialized")
             return
         # A new query must not overlap an agent turn (Kimi: turn.agent_busy).
-        if self._query_req_id is not None and self._query_req_id != req_id:
+        # Tool ✔ is not end_turn — wait the live prompt out. Cancel only after
+        # user Esc (cancel_in_flight) or when the live prompt is stuck.
+        if self._cancel_in_flight:
+            await self._cancel_agent_turn(
+                reason="post_interrupt", wait_s=2.0, settle_s=0.8,
+                force_local=True, orphan_ok=True)
+        elif self._prompt_fut is not None and not self._prompt_fut.done():
+            self.file_log("query: waiting for in-flight session/prompt")
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(self._prompt_fut), timeout=120.0)
+            except (asyncio.TimeoutError, Exception):
+                await self._cancel_agent_turn(
+                    reason="stale_prompt", wait_s=2.0, settle_s=0.5)
+            else:
+                try:
+                    await asyncio.sleep(0.35)
+                except Exception:
+                    pass
+        elif self._query_req_id is not None and self._query_req_id != req_id:
             self.file_log(
                 f"query: superseding in-flight req {self._query_req_id}")
             await self._cancel_agent_turn(
                 reason="supersede", wait_s=2.0, settle_s=0.5)
-        elif self._prompt_fut is not None and not self._prompt_fut.done():
-            await self._cancel_agent_turn(
-                reason="stale_prompt", wait_s=2.0, settle_s=0.5)
-        elif self._cancel_in_flight:
-            # Just interrupted — one more cancel for orphan agent turn + settle.
-            # Do not kill the process; session/cancel only.
-            await self._cancel_agent_turn(
-                reason="post_interrupt", wait_s=2.0, settle_s=0.8,
-                force_local=True, orphan_ok=True)
         prompt = params.get("prompt") or params.get("text") or ""
         images = params.get("images") or []
         if not isinstance(images, list):
@@ -116,8 +127,9 @@ class QueryMixin:
         try:
             result = None
             last_err: Optional[BaseException] = None
-            # Busy retry: cancel leaves agent laggy; up to 3 attempts
-            for attempt in range(3):
+            # Busy: wait the current agent turn out. Do not cancel a healthy
+            # in-progress turn (Bash already HANDLED) on the first hits.
+            for attempt in range(8):
                 try:
                     result = await self._send_prompt(prompt_blocks) or {}
                     last_err = None
@@ -127,19 +139,25 @@ class QueryMixin:
                     if (not self._is_agent_busy_error(e)
                             or self._prompt_cancelled):
                         raise
-                    settle = 0.6 + attempt * 0.8
+                    settle = min(8.0, 0.7 * (2 ** attempt))
                     self.file_log(
-                        f"query: agent_busy attempt {attempt + 1}/3 "
+                        f"query: agent_busy attempt {attempt + 1}/8 "
                         f"settle={settle:.1f}s: {e}")
-                    await self._cancel_agent_turn(
-                        reason=f"busy_retry_{attempt + 1}",
-                        wait_s=2.0 + attempt,
-                        settle_s=settle,
-                        force_local=True,
-                        orphan_ok=True,
-                    )
-                    self._prompt_cancelled = False
-                    self._cancel_in_flight = False
+                    if attempt >= 3:
+                        await self._cancel_agent_turn(
+                            reason=f"busy_retry_{attempt + 1}",
+                            wait_s=2.0 + attempt,
+                            settle_s=settle,
+                            force_local=True,
+                            orphan_ok=True,
+                        )
+                        self._prompt_cancelled = False
+                        self._cancel_in_flight = False
+                    else:
+                        try:
+                            await asyncio.sleep(settle)
+                        except Exception:
+                            pass
             if last_err is not None and result is None:
                 raise last_err
             result = result or {}
@@ -389,14 +407,20 @@ class QueryMixin:
         fut = self._prompt_fut
         active = fut is not None and not fut.done()
         has_query = self._query_req_id is not None
-        # Idle — nothing to cancel (don't poke Grok).
-        if not active and not has_query:
-            self.file_log("interrupt: idle (no in-flight prompt)")
-            send_result(req_id, {"status": "interrupted"})
-            return
-        # Cancel already in progress / done for this turn — no second notify.
-        if self._cancel_in_flight and not active:
-            self.file_log("interrupt: already cancelled; skip session/cancel")
+        # Idle / already cancelled: do not re-send session/cancel (Grok
+        # ChatStateActor dies). Still kill leftover shells Grok keeps using.
+        if (not active and not has_query) or (
+                self._cancel_in_flight and not active):
+            n = 0
+            for tid in list(self._terminals):
+                try:
+                    await self._terminal_close(tid)
+                    n += 1
+                except Exception:
+                    pass
+            self.file_log(
+                f"interrupt: idle leftover_killed={n} "
+                f"cancel_in_flight={self._cancel_in_flight}")
             send_result(req_id, {"status": "interrupted"})
             return
 

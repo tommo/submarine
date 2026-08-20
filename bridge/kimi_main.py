@@ -140,8 +140,51 @@ class KimiBridge(KimiBgMixin, AcpBridge):
     }
 
     def agent_argv(self) -> List[str]:
-        # Always ACP stdio — never Claude SDK claude_main.py
+        # Official: `kimi acp` — never Claude SDK claude_main.py
         return list(_kimi_agent_argv(self.model))
+
+    def _collect_mcp_servers(self) -> list:
+        """ACP session/new mcpServers. Docs: http/stdio/sse.
+
+        0.37.2 throws on stdio relay (runtime identity). Sandbox: type=http
+        session/new succeeds. Wrap our stdio MCP as localhost HTTP.
+        Identity is --agent-id= (never --view-id=).
+        """
+        cached = getattr(self, "_kimi_http_mcp_servers", None)
+        if cached is not None:
+            return cached
+        stdio = AcpBridge._collect_mcp_servers(self)
+        try:
+            from stdio_http_mcp import start_stdio_http_mcp, acp_stdio_env
+        except ImportError:
+            from .stdio_http_mcp import start_stdio_http_mcp, acp_stdio_env
+        out = []
+        held = []
+        for s in stdio:
+            if not isinstance(s, dict) or not s.get("command"):
+                continue
+            name = s.get("name") or "mcp"
+            try:
+                env = acp_stdio_env(s)
+                if getattr(self, "_agent_id", None):
+                    env.setdefault("SUBMARINE_AGENT_ID", str(self._agent_id))
+                url, httpd = start_stdio_http_mcp(
+                    s["command"], list(s.get("args") or []),
+                    env,
+                )
+                held.append(httpd)
+                out.append({
+                    "name": name,
+                    "type": "http",
+                    "url": url,
+                    "headers": [],
+                })
+                self.file_log(f"kimi MCP http wrap {name} → {url}")
+            except Exception as e:
+                self.file_log(f"kimi MCP http wrap {name}: {e}")
+        self._http_mcp_httpd = held
+        self._kimi_http_mcp_servers = out
+        return out
 
     def normalize_model(self, model: Optional[str]) -> str:
         return _kimi_normalize_model(model, default=self.DEFAULT_MODEL)
@@ -205,8 +248,16 @@ class KimiBridge(KimiBgMixin, AcpBridge):
         active = fut is not None and not fut.done()
         has_query = self._query_req_id is not None
         if not active and not has_query:
+            n = 0
+            for tid in list(self._terminals):
+                try:
+                    await self._terminal_close(tid)
+                    n += 1
+                except Exception:
+                    pass
             if self._cancel_in_flight:
-                self.file_log("interrupt: idle already cancelled")
+                self.file_log(
+                    f"interrupt: idle leftover_killed={n} already cancelled")
                 send_result(req_id, {"status": "interrupted"})
                 return
             # Still cancel orphan agent-side work (auto-continue) if any
@@ -217,7 +268,9 @@ class KimiBridge(KimiBgMixin, AcpBridge):
                         force_local=True, orphan_ok=True)
                 except Exception as e:
                     self.file_log(f"interrupt idle cancel: {e}")
-            self.file_log("interrupt: idle (cancel sent if session live)")
+            self.file_log(
+                f"interrupt: idle leftover_killed={n} "
+                f"(cancel sent if session live)")
             self._cancel_in_flight = True
             send_result(req_id, {"status": "interrupted"})
             return

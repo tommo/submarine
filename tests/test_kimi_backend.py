@@ -91,6 +91,19 @@ class TestKimiStaticWiring(unittest.TestCase):
         argv = kimi_backend.agent_argv()
         self.assertEqual(argv[-1], "acp")
 
+    def test_kimi_bridge_wraps_mcp_as_http(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(root, "bridge", "kimi_main.py")
+        with open(path) as f:
+            src = f.read()
+        self.assertIn("AcpBridge", src)
+        self.assertIn("agent_argv", src)
+        self.assertIn("acp", src)
+        self.assertIn("stdio_http_mcp", src)
+        self.assertIn('"type": "http"', src)
+        self.assertNotIn('bridge_script="main.py"', src)
+        self.assertNotIn("install_kimi_stdio_mcp", src)
+
 
 if __name__ == "__main__":
     unittest.main()

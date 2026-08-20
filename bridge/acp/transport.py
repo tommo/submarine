@@ -153,8 +153,10 @@ class TransportMixin:
                 fut = self.pending.pop(msg["id"], None)
                 if fut is not None and not fut.done():
                     if "error" in msg:
-                        fut.set_exception(RuntimeError(
-                            msg["error"].get("message", "acp error")))
+                        err_txt = self._format_acp_error(msg.get("error") or {})
+                        self.file_log(
+                            f"← acp id={msg.get('id')} error: {err_txt}")
+                        fut.set_exception(RuntimeError(err_txt))
                     else:
                         fut.set_result(msg.get("result"))
                 continue
@@ -224,6 +226,34 @@ class TransportMixin:
     def _acp_id(self) -> int:
         self.next_acp_id += 1
         return self.next_acp_id
+
+    @staticmethod
+    def _format_acp_error(err: Any) -> str:
+        """JSON-RPC error → 'message: details' (Kimi Internal error hides data)."""
+        if not isinstance(err, dict):
+            return str(err) or "acp error"
+        msg = str(err.get("message") or "acp error")
+        data = err.get("data")
+        if isinstance(data, dict):
+            details = data.get("details")
+            if details:
+                return f"{msg}: {details}"
+            nested = data.get("_errors") or data.get("mcpServers")
+            if nested:
+                try:
+                    return f"{msg}: {json.dumps(data)[:400]}"
+                except Exception:
+                    return f"{msg}: {data}"
+        if data:
+            return f"{msg}: {data}"
+        return msg
+
+    @staticmethod
+    def _is_mcp_runtime_identity_error(e: BaseException) -> bool:
+        t = str(e).lower()
+        return "runtime identity" in t or (
+            "internal error" in t and "mcp" in t
+        )
 
     async def _send_acp(self, method: str, params: dict,
                          *, timeout: Optional[float] = None) -> Any:

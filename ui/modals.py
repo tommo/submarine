@@ -154,6 +154,78 @@ class ModalUI:
         if self.pending_question:
             self.render_question()
 
+    def clear_asking_state(self) -> None:
+        """Drop leftover question / permission / plan UI.
+
+        Resume after interrupt must not restore asking. Does not fire
+        callbacks — the old turn's waiters are gone.
+        """
+        if self.pending_question:
+            try:
+                self.clear_question()
+            except Exception:
+                pass
+            self.pending_question = None
+        if self.pending_permission:
+            try:
+                self.remove_permission_block()
+            except Exception:
+                pass
+            self.pending_permission = None
+        self._permission_queue.clear()
+        if self.pending_plan:
+            try:
+                self.clear_plan_approval()
+            except Exception:
+                pass
+            self.pending_plan = None
+        try:
+            self.owner.composer._question_input_mode = False
+        except Exception:
+            pass
+        view = getattr(self.owner, "view", None)
+        if not view:
+            try:
+                surf = getattr(self.owner, "_surface", None)
+                if isinstance(surf, dict):
+                    surf["modals"] = []
+            except Exception:
+                pass
+            return
+        try:
+            if hasattr(view, "is_valid") and not view.is_valid():
+                return
+        except Exception:
+            pass
+        try:
+            keys.write_setting(view.settings(), keys.QUESTION_INPUT_MODE, False)
+        except Exception:
+            pass
+        try:
+            for key in (keys.QUESTION_BLOCK, keys.PERM_BLOCK, keys.PLAN_BLOCK):
+                regs = view.get_regions(key) if hasattr(view, "get_regions") else []
+                if regs:
+                    clear_pending_block(
+                        view,
+                        block_region_key=key,
+                        button_prefix="",
+                        button_keys={},
+                        extra_region_keys=(
+                            keys.QUESTION_KEYS,
+                            keys.QUESTION_INPUT_MARKER,
+                        ),
+                    )
+            view.erase_regions(keys.QUESTION_KEYS)
+            view.erase_regions(keys.QUESTION_INPUT_MARKER)
+        except Exception:
+            pass
+        try:
+            surf = getattr(self.owner, "_surface", None)
+            if isinstance(surf, dict):
+                surf["modals"] = []
+        except Exception:
+            pass
+
     def reset_all(self, keep_auto=False):
         self.pending_permission = None
         self._permission_queue.clear()

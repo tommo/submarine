@@ -87,6 +87,55 @@ def resolve_model_id(model_id):
     return model_id, None
 
 
+def auto_sleep_due(session, now, timeout_min):
+    # type: (Any, float, float) -> tuple
+    """True when an idle live session has been quiet longer than timeout.
+
+    Returns (due, effective_idle_ts). Interrupt/cancel must not look idle
+    since the turn *started* — last_activity is the floor.
+    """
+    if not timeout_min or timeout_min <= 0:
+        return False, 0.0
+    if getattr(session, "sleep_disabled", False):
+        return False, 0.0
+    if getattr(session, "quick_mode", False):
+        return False, 0.0
+    if getattr(session, "_interrupting", False):
+        return False, 0.0
+    turn = getattr(session, "turn", None)
+    if turn is not None and getattr(turn, "kind", None) == "interrupting":
+        return False, 0.0
+    try:
+        gt = getattr(session, "goal_tracker", None)
+        if gt is not None and gt.is_open() and gt.status in (
+                "active", "infra_paused"):
+            return False, 0.0
+    except Exception:
+        pass
+    sleeping = getattr(session, "is_sleeping", False)
+    if callable(sleeping):
+        try:
+            sleeping = bool(sleeping())
+        except Exception:
+            sleeping = False
+    working = bool(getattr(session, "working", False))
+    if turn is not None and getattr(turn, "busy", False):
+        working = True
+    if not (getattr(session, "initialized", False)
+            and not working
+            and not sleeping):
+        return False, 0.0
+    idle_at = float(getattr(session, "last_idle_at", 0) or 0)
+    last_act = float(getattr(session, "last_activity", 0) or 0)
+    # Idle clock cannot predate last work — long ACP turns used to leave
+    # last_idle_at at pre-run sticky-◎ open time → instant sleep on done.
+    effective_idle = max(idle_at, last_act)
+    threshold = now - (timeout_min * 60)
+    if effective_idle <= 0 or effective_idle >= threshold:
+        return False, effective_idle
+    return True, effective_idle
+
+
 def _is_claude_bridge(spec):
     # type: (Any) -> bool
     script = os.path.basename(getattr(spec, "bridge_script", "") or "")
@@ -202,6 +251,10 @@ class Session:
         self.plan_file = None  # type: Optional[str]
         self.draft_prompt = ""
         self._composer_allowed = True
+        # Resume after interrupt-in-asking: drop leftover question/permission/plan
+        # until the user starts a new query.
+        self._resume_drop_asking = bool(resume_id) and not fork
+        self._resume_asking_interrupt_sent = False
         self._pending_resume_at = None  # type: Optional[str]
         self._queued_prompts = []  # type: List[str]
         self._inject_pending = False
@@ -260,6 +313,9 @@ class Session:
             elapsed=self._elapsed,
             is_compacting=lambda: self._compacting,
             interrupt_stream=lambda: self._interrupt_stream,
+            drop_asking=self._drop_resume_asking_if_needed,
+            is_asking_tool=self._is_asking_tool,
+            resume_drop_asking=lambda: bool(self._resume_drop_asking),
         )
         self.rewind = RewindService(
             send=self._send,
@@ -301,22 +357,10 @@ class Session:
     def should_auto_sleep(self, now, timeout_min):
         # type: (float, float) -> Optional[bool]
         """None = stay awake; False = sleep; True = force sleep (2×)."""
-        if self.sleep_disabled or self.quick_mode:
+        due, idle_at = auto_sleep_due(self, now, timeout_min)
+        if not due:
             return None
-        if self.working:
-            return None
-        turn = getattr(self, "turn", None)
-        if turn is not None and getattr(turn, "busy", False):
-            return None
-        if not (self.initialized and not self.is_sleeping):
-            return None
-        if not timeout_min or timeout_min <= 0:
-            return None
-        threshold = now - (timeout_min * 60)
         force_threshold = now - (timeout_min * 60 * 2)
-        idle_at = self.effective_idle_at()
-        if idle_at <= 0 or idle_at >= threshold:
-            return None
         return idle_at < force_threshold
 
     # ── transport ─────────────────────────────────────────────────────
@@ -324,6 +368,10 @@ class Session:
     def start(self, resume_session_at=None):
         # type: (Optional[str]) -> None
         self._composer_allowed = False
+        if self.resume_id and not self.fork:
+            self._resume_drop_asking = True
+            self._resume_asking_interrupt_sent = False
+            self._clear_asking_state()
         try:
             self.chrome.connecting_banner(True)
         except Exception:
@@ -568,6 +616,8 @@ class Session:
             self.persist.clear(STAMP_SLEEPING)
         except Exception:
             pass
+        if getattr(self, "_resume_drop_asking", False):
+            self._clear_asking_state()
         for cb in list(self.on_init):
             try:
                 cb(self, result)
@@ -577,7 +627,20 @@ class Session:
 
     def _on_notification(self, method, params):
         # type: (str, dict) -> None
-        self.events.dispatch(method, params or {})
+        params = params or {}
+        if method in ("permission_request", "question_request"):
+            self._note_activity()
+        if method == "message":
+            t = params.get("type")
+            if t in (
+                "tool_use", "tool_result", "text_delta", "text",
+                "thinking", "plan_todos",
+            ):
+                # Long Kimi agent-side work can run after host @done with
+                # working=False. Keep last_activity fresh so auto-sleep does
+                # not treat that as idle.
+                self._note_activity()
+        self.events.dispatch(method, params)
 
     # ── query / queue / interrupt ─────────────────────────────────────
 
@@ -587,12 +650,26 @@ class Session:
         if not self.client or not self.initialized:
             self.chrome.set_status("not initialized")
             return
+        self._resume_drop_asking = False
         if not _auto_retry:
             self._auto_retry_pending = False
             self._auto_retry_count = 0
 
         raw = (prompt or "").strip()
         compact = is_compact_prompt(raw)
+        # Live session/prompt still owns the agent (Kimi: tool ✔ is not
+        # end_turn). A second query RPC is "another turn is already in
+        # progress". Queue until _on_done; drain via _fire_next_queued.
+        firing_queue = bool(getattr(self, "_firing_queue", False))
+        if raw and not firing_queue and not _auto_retry and not compact:
+            busy = bool(self.working) or bool(self.turn.awaiting_rpc)
+            try:
+                busy = busy or self.turn.should_queue_prompt()
+            except Exception:
+                pass
+            if busy:
+                self.queue_prompt(prompt)
+                return
         if self._compacting and not compact and not silent and not _auto_retry:
             if raw and raw not in self._queued_prompts:
                 self._queued_prompts.append(prompt)
@@ -678,8 +755,13 @@ class Session:
             # A detached ⚙ child is not a closer. Leftover PARENT stream
             # may still resume via _maybe_resume_stream; do not re-own
             # busy just because has_background() is true.
+            # Keep _interrupt_stream so leftover parent text can resume;
+            # upstream 6bc484f cleared it, but that fights the bg-audit
+            # leftover-parent-stream closer.
             self._clear_deferred_state(clear_queue=False)
-            self._stamp_idle_clock()
+            # Interrupt ACK used to skip the idle stamp below. A long Kimi
+            # turn then looked idle since it *started*, and auto-sleep fired.
+            self._note_activity(idle=True)
             self._fire_turn_end("interrupted")
             if self.bg.pending_notifications:
                 try:
@@ -832,11 +914,18 @@ class Session:
             self._interrupt_stream = False
             self.turn.settle_interrupt()
             self._set_turn_phase("idle")
+            self._note_activity(idle=True)
             self._enter_input_if_idle()
             return
         if not self.working and not self._inject_pending:
+            # Idle UI: still tell the bridge to reap leftover Grok shells.
+            # User is here — do not treat the long agent-side run as idle.
+            self._note_activity()
+            if self.client:
+                self._send("interrupt", {})
             return
         self._interrupt_stream = True
+        self._note_activity()
         self.turn.begin_interrupt()
         if self._compacting:
             self._compacting = False
@@ -915,6 +1004,9 @@ class Session:
                 except Exception:
                     pass
         self.initialized = False
+        self._resume_drop_asking = True
+        self._resume_asking_interrupt_sent = False
+        self._clear_asking_state()
         self._persist_state("sleeping")
         self._apply_sleep_ui()
         return True
@@ -1368,11 +1460,63 @@ class Session:
         except Exception:
             pass
 
-    def _stamp_idle_clock(self):
-        # type: () -> None
+    def _note_activity(self, idle=False):
+        # type: (bool) -> None
+        """Stamp auto-sleep clocks. idle=True also starts the idle timeout."""
         now = time.time()
         self.last_activity = now
-        self.last_idle_at = now
+        if idle:
+            self.last_idle_at = now
+
+    def _stamp_idle_clock(self):
+        # type: () -> None
+        self._note_activity(idle=True)
+
+    def _clear_asking_state(self):
+        # type: () -> None
+        try:
+            if self.output:
+                self.output.clear_asking_state()
+        except Exception:
+            pass
+        try:
+            if isinstance(self.surface, dict):
+                self.surface["modals"] = []
+        except Exception:
+            pass
+
+    @staticmethod
+    def _is_asking_tool(name):
+        # type: (str) -> bool
+        n = (name or "").strip()
+        if not n:
+            return False
+        if n in (
+            "ask_user", "AskUserQuestion", "ask_user_question", "AskUser",
+            "ExitPlanMode", "EnterPlanMode",
+        ):
+            return True
+        return n.lower() in ("ask_user", "askuserquestion", "ask_user_question")
+
+    def _drop_resume_asking_if_needed(self, send_fn):
+        # type: (Callable) -> bool
+        """True if leftover asking from resume was cancelled (no UI)."""
+        if not getattr(self, "_resume_drop_asking", False):
+            return False
+        try:
+            send_fn()
+        except Exception as e:
+            log_plugin("resume drop asking send: %s" % e)
+        if not getattr(self, "_resume_asking_interrupt_sent", False):
+            self._resume_asking_interrupt_sent = True
+            if self.client:
+                try:
+                    self.client.send("interrupt", {})
+                except Exception:
+                    pass
+        self._clear_asking_state()
+        log_plugin("resume: dropped leftover asking state")
+        return True
 
     def _mark_error_halt(self, message=""):
         # type: (str) -> None
@@ -1417,6 +1561,8 @@ class Session:
 
     def _bg_query(self, prompt, display):
         # type: (str, str) -> None
+        if self.working or self.turn.awaiting_rpc:
+            return
         self.query(prompt, display_prompt=display, silent=False)
 
     def _bg_surface(self):

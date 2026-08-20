@@ -38,6 +38,9 @@ _READ_IMAGE_MAX_EDGE = 1600
 
 CALLER_AGENT_ID: str | None = None
 ENABLE_READ_IMAGE = False
+_env_aid = (os.environ.get("SUBMARINE_AGENT_ID") or "").strip()
+if _env_aid:
+    CALLER_AGENT_ID = _env_aid
 for _arg in sys.argv[1:]:
     if _arg.startswith("--agent-id="):
         val = _arg.split("=", 1)[1].strip()
