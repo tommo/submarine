@@ -11,6 +11,11 @@ MIN_CHARS = 500
 MAX_TURNS = 8
 
 _USER_QUERY = re.compile(r"<user_query>\s*(.*?)\s*</user_query>", re.S)
+# Last-turn prompts that are a nudge, not the session's real title/context.
+_NUDGE_PROMPTS = frozenset({
+    "resume", "continue", "ok", "okay", "yes", "y", "go",
+    "go on", "keep going", "next", "and", "more",
+})
 
 
 def display_prompt(raw: str) -> str:
@@ -57,6 +62,11 @@ def select_preview(turns: List[dict], min_chars: int = MIN_CHARS,
         if total >= min_chars or len(out) >= max_turns:
             break
     out.reverse()
+    if out and len(out) < max_turns and len(turns) > len(out):
+        head = display_prompt(out[0].get("prompt") or "").strip().lower()
+        if head in _NUDGE_PROMPTS:
+            earlier = turns[-(len(out) + 1)]
+            out.insert(0, earlier)
     return out
 
 
@@ -331,17 +341,25 @@ def format_turn_body(turn: dict) -> str:
 
 
 def paint_resume_preview(session) -> bool:
-    """Paint last turn(s) into a newly reopened history view. True if painted."""
+    """Paint last turn(s) into a newly reopened history view. True if painted.
+
+    Forks reuse the parent `resume_id` transcript so the new sheet is not blank.
+    """
     if getattr(session, "quick_mode", False):
         return False
-    if not getattr(session, "resume_id", None) or getattr(session, "fork", False):
+    if not getattr(session, "resume_id", None):
         return False
     out = getattr(session, "output", None)
     if out is None:
         return False
     if list(getattr(out, "conversations", None) or []):
         return False
-    sid = getattr(session, "session_id", None) or session.resume_id or ""
+    cur = getattr(out, "current", None)
+    if cur is not None and (getattr(cur, "prompt", None) or getattr(cur, "events", None)):
+        return False
+    fork = bool(getattr(session, "fork", False))
+    sid = session.resume_id if fork else (
+        getattr(session, "session_id", None) or session.resume_id or "")
     backend = getattr(session, "backend", None) or "claude"
     cwd = ""
     try:
@@ -349,12 +367,13 @@ def paint_resume_preview(session) -> bool:
     except Exception:
         cwd = getattr(session, "cwd", None) or ""
     jsonl = ""
-    try:
-        finder = getattr(session, "_find_jsonl_path", None)
-        if callable(finder):
-            jsonl = finder() or ""
-    except Exception:
-        jsonl = ""
+    if not fork:
+        try:
+            finder = getattr(session, "_find_jsonl_path", None)
+            if callable(finder):
+                jsonl = finder() or ""
+        except Exception:
+            jsonl = ""
     turns = load_turns(sid, backend, cwd, jsonl)
     chosen = select_preview(turns)
     if not chosen:
@@ -398,7 +417,7 @@ def _on_init_paint(session, result):
             log_plugin("resume preview: %s" % e)
         except Exception:
             print("[Submarine] resume preview: %s" % e)
-    if not getattr(session, "resume_id", None) or getattr(session, "fork", False):
+    if not getattr(session, "resume_id", None):
         return
     if getattr(session, "quick_mode", False):
         return

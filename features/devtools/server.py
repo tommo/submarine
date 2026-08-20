@@ -593,7 +593,7 @@ def _view_brief(v) -> dict:
         "size": v.size(),
         "file": v.file_name(),
         "output": bool(st.get("submarine_output") or st.get("claude_output")),
-        "host": bool(st.get("submarine_host")),
+        "host": bool(st.get("submarine_host")) and _ui_mode_now() == "single",
         "slist": bool(st.get("submarine_session_list") or st.get("claude_session_list")),
         "quick": bool(st.get("submarine_quick") or st.get("claude_quick")),
         "backend": st.get("submarine_backend") or st.get("claude_backend"),
@@ -609,10 +609,16 @@ def views_dump() -> List[dict]:
     for w in sublime.windows():
         av = w.active_view()
         host_id = None
-        for v in w.views():
-            if v.settings().get("submarine_host"):
-                host_id = v.id()
-                break
+        try:
+            from ui.host import is_single_mode
+            single = is_single_mode()
+        except Exception:
+            single = False
+        if single:
+            for v in w.views():
+                if v.settings().get("submarine_host"):
+                    host_id = v.id()
+                    break
         rows.append({
             "id": w.id(),
             "folders": w.folders()[:6],

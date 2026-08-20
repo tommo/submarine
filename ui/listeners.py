@@ -152,7 +152,7 @@ def settle_active_output_view(window) -> None:
     s.output.set_name(getattr(s, "display_name", None) or s.name or "Submarine")
     if getattr(s, "is_sleeping", False):
         if hasattr(s, "_apply_sleep_ui"):
-            s._apply_sleep_ui(touch_buffer=True)
+            s._apply_sleep_ui()
     elif getattr(s, "initialized", False) and not getattr(s, "working", False) and not s.output.is_input_mode():
         if hasattr(s, "_enter_input_with_draft"):
             s._enter_input_with_draft()
@@ -177,7 +177,7 @@ def settle_startup_output_views() -> None:
             if get_session_for_view(view):
                 s = get_session_for_view(view)
                 if s and getattr(s, "is_sleeping", False) and hasattr(s, "_apply_sleep_ui"):
-                    s._apply_sleep_ui(touch_buffer=is_focused)
+                    s._apply_sleep_ui()
                 continue
             SubmarineOutputEventListener(view)._restore_session(w, paint=is_focused)
         settle_active_output_view(w)
@@ -446,7 +446,7 @@ class SubmarineOutputEventListener(sublime_plugin.ViewEventListener):
         s.output.set_name(getattr(s, "display_name", None) or s.name or "Submarine")
         if getattr(s, "is_sleeping", False):
             if hasattr(s, "_apply_sleep_ui"):
-                s._apply_sleep_ui(touch_buffer=True)
+                s._apply_sleep_ui()
         elif getattr(s, "initialized", False) and not s.output.is_input_mode():
             if hasattr(s, "_enter_input_with_draft"):
                 s._enter_input_with_draft()
@@ -518,6 +518,15 @@ class SubmarineOutputEventListener(sublime_plugin.ViewEventListener):
                         or session.last_access)
                 except (TypeError, ValueError):
                     pass
+                try:
+                    saved_q = int(matched.get("query_count") or 0)
+                except (TypeError, ValueError):
+                    saved_q = 0
+                if saved_q > int(getattr(session, "query_count", 0) or 0):
+                    session.query_count = saved_q
+                fp = matched.get("first_prompt")
+                if fp:
+                    session.first_prompt = fp
             session.output.view = view
             session.draft_prompt = ""
             session._composer_allowed = False
@@ -572,7 +581,7 @@ class SubmarineOutputEventListener(sublime_plugin.ViewEventListener):
             if hasattr(session, "reset_phantoms_for_new_view"):
                 session.reset_phantoms_for_new_view()
             if resume_id and hasattr(session, "_apply_sleep_ui"):
-                session._apply_sleep_ui(touch_buffer=paint)
+                session._apply_sleep_ui()
             else:
                 session.output.set_name(
                     getattr(session, "display_name", None) or session.name)

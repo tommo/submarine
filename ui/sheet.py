@@ -28,6 +28,22 @@ except ImportError:  # tests / non-ST
 
 
 _TITLE_ICON_RE = re.compile(r'^(?:[◉◇•○◐◓◑◒❓⏸↻⚠✘❌!❗⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏*]\s*)+')
+TAB_NAME_MAX = 40  # session name only; status + `GR> ` sit in front of this
+
+
+def format_tab_title(base: str, prefix: str, abbrev: str = "",
+                     max_name: int = TAB_NAME_MAX) -> str:
+    """Status + optional `GR> ` + truncated session name.
+
+    Truncate the name *before* adding the backend prefix so `GR> ` is not
+    counted against the title budget.
+    """
+    name = (base or "Submarine").strip() or "Submarine"
+    if max_name > 0 and len(name) > max_name:
+        name = name[: max_name - 1] + "…"
+    if abbrev:
+        name = "%s> %s" % (abbrev, name)
+    return "%s%s" % (prefix or "", name)
 
 
 class OutputSheet:
@@ -169,7 +185,7 @@ class OutputSheet:
         self.update_title()
 
     def update_title(self) -> None:
-        """Prefix ⏸/❓/⚠/↻/◉/•/◐/○/◇/* + ABBR> + 24-char truncate.
+        """Prefix ⏸/❓/⚠/↻/◉/•/◐/○/◇/! + ABBR> + name (40-char truncate).
 
         MUST stay in sync with models.strip_title_decoration.
         """
@@ -182,6 +198,14 @@ class OutputSheet:
             and keys.read_setting(window.settings(), keys.ACTIVE_VIEW) == self.view.id()
         )
         session = get_session_for_view(self.view)
+        if session is not None:
+            try:
+                from ui.session_list import session_title as _session_title
+                recovered = _session_title(session)
+                if recovered:
+                    name = recovered
+            except Exception:
+                pass
         is_sleeping = session and getattr(session, "is_sleeping", False)
         owner = self.owner
         is_questioning = bool(
@@ -220,20 +244,17 @@ class OutputSheet:
             else:
                 prefix = (STATUS_ACTIVE_WORKING if is_active else STATUS_INACTIVE_WORKING) + " "
         elif session and getattr(session, "unread", False):
-            prefix = "* "
+            prefix = "! "
         else:
             prefix = STATUS_IDLE + " "
+        abbr = ""
         backend = keys.read_setting(self.view.settings(), keys.BACKEND)
         if backend:
             try:
                 abbr = abbrev_for(backend)
             except Exception:
                 abbr = BACKEND_ABBREV.get(backend, backend[:2].upper())
-            if abbr:
-                name = "%s> %s" % (abbr, name)
-        if len(name) > 24:
-            name = name[:23] + "…"
-        full = "%s%s" % (prefix, name)
+        full = format_tab_title(name, prefix, abbr)
         if self.view.name() != full:
             self.view.set_name(full)
 

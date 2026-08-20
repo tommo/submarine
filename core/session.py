@@ -76,6 +76,23 @@ def fork_session_title(name):
     return "(fork) %s" % base
 
 
+def _longer_prompt(*parts):
+    # type: (*object) -> str
+    """Keep the longest prefix of a truncated 30-char name."""
+    best = ""
+    for p in parts:
+        text = " ".join(str(p or "").split())
+        if not text:
+            continue
+        if not best:
+            best = text
+            continue
+        stem = best.rstrip(".… ").strip()
+        if stem and text.startswith(stem) and len(text) > len(best):
+            best = text
+    return best[:200]
+
+
 def resolve_model_id(model_id):
     # type: (Optional[str]) -> tuple
     """Strip @400k/@200k → (real_id, token_cap or None)."""
@@ -209,6 +226,8 @@ class Session:
         self.available_models = []  # type: list
         self.model = None  # type: Optional[str]
         self.name = None  # type: Optional[str]
+        self.first_prompt = None  # type: Optional[str]
+        self._recovered_title = None  # type: Optional[str]
         self.total_cost = 0.0
         self.query_count = 0
         self.context_usage = None  # type: Optional[dict]
@@ -388,7 +407,7 @@ class Session:
         saved_entry = None
         if self.resume_id:
             saved_entry = self.store.find(self.resume_id)
-            if saved_entry:
+            if saved_entry and not self.fork:
                 try:
                     saved_q = int(saved_entry.get("query_count") or 0)
                 except (TypeError, ValueError):
@@ -481,6 +500,8 @@ class Session:
             saved_project = saved_entry.get("project") or ""
             if saved_project and saved_project != cwd:
                 cwd = saved_project
+        # Fork is a new session: keep cwd, drop parent activity / goal / usage.
+        if saved_entry and not self.fork:
             try:
                 if saved_entry.get("context_usage"):
                     self.context_usage = saved_entry.get("context_usage")
@@ -494,6 +515,9 @@ class Session:
                     self.last_access = float(
                         saved_entry.get("last_access")
                         or saved_entry.get("last_activity"))
+                fp = saved_entry.get("first_prompt")
+                if fp:
+                    self.first_prompt = fp
             except Exception:
                 pass
 
@@ -1286,8 +1310,15 @@ class Session:
             entry["context_usage"] = self.context_usage
         if self.plan_file:
             entry["plan_file"] = self.plan_file
-        if self.name:
-            entry["first_prompt"] = str(self.name).split("\n", 1)[0].strip()[:200]
+        fp = _longer_prompt(
+            getattr(self, "first_prompt", None),
+            getattr(self, "_recovered_title", None),
+            (existing or {}).get("first_prompt") if existing else None,
+            str(self.name).split("\n", 1)[0].strip() if self.name else "",
+        )
+        if fp:
+            entry["first_prompt"] = fp
+            self.first_prompt = fp
         gt = getattr(self, "goal_tracker", None)
         if gt is not None and getattr(gt, "goal_id", None):
             try:
@@ -1313,8 +1344,8 @@ class Session:
         self._save_session()
         self.store.persist_state(self.session_id, state, mid)
 
-    def _apply_sleep_ui(self):
-        # type: () -> None
+    def _apply_sleep_ui(self, touch_buffer=False):
+        # type: (bool) -> None
         try:
             self.persist.stamp(STAMP_SLEEPING, True)
         except Exception:
@@ -1532,6 +1563,7 @@ class Session:
     def _set_name(self, name):
         # type: (str) -> None
         self.name = name
+        self._recovered_title = None
         try:
             self.output.set_name(name)
         except Exception:

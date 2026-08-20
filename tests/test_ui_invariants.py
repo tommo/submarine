@@ -12,6 +12,7 @@ from ui.models import (
     _goal_is_open,
     strip_title_decoration,
 )
+from ui.sheet import format_tab_title
 from ui.render_policy import (
     cap_history,
     should_incremental_append,
@@ -108,8 +109,19 @@ class TestTitleStrip(unittest.TestCase):
         self.assertEqual(strip_title_decoration("◇ hello"), "hello")
         self.assertEqual(strip_title_decoration("⏸ GR> hello"), "hello")
         self.assertEqual(strip_title_decoration("* KM> hello"), "hello")
+        self.assertEqual(strip_title_decoration("! GR> hello"), "hello")
         self.assertEqual(strip_title_decoration("Claude: old"), "old")
         self.assertEqual(strip_title_decoration("Submarine: new"), "new")
+
+    def test_tab_title_truncates_name_not_prefix(self):
+        long_name = "what solution can we use for adding audio midi processing"
+        full = format_tab_title(long_name, "◇ ", "GR", max_name=40)
+        self.assertTrue(full.startswith("◇ GR> "))
+        self.assertIn("what solution can we use for adding", full)
+        self.assertTrue(full.endswith("…"))
+        self.assertGreater(len(full), 24)
+        short = format_tab_title("hello", "⏸ ", "GR")
+        self.assertEqual(short, "⏸ GR> hello")
 
 
 class TestReplayUserContract(unittest.TestCase):

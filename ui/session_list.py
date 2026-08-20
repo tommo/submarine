@@ -44,8 +44,9 @@ from .session_api import (
 SETTING = keys.SESSION_LIST
 ROWS_KEY = keys.SESSION_LIST_ROWS
 HISTORY_CAP = 200  # default; override with session_list_history_limit
-# Full row needs ~backend(7) + title(16+) + status/time. Below this, abbrev.
+# Full row needs ~backend(8) + title(16+) + status/time. Below this, abbrev.
 COMPACT_COLS = 56
+BACKEND_COL = 8  # pad/clip so deepseek (8) and grok (4) share a column
 
 
 def one_line_title(name: str, limit: int = 200) -> str:
@@ -60,24 +61,102 @@ def _name_from_prompt(prompt: str, limit: int = 200) -> str:
     return one_line_title(prompt, limit)
 
 
+def _is_truncated_name(name: str) -> bool:
+    name = (name or "").strip()
+    return name.endswith("...") or name.endswith("…")
+
+
+def recover_title(name: str, *candidates: str) -> str:
+    """Uncut a 30-char `...` name when a candidate still starts with that stem."""
+    name = (name or "").strip()
+    shown = one_line_title(name)
+    if not _is_truncated_name(name):
+        return shown or "(unnamed)"
+    stem = name.rstrip(".… ").strip()
+    best = shown
+    for cand in candidates:
+        one = _name_from_prompt(cand or "")
+        if not one or not stem:
+            continue
+        if one.startswith(stem) and len(one) > len(best or ""):
+            best = one
+    return best or "(unnamed)"
+
+
+def saved_title(saved: dict) -> str:
+    """History-row title: stored name, or a longer first_prompt behind `...`."""
+    saved = saved or {}
+    return recover_title(saved.get("name") or "", saved.get("first_prompt") or "")
+
+
+def _title_candidates(session) -> List[str]:
+    out: List[str] = []
+    fp = getattr(session, "first_prompt", None)
+    if fp:
+        out.append(str(fp))
+    try:
+        port = getattr(session, "output", None)
+        convs = list(getattr(port, "conversations", None) or [])
+        cur = getattr(port, "current", None)
+        if cur is not None:
+            convs.append(cur)
+        for c in convs:
+            out.append(getattr(c, "prompt", None) or "")
+    except Exception:
+        pass
+    try:
+        store = getattr(session, "store", None)
+        sid = getattr(session, "session_id", None) or getattr(session, "resume_id", None)
+        if store and sid:
+            saved = store.find(sid)
+            if saved:
+                out.append(saved.get("first_prompt") or "")
+                out.append(saved.get("name") or "")
+    except Exception:
+        pass
+    return out
+
+
+def _transcript_first_prompt(session) -> str:
+    """First user turn from the backend jsonl. Cached via `_recovered_title`."""
+    try:
+        from features.resume import display_prompt, load_turns
+        sid = getattr(session, "session_id", None) or getattr(session, "resume_id", None)
+        if getattr(session, "fork", False):
+            sid = getattr(session, "resume_id", None)
+        if not sid:
+            return ""
+        backend = getattr(session, "backend", None) or "claude"
+        cwd = getattr(session, "cwd", None) or ""
+        turns = load_turns(sid, backend, cwd)
+        if turns:
+            return display_prompt(turns[0].get("prompt") or "")
+    except Exception:
+        pass
+    return ""
+
+
 def session_title(session) -> str:
     """Full stored name, or first prompt if the name was the old 30-char cut."""
     name = (getattr(session, "name", None) or "").strip()
-    if name.endswith("...") or name.endswith("…"):
+    cached = getattr(session, "_recovered_title", None)
+    if isinstance(cached, str) and cached and _is_truncated_name(name):
+        stem = name.rstrip(".… ").strip()
+        if stem and cached.startswith(stem):
+            return cached
+    title = recover_title(name, *_title_candidates(session))
+    if _is_truncated_name(name) and (
+        _is_truncated_name(title) or title == (one_line_title(name) or "(unnamed)")
+    ):
+        extra = _transcript_first_prompt(session)
+        if extra:
+            title = recover_title(name, extra, title)
+    if _is_truncated_name(name) and title:
         try:
-            out = getattr(session, "output", None)
-            convs = list(getattr(out, "conversations", None) or [])
-            cur = getattr(out, "current", None)
-            if cur is not None:
-                convs.append(cur)
-            for c in convs:
-                p = getattr(c, "prompt", None) or ""
-                one = _name_from_prompt(p)
-                if one and len(one) > len(name.rstrip(".… ")):
-                    return one
+            session._recovered_title = title
         except Exception:
             pass
-    return one_line_title(name) or "(unnamed)"
+    return title or "(unnamed)"
 
 
 def awaiting_input(session) -> bool:
@@ -135,6 +214,14 @@ def _mark(status: str) -> str:
 
 def backend_abbrev(backend: str) -> str:
     return abbrev_for(backend)
+
+
+def backend_cell(backend: str) -> str:
+    """Fixed-width backend label for wide list rows (`deepseek` is 8)."""
+    be = (backend or "claude").strip() or "claude"
+    if len(be) > BACKEND_COL:
+        be = be[:BACKEND_COL]
+    return f"{be:<{BACKEND_COL}}"
 
 
 def view_cols(view, fallback: int = 80) -> int:
@@ -320,7 +407,7 @@ def collect_history(live_ids: set, cwd: str) -> Tuple[List[dict], List[dict]]:
             "kind": "saved",
             "session_id": sid,
             "view_id": None,
-            "name": one_line_title(s.get("name") or "") or "(unnamed)",
+            "name": saved_title(s),
             "backend": s.get("backend") or "claude",
             "status": s.get("state") or "closed",
             "query_count": int(s.get("query_count") or 0),
@@ -438,7 +525,7 @@ def _fmt_row(r: dict, starred: set, compact: bool = False, cols: int = 0) -> str
     if compact:
         pre = f"{mark} {backend_abbrev(r.get('backend'))} "
         return pre + fit_title(name, _name_budget(pre, "", cols, True))
-    pre = f"{mark} {r['backend']:<7} "
+    pre = f"{mark} {backend_cell(r.get('backend'))} "
     extra = _right_meta(r)
     return pre + fit_title(name, _name_budget(pre, extra, cols, False)) + extra
 
@@ -508,7 +595,7 @@ def _include_starred_saved(here: List[dict], live_ids: set, cwd: str,
             "kind": "saved",
             "session_id": sid,
             "view_id": None,
-            "name": one_line_title(s.get("name") or "") or "(unnamed)",
+            "name": saved_title(s),
             "backend": s.get("backend") or "claude",
             "status": s.get("state") or "closed",
             "query_count": int(s.get("query_count") or 0),

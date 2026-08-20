@@ -37,6 +37,15 @@ class TestResumePreview(unittest.TestCase):
         only = select_preview(long_last, min_chars=200, max_turns=8)
         self.assertEqual(len(only), 1)
         self.assertEqual(only[0]["prompt"], "new")
+        nudge = [
+            {"prompt": "https://github.com/ands/sproutline extract",
+             "reply": "x" * 400, "tools": ["Read"]},
+            {"prompt": "resume", "reply": "y" * 400, "tools": []},
+        ]
+        both = select_preview(nudge, min_chars=200, max_turns=8)
+        self.assertEqual(len(both), 2)
+        self.assertIn("sproutline", both[0]["prompt"])
+        self.assertEqual(both[-1]["prompt"], "resume")
 
     def test_parse_claude_jsonl(self):
         recs = [
@@ -222,6 +231,58 @@ class TestResumePreview(unittest.TestCase):
         self.assertEqual(s.output.calls[0][1], "hello there")
         self.assertIn("hi back", s.output.calls[1][1])
         self.assertFalse(paint_resume_preview(s))  # already has conversations
+
+    def test_paint_fork_uses_parent_resume_id(self):
+        class _Out(object):
+            def __init__(self):
+                self.calls = []
+                self.conversations = []
+                self.current = None
+
+            def prompt(self, text, context_names=None, context_refs=None):
+                self.calls.append(("prompt", text))
+                self.conversations.append(text)
+
+            def text(self, content):
+                self.calls.append(("text", content))
+
+            def meta(self, duration, cost=None, usage=None):
+                self.calls.append(("meta", duration))
+
+        class _S(object):
+            resume_id = "parent-sid"
+            session_id = "new-fork-sid"
+            fork = True
+            quick_mode = False
+            backend = "grok"
+            cwd = ""
+            output = None
+            on_init = []
+
+            def _cwd(self):
+                return ""
+
+            def _find_jsonl_path(self):
+                raise AssertionError("fork must not read the new empty jsonl")
+
+        s = _S()
+        s.output = _Out()
+        import features.resume as resume
+
+        seen = []
+        orig = resume.load_turns
+
+        def _load(sid, backend, cwd="", claude_jsonl=""):
+            seen.append(sid)
+            return [{"prompt": "hello", "reply": "hi", "tools": []}]
+
+        resume.load_turns = _load
+        try:
+            self.assertTrue(paint_resume_preview(s))
+        finally:
+            resume.load_turns = orig
+        self.assertEqual(seen, ["parent-sid"])
+        self.assertEqual(s.output.calls[0], ("prompt", "hello"))
 
     def test_attach_resume_preview_hooks_on_init(self):
         class _S(object):

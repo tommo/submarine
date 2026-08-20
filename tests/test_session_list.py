@@ -72,6 +72,64 @@ class TestRenderSessionList(unittest.TestCase):
             "check pui prop editor change, then wire the inspector")
         s.name = "read pml_editor package"
         self.assertEqual(sl.session_title(s), "read pml_editor package")
+        later = types.SimpleNamespace(
+            prompt="Reply with exactly the word SWAPOK and nothing else.")
+        s.name = "check pui prop editor change,..."
+        s.output.conversations = [conv, later]
+        self.assertEqual(
+            sl.session_title(s),
+            "check pui prop editor change, then wire the inspector")
+        # Later turns must not steal the title; first_prompt / jsonl stem wins.
+        s.name = "what solution can we use for a..."
+        s.output.conversations = [types.SimpleNamespace(prompt="commit")]
+        s.output.current = later
+        s.first_prompt = (
+            "what solution can we use for adding audio midi processing "
+            "to pil? c/c++/nim")
+        s._recovered_title = None
+        self.assertEqual(
+            sl.session_title(s),
+            "what solution can we use for adding audio midi processing "
+            "to pil? c/c++/nim")
+
+    def test_saved_title_uses_first_prompt(self):
+        self.assertEqual(
+            sl.saved_title({
+                "name": "https://github.com/ands/sprout...",
+                "first_prompt": (
+                    "https://github.com/ands/sproutline <- extract algorithm "
+                    "from this repo"),
+            }),
+            "https://github.com/ands/sproutline <- extract algorithm "
+            "from this repo")
+        self.assertEqual(
+            sl.saved_title({"name": "review", "first_prompt": "review"}),
+            "review")
+        self.assertEqual(
+            sl.recover_title("short name", "short name but actually longer"),
+            "short name")
+
+    def test_backend_cell_aligns_deepseek(self):
+        self.assertEqual(len(sl.backend_cell("grok")), sl.BACKEND_COL)
+        self.assertEqual(len(sl.backend_cell("deepseek")), sl.BACKEND_COL)
+        self.assertEqual(sl.backend_cell("deepseek"), "deepseek")
+        live = [{
+            "kind": "live", "session_id": "s1", "view_id": 1,
+            "name": "fitler", "backend": "deepseek", "status": "ready",
+            "query_count": 1, "same_window": True,
+        }, {
+            "kind": "live", "session_id": "s2", "view_id": 2,
+            "name": "hello", "backend": "grok", "status": "ready",
+            "query_count": 1, "same_window": True,
+        }]
+        text, _ = sl.render_list(live, [], [], cols=80)
+        rows = [ln for ln in text.splitlines()
+                if ln[:1] in ("○", "●") and "CURRENT" not in ln]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(rows[0].rstrip()), len(rows[1].rstrip()))
+        self.assertTrue(rows[0].startswith("○ deepseek "))
+        self.assertTrue(rows[1].startswith("○ grok     "))
+        self.assertEqual(rows[0].index("fitler"), rows[1].index("hello"))
 
     def test_one_line_title_escapes_newline(self):
         self.assertEqual(
@@ -129,7 +187,7 @@ class TestRenderSessionList(unittest.TestCase):
         self.assertGreater(i_st - (i_q + 3), 1)
 
     def test_title_uses_full_leftover(self):
-        pre = "○ grok    "
+        pre = "○ grok     "
         extra = sl._right_meta({
             "kind": "live", "status": "ready", "query_count": 1,
         })

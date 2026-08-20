@@ -257,6 +257,53 @@ class TestInitializeParams(unittest.TestCase):
         self.assertEqual(params["resume"], "sid-9")
         self.assertTrue(params["fork_session"])
 
+    def test_fork_does_not_inherit_parent_activity(self):
+        import time
+        client = FakeClient()
+        s = make_session(
+            client=client,
+            resume_id="sid-old",
+            fork=True,
+            cwd="/tmp/proj",
+        )
+        old = time.time() - 3600
+        s.store.upsert({
+            "session_id": "sid-old",
+            "name": "hello",
+            "query_count": 4,
+            "last_activity": old,
+            "last_access": old,
+            "project": "/tmp/proj",
+            "context_usage": {"used": 80},
+        })
+        born = s.last_activity
+        s.start()
+        self.assertEqual(s.query_count, 0)
+        self.assertGreaterEqual(s.last_activity, born)
+        self.assertGreater(s.last_activity, old + 10)
+        self.assertIsNone(s.context_usage)
+
+    def test_resume_keeps_saved_activity(self):
+        import time
+        client = FakeClient()
+        old = time.time() - 3600
+        s = make_session(
+            client=client,
+            resume_id="sid-old",
+            cwd="/tmp/proj",
+        )
+        s.store.upsert({
+            "session_id": "sid-old",
+            "name": "hello",
+            "query_count": 4,
+            "last_activity": old,
+            "last_access": old,
+            "project": "/tmp/proj",
+        })
+        s.start()
+        self.assertEqual(s.query_count, 4)
+        self.assertAlmostEqual(s.last_activity, old, places=2)
+
     def test_new_session_ignores_view_model_stamp(self):
         client = FakeClient()
         persist = DictPersist({"submarine_model": "deepseek-v4-pro"})
