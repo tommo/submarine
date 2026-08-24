@@ -766,6 +766,8 @@ class SubmarineOutputEventListener(sublime_plugin.ViewEventListener):
         s = get_session_for_view(self.view)
         if not s or not s.output.is_input_mode():
             return
+        if getattr(s.output, "_sel_guard", False):
+            return
         sel = self.view.sel()
         if len(sel) == 0:
             return

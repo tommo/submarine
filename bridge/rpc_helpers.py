@@ -16,6 +16,35 @@ import sys
 import threading
 from typing import Any, Optional
 
+
+def process_cwd() -> str:
+    """Directory this process can stand in.
+
+    Sublime's *launch* cwd is not the project. The plugin spawns the bridge
+    with the project folder; this only covers getcwd() when that inherited
+    path is already gone so __init__ does not crash before initialize.cwd.
+    """
+    try:
+        cur = os.getcwd()
+        if cur and os.path.isdir(cur):
+            return cur
+    except OSError:
+        pass
+    for cand in (
+        os.path.expanduser("~"),
+        os.environ.get("TMPDIR") or os.environ.get("TEMP") or "/tmp",
+        "/",
+    ):
+        if not cand or not os.path.isdir(cand):
+            continue
+        try:
+            os.chdir(cand)
+        except OSError:
+            continue
+        return cand
+    return os.path.expanduser("~") or "/"
+
+
 # Max NDJSON line we will enqueue toward the plugin (bytes of UTF-8).
 _PLUGIN_MSG_MAX = int(
     os.environ.get("SUBMARINE_MSG_MAX", str(4 * 1024 * 1024)))

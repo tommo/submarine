@@ -8,7 +8,7 @@ from typing import List, Optional
 from plat.constants import CONTEXT_PREFIX, SPINNER_FRAMES
 
 from . import keys
-from .geometry import stream_treat_as_composing
+from .geometry import should_pin_view_state, stream_treat_as_composing
 from .models import (
     BACKGROUND,
     Conversation,
@@ -413,12 +413,12 @@ class TurnRenderer:
         if self.owner.pending_plan:
             self.owner.modals.clear_plan_approval()
             self.owner.pending_plan = None
+        # Clear question UI without resolving the RPC. Resolving it as
+        # dismissed lets Kimi continue; session/cancel while the ask is
+        # still outstanding actually stops the turn (sandbox interrupt_during).
         if self.owner.pending_question:
-            callback = self.owner.pending_question.callback
             self.owner.modals.clear_question()
             self.owner.pending_question = None
-            if callback:
-                callback(None)
         if show_banner:
             self.current.events.append("\n\n*[interrupted]*\n")
         self._struct_dirty = True
@@ -1235,10 +1235,22 @@ class TurnRenderer:
         at_tail = self.owner.sheet.is_following_tail()
         typing_at_tail = was_input and caret_in_composer and at_tail
         following = (want_scroll and at_tail) or typing_at_tail
-        pin = None if following else self.owner.sheet.pin_view_state()
+        pin = (
+            self.owner.sheet.pin_view_state()
+            if should_pin_view_state(following, self.owner.composer.caret_owner())
+            else None
+        )
 
         old_end = end
-        new_end = self.owner._replace(start, end, text)
+        # ST remaps carets inside the replaced span to the new end. Hold the
+        # guard until this frame's pin restore so on_selection_modified does
+        # not flip history → draft (later ticks would lock caret at line end).
+        self.owner._sel_guard = True
+        try:
+            new_end = self.owner._replace(start, end, text)
+        except Exception:
+            self.owner._sel_guard = False
+            raise
         delta_sz = new_end - old_end
         self.current.region = (start, new_end)
         self.owner.sheet.set_hidden_region(keys.CONV_REGION, start, new_end)
@@ -1328,6 +1340,7 @@ class TurnRenderer:
         if following or not self.current.working:
             if sublime is not None:
                 sublime.set_timeout(self._refresh_media_phantoms, 10)
+        self.owner._sel_guard = False
 
     def _try_append(self, delta):
         """Insert text-only growth before live chrome (spinner / tasks)."""

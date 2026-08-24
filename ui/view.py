@@ -55,6 +55,7 @@ class SubmarineOutputView(FormatHelpers):
         self._perm_banner_phantom = None
         self._surface = {}
         self._tasks_expanded = False
+        self._sel_guard = False
 
     def _has_view(self) -> bool:
         view = self.sheet.view

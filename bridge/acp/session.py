@@ -17,7 +17,7 @@ _BRIDGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BRIDGE_DIR not in sys.path:
     sys.path.insert(0, _BRIDGE_DIR)
 
-from rpc_helpers import send_error, send_notification, send_result  # noqa: E402
+from rpc_helpers import process_cwd, send_error, send_notification, send_result  # noqa: E402
 
 
 class SessionMixin:
@@ -569,7 +569,7 @@ class SessionMixin:
 
     def _irr_db_near_cwd(self) -> str:
         """Walk cwd→parents for a .irr index directory."""
-        start = (self.cwd or os.getcwd() or "").strip() or os.getcwd()
+        start = (self.cwd or process_cwd() or "").strip() or process_cwd()
         try:
             cur = os.path.abspath(start)
         except Exception:

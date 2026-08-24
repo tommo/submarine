@@ -9,8 +9,8 @@ Authority split (do not invert):
     "notified."
 
 Notify policy goes through TurnController.notify_action:
-  claude → query (host starts a turn with the notification body)
-  kimi/grok → surface (⚙ strip + unread; agent auto-continues)
+  claude/kimi → query (host starts a turn with the notification body)
+  grok → surface (⚙ strip + unread; agent auto-continues)
   busy → hold (KEEP the generation-stamped buffer; retry on end_live)
 
 Dedupe is source-contains (TaskGet/TaskOutput already delivered bash-*)
@@ -295,7 +295,13 @@ class BackgroundTaskGate:
 
     def flush(self):
         # type: () -> None
-        """Apply TurnState.notify_action — never fake-adopt a turn."""
+        """Apply TurnState.notify_action — never fake-adopt a turn.
+
+        wait_for_exit often completes after session/prompt already returned.
+        Kimi self-wakes but does not emit session/update without a live prompt
+        (sandbox/kimi_bg/check_recovery.py). Flush uses notify_action
+        (kimi=query) so the continuation has a closer. Grok stays surface.
+        """
         self.flush_scheduled = False
         if not self.pending_notifications:
             return

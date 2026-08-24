@@ -10,7 +10,7 @@ contexts:
       scope: markup.heading.session-list
       push: header_rest
 
-    - match: '^(STARRED|CURRENT|HISTORY)\s+\((\d+)\)'
+    - match: '^(CURRENT|HISTORY)\s+\((\d+)\)'
       captures:
         0: entity.name.section.session-list
         2: constant.numeric.session-list
@@ -57,7 +57,7 @@ contexts:
       pop: true
 
   row_rest:
-    - match: '★'
+    - match: '[△★]'
       scope: keyword.star.session-list
     # First token is the backend column only — do not scan the title.
     - match: '(?:claude|grok|kimi|codex|pi|deepseek|[A-Z]{2,3})\b'

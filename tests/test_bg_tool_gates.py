@@ -380,7 +380,7 @@ class _FwdStub(AcpBridge):
 
 
 class TestForwardNoEarlyGear(unittest.TestCase):
-    def test_empty_bash_then_rib_is_not_gear_until_create(self):
+    def test_empty_bash_then_rib_paints_gear_on_update(self):
         notes = []
         orig = _patch_notify(notes)
         try:
@@ -416,9 +416,9 @@ class TestForwardNoEarlyGear(unittest.TestCase):
         finally:
             _restore_notify(orig)
         uses = [p for _, p in notes if p.get("type") == "tool_use"]
-        self.assertEqual(len(uses), 1, uses)
-        self.assertFalse(uses[0].get("background"))
-        self.assertNotIn("19:tool_x", b._bg_tool_ids)
+        self.assertGreaterEqual(len(uses), 1, uses)
+        self.assertTrue(uses[-1].get("background"))
+        self.assertIn("19:tool_x", b._bg_tool_ids)
         self.assertTrue(
             (b._tool_inputs_by_id.get("19:tool_x") or {}).get(
                 "run_in_background"))

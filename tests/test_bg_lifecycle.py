@@ -714,9 +714,12 @@ class TestB7NotifyBufferedDuringBusySurfacesOnEndLive(unittest.TestCase):
         })
         self.assertTrue(s.bg.pending_notifications)
         _complete_last_query(s)
-        self.assertIn(True, s.chrome.unread)
         self.assertIn("tool-1", s.bg.notified_tool_ids)
         self.assertFalse(s.bg.pending_notifications)
+        prompts = [
+            (t[1] or {}).get("prompt") or ""
+            for t in client.sent if t[0] == "query"]
+        self.assertTrue(any("task-notification" in p for p in prompts))
 
 
 class TestB8FlushHoldKeepsBufferSecondFlushDelivers(unittest.TestCase):
@@ -879,8 +882,13 @@ class TestC11LeftoverAfterDoneStaysIdleFullStack(unittest.TestCase):
                     },
                 })
                 s.scheduler.fire_due(1200)
-        self.assertEqual(s.turn.kind, "idle")
-        self.assertFalse(s.working)
+        # Kimi idle notify is query so the continuation has a closer.
+        self.assertEqual(s.turn.kind, "live")
+        self.assertTrue(s.working)
+        prompts = [
+            (t[1] or {}).get("prompt") or ""
+            for t in client.sent if t[0] == "query"]
+        self.assertTrue(any("task-notification" in p for p in prompts))
 
 
 class TestC12EscLiveSubagentNoResume(unittest.TestCase):

@@ -15,7 +15,7 @@ _BRIDGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BRIDGE_DIR not in sys.path:
     sys.path.insert(0, _BRIDGE_DIR)
 
-from rpc_helpers import send_notification, send_result  # noqa: E402
+from rpc_helpers import process_cwd, send_notification, send_result  # noqa: E402
 
 
 class PlanModeMixin:
@@ -192,7 +192,7 @@ class PlanModeMixin:
                 return plan_path
             except Exception as e:
                 self.file_log(f"exit_plan_mode: plan file write failed: {e}")
-        fallback = os.path.join(self.cwd or os.getcwd(), ".grok-plan.md")
+        fallback = os.path.join(self.cwd or process_cwd(), ".grok-plan.md")
         try:
             with open(fallback, "w", encoding="utf-8") as f:
                 f.write(plan_content)

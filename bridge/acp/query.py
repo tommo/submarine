@@ -67,6 +67,11 @@ class QueryMixin:
                     f"{'' if active or has_query else ' [orphan agent turn]'}")
             except Exception as e:
                 self.log(f"session/cancel failed ({reason}): {e}")
+        # Release elicitation/permission waiters AFTER session/cancel is on
+        # the wire. Answering elicitation with cancel first lets Kimi
+        # continue ("dismissed"); cancel-while-outstanding actually stops
+        # the turn (sandbox interrupt_during).
+        self._unblock_interaction_waiters()
         fut = self._prompt_fut
         if fut is not None and not fut.done():
             try:
@@ -440,20 +445,18 @@ class QueryMixin:
         # Cancel + wait (longer than old 0.35s force — Kimi turn teardown).
         await self._cancel_agent_turn(
             reason="interrupt", wait_s=1.5, settle_s=0.2, force_local=True)
+        send_result(req_id, {"status": "interrupted"})
 
-        # Unblock any permission waiters so they don't keep the turn alive.
+    def _unblock_interaction_waiters(self) -> None:
         for pid, pfut in list(self.pending_permissions.items()):
             if pfut and not pfut.done():
                 pfut.set_result({"kind": "denied-interactively-by-user"})
             self.pending_permissions.pop(pid, None)
-        # Unblock ask_user waiters (None → outcome "cancelled").
         for qid, qfut in list(self.pending_questions.items()):
             if qfut and not qfut.done():
                 qfut.set_result(None)
             self.pending_questions.pop(qid, None)
-        # Unblock plan approval (None → rejected / stay in plan).
         for pid, pfut in list(self.pending_plan_approvals.items()):
             if pfut and not pfut.done():
                 pfut.set_result(None)
             self.pending_plan_approvals.pop(pid, None)
-        send_result(req_id, {"status": "interrupted"})

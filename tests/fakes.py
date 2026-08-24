@@ -139,6 +139,9 @@ class FakeOutput:
     def interrupted(self, show_banner=True):
         self.interrupts.append(show_banner)
 
+    def has_turn_modal_ui(self):
+        return bool(self.questions or getattr(self, "pending_question", None))
+
     def clear_asking_state(self):
         self.permissions = []
         self.questions = []
@@ -250,8 +253,9 @@ class FakeClient:
         self.sent = []  # type: list
         self.stopped = False
 
-    def start(self, cmd, env=None):
+    def start(self, cmd, env=None, cwd=None):
         self.started = (list(cmd), dict(env or {}))
+        self.started_cwd = cwd
 
     def is_alive(self):
         return self.alive

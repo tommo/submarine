@@ -464,7 +464,8 @@ class Session:
         script_name = getattr(spec, "bridge_script", None) or "claude_main.py"
         bridge_script = os.path.join(self.plugin_dir, "bridge", script_name)
         try:
-            self.client.start([python_path, bridge_script], env=env)
+            self.client.start(
+                [python_path, bridge_script], env=env, cwd=self._cwd())
         except Exception as e:
             self._on_init({"error": {"message": str(e)}})
             return
@@ -945,6 +946,11 @@ class Session:
             # Idle UI: still tell the bridge to reap leftover Grok shells.
             # User is here — do not treat the long agent-side run as idle.
             self._note_activity()
+            try:
+                if self.output and self.output.has_turn_modal_ui():
+                    self.output.interrupted()
+            except Exception:
+                pass
             if self.client:
                 self._send("interrupt", {})
             return
@@ -1686,6 +1692,29 @@ class Session:
         if flag is False or flag == "false":
             return False
         return self.backend == "grok"
+
+    def _cwd(self):
+        # type: () -> str
+        """Directory this session can stand in (existing folder only)."""
+        if self.cwd and os.path.isdir(self.cwd):
+            return self.cwd
+        window = getattr(self, "window", None)
+        if window is not None:
+            try:
+                for folder in window.folders() or []:
+                    if folder and os.path.isdir(folder):
+                        return folder
+            except Exception:
+                pass
+            try:
+                view = window.active_view()
+                if view and view.file_name():
+                    parent = os.path.dirname(view.file_name())
+                    if parent and os.path.isdir(parent):
+                        return parent
+            except Exception:
+                pass
+        return self._default_cwd()
 
     def _default_cwd(self):
         # type: () -> str

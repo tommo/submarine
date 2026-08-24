@@ -70,8 +70,14 @@ class AskUserMixin:
             questions, keys, answers)
         if not content:
             return {"action": "cancel"}
+        extra = self._kimi_followup_answers(questions, answers)
+        if extra and self._kimi_answers_dropped(questions, answers, content, keys):
+            # Other / extra questions are not in the enum schema; kimi
+            # drops them. Followup after this RPC reply (cancel+reprompt).
+            self._pending_ask_followup = extra
         self.file_log(
-            f"elicitation/create accept keys={list(content.keys())}")
+            f"elicitation/create accept keys={list(content.keys())}"
+            f" dropped={bool(self._pending_ask_followup)}")
         return {"action": "accept", "content": content}
 
     @staticmethod
@@ -259,9 +265,11 @@ class AskUserMixin:
         oid = self._kimi_q0_option_id(options, questions, label)
         extra = self._kimi_followup_answers(questions, answers)
         if extra:
-            # After this permission RPC returns, Kimi resumes with Q0 only.
-            # Inject on the next tick so we don't cancel before optionId lands.
-            loop.call_later(0.08, lambda t=extra: self._inject_ask_user_followup(t))
+            # handleQuestion is q0-only. Flush after this RPC is written
+            # (see _dispatch_acp_request) — do not cancel before optionId lands.
+            # loop.call_later(0.08, ...) raced the continuation; kimi already
+            # sampled "Q1 unanswered" before the followup.
+            self._pending_ask_followup = extra
         if oid:
             self.file_log(
                 f"ask_user permission selected label={label!r} optionId={oid!r}")
@@ -274,7 +282,7 @@ class AskUserMixin:
             self.file_log(
                 f"ask_user unmatched label={label!r} → fallback {fallback}")
             if not extra:
-                self._inject_ask_user_followup(
+                self._pending_ask_followup = (
                     self._kimi_followup_answers(questions, answers)
                     or self._kimi_other_followup(questions, answers, label))
             return {"outcome": {"outcome": "selected", "optionId": fallback}}
@@ -413,6 +421,45 @@ class AskUserMixin:
             f"(not a listed option){': ' + q0 if q0 else ''}: {label}. "
             "Do NOT treat this as dismissed."
         )
+
+    def _flush_ask_followup(self) -> None:
+        text = getattr(self, "_pending_ask_followup", None)
+        self._pending_ask_followup = None
+        if text:
+            self._inject_ask_user_followup(text)
+
+    @staticmethod
+    def _kimi_answers_dropped(
+            questions: list, answers: dict, content: dict, keys: list) -> bool:
+        """True when the UI answered something elicitation content omitted.
+
+        Kimi elicitationResponseToQuestionAnswers keeps only values that
+        match a declared option label. Other/freeform is dropped.
+        """
+        if not isinstance(answers, dict) or not answers:
+            return False
+        content = content or {}
+        for i, q in enumerate(questions or []):
+            if not isinstance(q, dict):
+                continue
+            val = ""
+            for key in (q.get("question") or "", q.get("header") or ""):
+                if key and key in answers:
+                    val = AskUserMixin._answer_as_label(answers[key])
+                    if val:
+                        break
+            if not val:
+                continue
+            ck = keys[i] if i < len(keys) else f"q{i}"
+            got = content.get(ck)
+            if got is None:
+                return True
+            if isinstance(got, list):
+                if val not in [str(x) for x in got]:
+                    return True
+            elif str(got) != val:
+                return True
+        return False
 
     def _inject_ask_user_followup(self, text: str) -> None:
         if not text or not str(text).strip():

@@ -16,6 +16,7 @@ if _BRIDGE_DIR not in sys.path:
     sys.path.insert(0, _BRIDGE_DIR)
 
 from base import BaseBridge  # noqa: E402
+from rpc_helpers import process_cwd  # noqa: E402
 from acp.ask_user import AskUserMixin  # noqa: E402
 from acp.background import BackgroundMixin  # noqa: E402
 from acp.fs import FsMixin  # noqa: E402
@@ -82,7 +83,7 @@ class AcpBridge(TransportMixin, SessionMixin, UpdatesMixin,
         # spawn placeholder — do not force it onto a resumed session.
         self._host_model: bool = False
         self.effort: str = ""  # reasoning effort (low/medium/high/…); empty = agent default
-        self.cwd: str = os.getcwd()
+        self.cwd: str = process_cwd()
         self.agent_mode: str = ""
         self._agent_id: Optional[Any] = None
         # Vision MCP + negotiated ACP caps
@@ -125,6 +126,9 @@ class AcpBridge(TransportMixin, SessionMixin, UpdatesMixin,
         # True from first cancel notify until query fully settles — blocks
         # spam session/cancel (Grok ChatStateActor dies on cancel-after-done).
         self._cancel_in_flight: bool = False
+        # AskUser Q1+/Other: inject after the elicitation/permission RPC
+        # reply is on the wire (kimi 0.37.2 drops non-enum answers).
+        self._pending_ask_followup: Optional[str] = None
         # Grok scheduler: track next fire for loop banner / wakes.
         self._schedule_next_fire: Optional[float] = None
         # toolCallId → last known input (completed updates often omit rawInput).

@@ -1,11 +1,14 @@
 """Resume after interrupt must not restore asking UI."""
 from __future__ import annotations
 
+import os
 import types
 import unittest
 
 from tests.fakes import FakeClient, make_session
 from ui.modals import ModalUI
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 class _Out:
@@ -93,6 +96,30 @@ class TestResumeDropAsking(unittest.TestCase):
         self.assertIn("permission_response", methods)
         self.assertIn("interrupt", methods)
         self.assertEqual(s.output.permissions, [])
+
+    def test_interrupted_does_not_dismiss_question_rpc(self):
+        # callback(None) is "user dismissed" — Kimi continues. Interrupt must
+        # session/cancel while elicitation is still outstanding.
+        path = os.path.join(_ROOT, "ui", "renderer.py")
+        with open(path) as f:
+            src = f.read()
+        start = src.find("    def interrupted")
+        end = src.find("\n    def apply_plan_todos", start)
+        body = src[start:end]
+        self.assertNotIn("if callback:", body)
+        self.assertIn("session/cancel", body)
+
+    def test_cancel_unblocks_waiters_after_session_cancel(self):
+        path = os.path.join(_ROOT, "bridge", "acp", "query.py")
+        with open(path) as f:
+            src = f.read()
+        start = src.find("    async def _cancel_agent_turn")
+        end = src.find("    async def handle_query", start)
+        body = src[start:end]
+        cancel_at = body.find('session/cancel"')
+        unblock_at = body.find("_unblock_interaction_waiters")
+        self.assertGreater(cancel_at, 0)
+        self.assertGreater(unblock_at, cancel_at)
 
 
 if __name__ == "__main__":

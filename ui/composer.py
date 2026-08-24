@@ -565,7 +565,9 @@ class Composer:
         if not view or not view.is_valid():
             return
         if self._input_mode:
-            self._scroll_layout_to_bottom(force=bool(force))
+            hist = self.caret_owner() == OWNER_HISTORY
+            self._scroll_layout_to_bottom(
+                force=bool(force), reapply_caret=not hist)
             return
         if not force and not self.owner.sheet.is_following_tail():
             return

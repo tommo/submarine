@@ -333,10 +333,13 @@ class TransportMixin:
         except FileNotFoundError as e:
             await self._send_acp_response(rid, error={
                 "code": -32000, "message": str(e)})
+            return
         except Exception as e:
             self.log(f"ACP {method} error: {e}")
             await self._send_acp_response(rid, error={
                 "code": -32000, "message": str(e)})
+            return
+        self._flush_ask_followup()
 
     async def _send_acp_response(self, rid: int, *, result: Any = None,
                                   error: Optional[dict] = None) -> None:

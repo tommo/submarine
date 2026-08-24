@@ -368,7 +368,8 @@ class UpdatesMixin:
             is_spawn = self._is_subagent_spawn(tool_name, upd, tool_input)
             is_bg = is_spawn or self._looks_like_background_tool(
                 upd, tool_input)
-            # Shell ⚙ waits for terminal/create. Task spawn is ⚙ immediately.
+            # Only shells and subagent spawns are ⚙. run_in_background bash
+            # paints immediately so the ack tool_result cannot close as ✔.
             if is_bg and not (
                     self._is_shell_tool_name(tool_name)
                     or self._is_subagent_tool_name(tool_name)):
@@ -380,15 +381,16 @@ class UpdatesMixin:
                     **(self._tool_inputs_by_id.get(tid) or {}),
                     **tool_input,
                 }
-            if is_spawn and tid:
+            if is_bg and tid:
                 self._bg_tool_ids.add(tid)
-                self._last_bg_tool_id = tid
+                if is_spawn:
+                    self._last_bg_tool_id = tid
             send_notification("message", {
                 "type": "tool_use",
                 "id": tid,
                 "name": tool_name,
                 "input": tool_input,
-                "background": bool(is_spawn),
+                "background": bool(is_bg),
             })
         elif kind == "tool_call_update":
             usage = self.usage_from_tool_update(upd)
@@ -445,12 +447,18 @@ class UpdatesMixin:
                     if self._should_suppress_tool_row(upd, tool_name):
                         return
                     self._tool_ids_emitted.add(tid)
+                    bg = bool(
+                        tid in self._bg_tool_ids
+                        or self._looks_like_background_tool(upd, enriched)
+                    )
+                    if bg and tid:
+                        self._bg_tool_ids.add(tid)
                     send_notification("message", {
                         "type": "tool_use",
                         "id": tid,
                         "name": tool_name,
                         "input": enriched or self._tool_inputs_by_id.get(tid) or {},
-                        "background": bool(tid and tid in self._bg_tool_ids),
+                        "background": bg,
                     })
             elif tool_name != "tool" or (enriched and status not in ("completed", "failed")):
                 # Enrich open row (same id → output.tool upserts). Prefer real name.
@@ -460,8 +468,16 @@ class UpdatesMixin:
                 if enrich_name == "tool" and tid:
                     enrich_name = self._tool_names_by_id.get(tid) or "tool"
                 if not self._should_suppress_tool_row(upd, enrich_name):
+                    newly_bg = bool(
+                        tid
+                        and tid not in self._bg_tool_ids
+                        and self._looks_like_background_tool(upd, enriched)
+                    )
+                    if newly_bg:
+                        self._bg_tool_ids.add(tid)
+                    bg = bool(tid and tid in self._bg_tool_ids)
                     if status in ("completed", "failed") or self._should_repaint_tool(
-                            tid, upd, enriched):
+                            tid, upd, enriched) or newly_bg:
                         send_notification("message", {
                             "type": "tool_use",
                             "id": tid,
@@ -469,11 +485,10 @@ class UpdatesMixin:
                             "input": enriched or self._tool_inputs_by_id.get(tid) or {},
                             # Re-paint must not demote a ⚙ row (spawn ack keeps
                             # background until child/task_notification closes).
-                            "background": bool(tid and tid in self._bg_tool_ids),
+                            "background": bg,
                         })
-            # Cache run_in_background for create pairing. Do not ⚙ / do not
-            # drop pending here — that left ⚙ unbound when create arrived
-            # later (or never), so the row never cleared.
+            # Cache run_in_background for create pairing. Do not drop pending
+            # here — that left ⚙ unbound when create arrived later (or never).
             is_bg = bool(
                 tid and self._is_shell_tool_name(tool_name) and (
                     tid in self._bg_tool_ids
