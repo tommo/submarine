@@ -702,9 +702,9 @@ def _ui_mode_now() -> str:
     except Exception:
         try:
             from plat.constants import SETTINGS_FILE
-            return sublime.load_settings(SETTINGS_FILE).get("ui_mode", "tabs") or "tabs"
+            return sublime.load_settings(SETTINGS_FILE).get("ui_mode", "single") or "single"
         except Exception:
-            return "tabs"
+            return "single"
 
 
 def capture_dump(tail: int = 1200, list_lines: int = 24) -> dict:

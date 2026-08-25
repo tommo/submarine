@@ -1,6 +1,12 @@
 # Single Session View per Window ("host view" mode)
 
-Status: design. Not yet implemented.
+Status: implemented. Default `"ui_mode": "single"` (one host view per
+window; session list swaps the bound session). `"tabs"` is the legacy
+opt-out (one sheet per session). Tear-off
+(`submarine_tear_off_session`) promotes the bound session to its own
+sheet; dock (`submarine_dock_session`) returns it to the host. Torn-off
+state is in-memory only — it does not persist across ST restarts
+(session resumes into host rotation).
 
 ## Goal
 
@@ -8,9 +14,9 @@ One output view per window. All sessions in the window share it; the session
 list is the switcher. Activating a session row swaps that session into the
 host view instead of focusing a per-session sheet.
 
-Non-goal: changing the default. Mode is opt-in via
-`"ui_mode": "single"` in `Submarine.sublime-settings` (default `"tabs"`,
-today's behavior). Runtime switch collapses/restores sheets (see §8).
+Mode is `"ui_mode": "single"` (default) or `"tabs"` in
+`Submarine.sublime-settings`. Runtime switch collapses/restores sheets
+(see §8).
 
 ## Why this is cheap in Submarine
 
@@ -46,7 +52,12 @@ The rewrite already built the seams this mode needs:
   present in `registry.by_agent` but absent from `binding` ("background" is
   a derived predicate, not a separate map).
 
-At any time: `window sessions = bound (0..1) + detached (0..N)`.
+At any time: `window sessions = bound (0..1) + detached (0..N) + torn-off (0..N)`.
+
+- **Torn-off session**: a live session that opted out of the host. It has
+  its own sheet (tabs-mode behavior) until docked. `session.torn_off` is
+  not written to `.sessions.json` and is cleared on single→tabs and on
+  ST restart.
 
 ## Keep-alive rule (hard requirement)
 
@@ -159,12 +170,27 @@ Close of the host view: existing close interception runs
 `keep_running_on_close`; host view is gone; next `open_row` recreates it.
 Detached sessions are unaffected.
 
+## Tear-off / dock
+
+- Tear-off: detach the bound session, `reveal_live_session(..., force_sheet=True)`,
+  mark `session.torn_off = True`, then attach the most-recent other
+  window session (else host placeholder). Never stops the bridge.
+- Dock: clear `torn_off`, `HostView.attach` onto the host, soft-close the
+  standalone sheet.
+- Session list: torn-off rows use `⊡` and open their own sheet (not the
+  host). `t` tears off a bound row / docks a torn-off row.
+- `ui_mode = "tabs"`: tear-off/dock are hidden no-ops.
+- Closing a torn-off sheet follows the normal close intercept; the
+  session stays torn-off and the next open recreates its sheet.
+
 ## Mode switching at runtime
 
 - tabs → single: pick active session as bound, attach; detach every other
-  session in the window and close their (now unbound) sheets.
-- single → tabs: for each detached session, run `reveal_live_session` to
-  give it its own sheet. Host view stays as the bound session's sheet.
+  session in the window and close their (now unbound) sheets. Nothing
+  starts torn-off.
+- single → tabs: clear every `torn_off` mark; for each detached session,
+  run `reveal_live_session` to give it its own sheet. Host view stays as
+  the bound session's sheet.
 
 ## What changes, by file
 
@@ -180,7 +206,7 @@ Detached sessions are unaffected.
 | `main.py` | `create_session` single-mode branch (attach instead of new sheet); `ui_mode` setting read |
 | `commands/session_cmds.py` | new/switch/restart flows route through host in single mode |
 | `features/quick.py` | untouched — QuickHost keeps its own panel host |
-| `Submarine.sublime-settings` | `"ui_mode": "tabs" \| "single"` |
+| `Submarine.sublime-settings` | `"ui_mode": "single"` (default) or `"tabs"` |
 
 ## Tests
 

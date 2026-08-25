@@ -249,12 +249,13 @@ def use_compact(cols: int) -> bool:
 
 def format_header(cols: int = 0) -> str:
     left = "SESSIONS"
-    right = "enter open · v reveal · f fork · s star · r rename · del close"
+    right = "enter open · v reveal · t tear · f fork · s star · r rename · del close"
     if not cols:
         return f"{left}                  {right}"
     for cand in (
         right,
-        "↵ open · v · f · s · r · del",
+        "enter open · v reveal · f fork · s star · r rename · del close",
+        "↵ open · v · t · f · s · r · del",
         "v · f · s · r · del",
         "f · s · r · del",
         "s · r · del",
@@ -364,10 +365,11 @@ def collect_live(window) -> List[dict]:
         except Exception:
             view_ok = False
             view_id = None
+        torn_off = bool(getattr(s, "torn_off", False))
         bound = False
         try:
             from ui.host import is_single_mode
-            if is_single_mode():
+            if is_single_mode() and not torn_off:
                 from core.registry import default_registry
                 bvid = default_registry.bound_view_id(s)
                 bound = bool(view_ok and bvid is not None and bvid == view_id)
@@ -386,6 +388,7 @@ def collect_live(window) -> List[dict]:
             "last_access": access_ts(s),
             "last_activity": float(getattr(s, "last_activity", 0) or 0),
             "bound": bound,
+            "torn_off": torn_off,
         })
     # Input wait first, then awake, then sleeping; access time within each band.
     _band = {"input": 0, "unread": 0, "working": 1, "ready": 1, "sleeping": 2}
@@ -511,7 +514,9 @@ def _fmt_row(r: dict, starred: set, compact: bool = False, cols: int = 0) -> str
     live = r.get("kind") == "live"
     name = one_line_title(r.get("name") or "")
     mark = _mark(r["status"]) if live else "·"
-    if r.get("bound"):
+    if r.get("torn_off"):
+        mark = "⊡"
+    elif r.get("bound"):
         mark = "▸"
     star = "△ " if r.get("session_id") in (starred or ()) else ""
     if compact:
@@ -650,6 +655,8 @@ def reveal_live_session(window, session, focus: bool = True,
     """Show a live session, reattaching a sheet if it was backgrounded."""
     if not session or not window:
         return False
+    if getattr(session, "torn_off", False):
+        force_sheet = True
     view = session.output.view if session.output else None
     if view and view.is_valid():
         win = view.window() or window
@@ -776,6 +783,8 @@ def open_row(window, row: dict) -> bool:
             if row.get("kind") == "live":
                 session = _live_session_for_row(row)
                 if session is not None:
+                    if getattr(session, "torn_off", False) or row.get("torn_off"):
+                        return focus_live(window, row)
                     return bool(HostView.for_window(window).attach(
                         window, session, focus=True))
             return resume_saved(window, row)
@@ -799,8 +808,11 @@ def reveal_row(window, row: dict) -> bool:
             if row.get("kind") == "live":
                 session = _live_session_for_row(row)
                 if session is not None:
-                    ok = bool(HostView.for_window(window).attach(
-                        window, session, focus=False))
+                    if getattr(session, "torn_off", False) or row.get("torn_off"):
+                        ok = reveal_live_session(window, session, focus=False)
+                    else:
+                        ok = bool(HostView.for_window(window).attach(
+                            window, session, focus=False))
             if not ok:
                 ok = resume_saved(window, row, focus=False)
             if keep and keep.is_valid():
@@ -1218,6 +1230,8 @@ class SessionListClickListener(sublime_plugin.EventListener):
             return ("submarine_session_list_star", {})
         if ch == "f":
             return ("submarine_session_list_fork", {})
+        if ch == "t":
+            return ("submarine_session_list_tear_off", {})
         if ch == "j":
             return ("submarine_session_list_jsonl", {})
         if ch == "J":
@@ -1529,6 +1543,51 @@ class SubmarineSessionListRevealCommand(sublime_plugin.TextCommand):
                 win.focus_view(self.view)
             except Exception:
                 pass
+
+    def is_enabled(self):
+        return bool(self.view.settings().get(SETTING))
+
+
+def tear_or_dock_row(window, row):
+    """t on a bound row tears off; t on a torn-off row docks."""
+    if not row or not window or row.get("kind") != "live":
+        return False
+    session = _live_session_for_row(row)
+    if session is None:
+        return False
+    from ui.host import HostView, is_single_mode
+    if not is_single_mode():
+        return False
+    hv = HostView.for_window(window)
+    if getattr(session, "torn_off", False) or row.get("torn_off"):
+        return bool(hv.dock(window, session, focus=True))
+    bound = hv.bound_session(window)
+    if session is bound:
+        return bool(hv.tear_off(window, session, focus=True))
+    return False
+
+
+class SubmarineSessionListTearOffCommand(sublime_plugin.TextCommand):
+    """Tear off the bound row, or dock a torn-off row (t)."""
+
+    def run(self, edit):
+        if not self.view.settings().get(SETTING):
+            return
+        raw = self.view.settings().get(ROWS_KEY) or "[]"
+        try:
+            index = json.loads(raw)
+        except Exception:
+            index = []
+        sel = self.view.sel()
+        if not sel:
+            return
+        line = self.view.rowcol(sel[0].begin())[0] + 1
+        row = row_at_line(index, line)
+        win = self.view.window()
+        if not win or not row:
+            return
+        if tear_or_dock_row(win, row):
+            refresh_session_list(win)
 
     def is_enabled(self):
         return bool(self.view.settings().get(SETTING))

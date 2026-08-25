@@ -266,6 +266,7 @@ class Session:
         self.error_halted = False
         self.error_halt_message = ""
         self.backgrounded = False
+        self.torn_off = False
         self.plan_mode = False
         self.plan_file = None  # type: Optional[str]
         self.draft_prompt = ""

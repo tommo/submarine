@@ -260,7 +260,7 @@ def create_session(
         if existing is not None:
             try:
                 from ui.host import HostView, is_single_mode
-                if is_single_mode():
+                if is_single_mode() and not getattr(existing, "torn_off", False):
                     HostView.for_window(window).attach(
                         window, existing, focus=focus)
                     return existing

@@ -366,6 +366,36 @@ class SubmarineStopCommand(sublime_plugin.WindowCommand):
             unregister_view(view_id)
 
 
+class SubmarineTearOffSessionCommand(sublime_plugin.WindowCommand):
+    """Promote the bound host session to its own sheet (single mode)."""
+
+    def run(self):
+        from ui.host import tear_off_session
+        tear_off_session(self.window)
+
+    def is_enabled(self):
+        from ui.host import can_tear_off
+        return can_tear_off(self.window)
+
+    def is_visible(self):
+        return self.is_enabled()
+
+
+class SubmarineDockSessionCommand(sublime_plugin.WindowCommand):
+    """Return a torn-off sheet to the host view (single mode)."""
+
+    def run(self):
+        from ui.host import dock_session
+        dock_session(self.window)
+
+    def is_enabled(self):
+        from ui.host import can_dock
+        return can_dock(self.window)
+
+    def is_visible(self):
+        return self.is_enabled()
+
+
 class SubmarineHideSessionCommand(sublime_plugin.WindowCommand):
     def run(self):
         from core.registry import detach_session
@@ -700,7 +730,7 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
             elif action == "focus" and data:
                 try:
                     from ui.host import HostView, is_single_mode
-                    if is_single_mode():
+                    if is_single_mode() and not getattr(data, "torn_off", False):
                         HostView.for_window(self.window).attach(
                             self.window, data)
                         return

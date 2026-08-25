@@ -22,6 +22,10 @@ contexts:
       scope: keyword.bound.session-list
       push: row_rest
 
+    - match: '^⊡'
+      scope: keyword.torn-off.session-list
+      push: row_rest
+
     - match: '^●'
       scope: keyword.working.session-list
       push: row_rest
@@ -47,9 +51,9 @@ contexts:
       push: row_rest
 
   header_rest:
-    - match: '\b(enter|dclick|r|v|s|f|j)\b'
+    - match: '\b(enter|dclick|r|v|t|s|f|j)\b'
       scope: keyword.operator.session-list
-    - match: '\b(open|rename|reveal|star|fork|jsonl)\b'
+    - match: '\b(open|rename|reveal|tear|star|fork|jsonl)\b'
       scope: comment.line.session-list
     - match: '·'
       scope: comment.line.session-list

@@ -16,6 +16,8 @@ from .session_cmds import (  # noqa: F401
     SubmarineRenameCommand,
     SubmarineToggleCommand,
     SubmarineStopCommand,
+    SubmarineTearOffSessionCommand,
+    SubmarineDockSessionCommand,
     SubmarineHideSessionCommand,
     SubmarineSleepSessionCommand,
     SubmarineWakeSessionCommand,
@@ -115,4 +117,5 @@ from ui.session_list import (  # noqa: F401
     SubmarineSessionListJsonlCommand,
     SubmarineSessionListStarCommand,
     SubmarineSessionListRevealCommand,
+    SubmarineSessionListTearOffCommand,
 )

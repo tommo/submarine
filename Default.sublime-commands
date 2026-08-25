@@ -122,6 +122,14 @@
         "args": {"reveal": true}
     },
     {
+        "caption": "Submarine: Tear Off Session",
+        "command": "submarine_tear_off_session"
+    },
+    {
+        "caption": "Submarine: Dock Session",
+        "command": "submarine_dock_session"
+    },
+    {
         "caption": "Submarine: Hide Session (keep running)",
         "command": "submarine_hide_session"
     },

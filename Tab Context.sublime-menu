@@ -1,8 +1,4 @@
 [
-    {
-        "caption": "Ask Submarine",
-        "command": "submarine_query_selection"
-    },
     { "caption": "-" },
     {
         "caption": "Submarine: Tear Off Session",

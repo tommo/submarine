@@ -514,13 +514,13 @@ class TestAgentIdStable(_SingleViewCase):
         self.assertNotEqual(default_registry.binding.get(hv.host_view(win).id()), aid)
 
 
-class TestDefaultIsTabs(unittest.TestCase):
+class TestDefaultIsSingle(unittest.TestCase):
     def tearDown(self):
         HostView.reset()
 
-    def test_ui_mode_defaults_to_tabs(self):
+    def test_ui_mode_defaults_to_single(self):
         HostView.reset()
-        self.assertFalse(is_single_mode())
+        self.assertTrue(is_single_mode())
 
 
 if __name__ == "__main__":

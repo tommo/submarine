@@ -56,20 +56,23 @@ def ui_mode():
     if _mode_override is not None:
         raw = _mode_override
     elif sublime is None:
-        return UI_MODE_TABS
+        return UI_MODE_SINGLE
     else:
         try:
-            raw = sublime.load_settings(SETTINGS_FILE).get("ui_mode", UI_MODE_TABS)
+            raw = sublime.load_settings(SETTINGS_FILE).get(
+                "ui_mode", UI_MODE_SINGLE)
         except Exception:
-            return UI_MODE_TABS
-    mode = (raw or UI_MODE_TABS)
+            return UI_MODE_SINGLE
+    mode = (raw or UI_MODE_SINGLE)
     if isinstance(mode, str):
         mode = mode.strip().lower()
     else:
-        mode = UI_MODE_TABS
+        mode = UI_MODE_SINGLE
+    if mode == UI_MODE_TABS:
+        return UI_MODE_TABS
     if mode == UI_MODE_SINGLE:
         return UI_MODE_SINGLE
-    return UI_MODE_TABS
+    return UI_MODE_SINGLE
 
 
 def is_single_mode():
@@ -254,6 +257,9 @@ class HostView(object):
         from core.placement import remember_active_session
         from core.registry import bind, default_registry, for_view
 
+        if getattr(session, "torn_off", False):
+            return False
+
         host = self.host_view(window, create_via=getattr(session, "output", None))
         if host is None:
             return False
@@ -285,14 +291,142 @@ class HostView(object):
             remember_active_session(window, host)
         except Exception:
             pass
-        def _list_refresh():
+        self._refresh_list()
+        return True
+
+    def bound_session(self, window=None):
+        # type: (Any) -> Any
+        """Session currently shown on the host view, or None."""
+        window = window or self.window
+        host = self._view
+        if host is None:
+            host = self._find_existing(window)
+        if host is None:
+            return None
+        try:
+            if not host.is_valid():
+                return None
+        except Exception:
+            return None
+        from core.registry import for_view
+        return for_view(host)
+
+    def tear_off(self, window, session=None, focus=True):
+        # type: (Any, Any, bool) -> bool
+        """Give the bound session its own sheet. Host stays open."""
+        if not is_single_mode():
+            return False
+        window = window or self.window
+        host = self._view
+        if host is None:
+            host = self._find_existing(window)
+        if host is None:
+            return False
+        try:
+            if not host.is_valid():
+                return False
+        except Exception:
+            return False
+        bound = self.bound_session(window)
+        if session is None:
+            session = bound
+        if session is None or session is not bound:
+            return False
+        if getattr(session, "torn_off", False):
+            return True
+
+        from ui.session_list import reveal_live_session
+
+        self._detach_session(session)
+        session.torn_off = True
+        ok = reveal_live_session(window, session, focus=focus, force_sheet=True)
+        snap = getattr(session, "surface", None) or {}
+        output = getattr(session, "output", None)
+        if output is not None and snap:
+            restore = getattr(output, "surface_restore", None)
+            if callable(restore):
+                try:
+                    restore(snap)
+                except Exception:
+                    pass
+        nxt = self._pick_next_for_host(window, session)
+        if nxt is not None:
+            self.attach(window, nxt, focus=False)
+        else:
+            self._write_placeholder(host)
+        self._refresh_list()
+        return bool(ok)
+
+    def dock(self, window, session, focus=True):
+        # type: (Any, Any, bool) -> bool
+        """Bind a torn-off session back to the host and close its sheet."""
+        if not is_single_mode():
+            return False
+        if session is None or not getattr(session, "torn_off", False):
+            return False
+        window = window or self.window
+        standalone = None
+        try:
+            standalone = session.output.view if session.output else None
+            if standalone is not None and not standalone.is_valid():
+                standalone = None
+        except Exception:
+            standalone = None
+        session.torn_off = False
+        ok = self.attach(window, session, focus=focus)
+        if standalone is not None:
+            try:
+                bound_view = session.output.view if session.output else None
+                same = False
+                if bound_view is not None:
+                    try:
+                        same = bound_view.id() == standalone.id()
+                    except Exception:
+                        same = bound_view is standalone
+                if not same and standalone.is_valid():
+                    keys.write_setting(standalone.settings(), keys.SOFT_CLOSE, True)
+                    standalone.close()
+            except Exception:
+                pass
+        self._refresh_list()
+        return bool(ok)
+
+    def _pick_next_for_host(self, window, exclude):
+        # type: (Any, Any) -> Any
+        from core.registry import sessions_for_window
+        from ui.session_list import access_ts
+
+        candidates = []
+        for s in sessions_for_window(window):
+            if s is exclude:
+                continue
+            if getattr(s, "quick_mode", False):
+                continue
+            if getattr(s, "torn_off", False):
+                continue
+            candidates.append(s)
+        if not candidates:
+            return None
+        candidates.sort(key=access_ts, reverse=True)
+        return candidates[0]
+
+    def _refresh_list(self):
+        def _go():
             try:
                 from ui.session_list import schedule_session_list_refresh
                 schedule_session_list_refresh()
             except Exception:
                 pass
-        _after_paint(_list_refresh)
-        return True
+        _after_paint(_go)
+
+    def _clear_torn_off(self, window):
+        # type: (Any) -> None
+        from core.registry import sessions_for_window
+        for s in sessions_for_window(window):
+            try:
+                s.torn_off = False
+            except Exception:
+                pass
 
     def _detach_session(self, session):
         # type: (Any) -> None
@@ -456,6 +590,7 @@ class HostView(object):
         ]
         if not live:
             return
+        self._clear_torn_off(window)
         bound = self._pick_bound(window, live)
         view = None
         try:
@@ -504,6 +639,7 @@ class HostView(object):
                     keys.erase_setting(host.settings(), keys.HOST)
             except Exception:
                 bound = None
+        self._clear_torn_off(window)
         for s in sessions_for_window(window):
             if getattr(s, "quick_mode", False):
                 continue
@@ -540,6 +676,13 @@ class HostView(object):
                     continue
                 if host_id is not None and v.id() == host_id:
                     continue
+                try:
+                    from core.registry import for_view
+                    owner = for_view(v)
+                    if owner is not None and getattr(owner, "torn_off", False):
+                        continue
+                except Exception:
+                    pass
                 keys.write_setting(v.settings(), keys.SOFT_CLOSE, True)
                 v.close()
             except Exception:
@@ -562,6 +705,51 @@ class HostView(object):
             except Exception:
                 continue
         return live[0]
+
+
+def can_tear_off(window):
+    # type: (Any) -> bool
+    if not is_single_mode() or window is None:
+        return False
+    session = HostView.for_window(window).bound_session(window)
+    return session is not None and not getattr(session, "torn_off", False)
+
+
+def can_dock(window, session=None):
+    # type: (Any, Any) -> bool
+    if not is_single_mode() or window is None:
+        return False
+    if session is None:
+        try:
+            from ui.session_api import get_session_for_view
+            view = window.active_view()
+            session = get_session_for_view(view) if view else None
+        except Exception:
+            session = None
+    return bool(session is not None and getattr(session, "torn_off", False))
+
+
+def tear_off_session(window, session=None, focus=True):
+    # type: (Any, Any, bool) -> bool
+    if not is_single_mode() or window is None:
+        return False
+    return HostView.for_window(window).tear_off(window, session, focus=focus)
+
+
+def dock_session(window, session=None, focus=True):
+    # type: (Any, Any, bool) -> bool
+    if not is_single_mode() or window is None:
+        return False
+    if session is None:
+        try:
+            from ui.session_api import get_session_for_view
+            view = window.active_view()
+            session = get_session_for_view(view) if view else None
+        except Exception:
+            session = None
+    if session is None:
+        return False
+    return HostView.for_window(window).dock(window, session, focus=focus)
 
 
 def apply_ui_mode(window, mode=None):

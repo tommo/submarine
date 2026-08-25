@@ -597,6 +597,8 @@ class TestRenderSessionList(unittest.TestCase):
 
     def test_close_row_current_keeps_saved(self):
         gone = []
+        prev_remove = sl.remove_saved_session
+        prev_live = sl._live_session_for_row
         sl.remove_saved_session = lambda sid, g=gone: (g.append(sid) or True)
 
         class _Sess:
@@ -613,15 +615,19 @@ class TestRenderSessionList(unittest.TestCase):
             "kind": "live", "session_id": "live1", "name": "x",
             "backend": "grok", "section": "CURRENT",
         }
-        self.assertTrue(sl.close_row(None, row))
-        self.assertTrue(sess.stopped)
-        self.assertEqual(gone, [])
-        starred_live = dict(row)
-        starred_live["section"] = "CURRENT"
-        sess.stopped = False
-        self.assertTrue(sl.close_row(None, starred_live))
-        self.assertTrue(sess.stopped)
-        self.assertEqual(gone, [])
+        try:
+            self.assertTrue(sl.close_row(None, row))
+            self.assertTrue(sess.stopped)
+            self.assertEqual(gone, [])
+            starred_live = dict(row)
+            starred_live["section"] = "CURRENT"
+            sess.stopped = False
+            self.assertTrue(sl.close_row(None, starred_live))
+            self.assertTrue(sess.stopped)
+            self.assertEqual(gone, [])
+        finally:
+            sl.remove_saved_session = prev_remove
+            sl._live_session_for_row = prev_live
 
     def test_render_stamps_section(self):
         live = [{
