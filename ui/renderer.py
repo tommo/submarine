@@ -78,6 +78,11 @@ class TurnRenderer:
         self._turn_context_phantom_set = None
         self._tasks_expanded = False
         self._region_stash = None  # type: Optional[tuple]
+        self._dirty = 0
+        self._journal = []  # type: list
+        self._detach_snap = None  # type: Optional[dict]
+        self._replaying = False
+        self._last_catch_up_n = 0
         self._MEDIA_SOURCE_MAX_BYTES = 8_000_000
         self._MEDIA_PHANTOM_MAX_W = 96
         self._MEDIA_POPUP_MAX_W = 360
@@ -120,10 +125,137 @@ class TurnRenderer:
             self.current.region = cur
         self._region_stash = None
 
+    def mark_chrome_dirty(self) -> None:
+        """Bump the detach dirty counter without journaling (modals / queue)."""
+        self._dirty += 1
+
+    def snapshot_detach(self) -> None:
+        """Snapshot renderer state at detach so a dirty rebind can rewind."""
+        self._detach_snap = {
+            "conversations": [_clone_conv(c) for c in self.conversations],
+            "current": _clone_conv(self.current),
+            "proj_event_count": self._proj_event_count,
+            "proj_joined_text": self._proj_joined_text,
+            "proj_events_end": self._proj_events_end,
+            "struct_dirty": self._struct_dirty,
+            "retry_hint": self._retry_hint,
+            "spinner_frame": self._spinner_frame,
+            "dirty": self._dirty,
+        }
+        self._journal = []
+
+    def restore_detach_projection(self) -> None:
+        """Re-apply projection cursors saved at detach (clean-swap helper)."""
+        cp = self._detach_snap
+        if not cp:
+            return
+        self._proj_event_count = cp["proj_event_count"]
+        self._proj_joined_text = cp["proj_joined_text"]
+        self._proj_events_end = cp["proj_events_end"]
+        self._struct_dirty = cp["struct_dirty"]
+        self._retry_hint = cp.get("retry_hint")
+        self._spinner_frame = cp.get("spinner_frame", self._spinner_frame)
+
+    def stamp_live_regions(self) -> None:
+        """Re-stamp CONV_REGION from current.region after a snapshot restore."""
+        if not self.current or not self.current.region:
+            return
+        start, end = self.current.region
+        self.owner.sheet.set_hidden_region(keys.CONV_REGION, start, end)
+
+    def state_matches_detach_snap(self) -> bool:
+        """True when conversations/current still match the detach snapshot."""
+        cp = self._detach_snap
+        if not cp:
+            return False
+        if len(self.conversations) != len(cp["conversations"]):
+            return False
+        live_cur, snap_cur = self.current, cp["current"]
+        if (live_cur is None) != (snap_cur is None):
+            return False
+        if live_cur is None:
+            return True
+        if live_cur.prompt != snap_cur.prompt:
+            return False
+        if len(live_cur.events) != len(snap_cur.events):
+            return False
+        if bool(live_cur.has_meta) != bool(snap_cur.has_meta):
+            return False
+        if text_events_joined(live_cur.events) != text_events_joined(snap_cur.events):
+            return False
+        return True
+
+    def catch_up_events(self, entries) -> bool:
+        """Replay journaled events through the bound incremental path.
+
+        Rewinds to the detach snapshot, then re-invokes the original
+        renderer methods so live rendering (not `repaint_from_state`)
+        paints the gap. Returns False when the journal cannot cover it.
+        """
+        entries = list(entries or [])
+        if not entries:
+            self._last_catch_up_n = 0
+            return True
+        if self._detach_snap is None:
+            return False
+        for item in entries:
+            if not item or item[0] not in _REPLAYABLE:
+                return False
+        live_convs = self.conversations
+        live_cur = self.current
+        live_proj = (
+            self._proj_event_count,
+            self._proj_joined_text,
+            self._proj_events_end,
+            self._struct_dirty,
+            self._retry_hint,
+            self._spinner_frame,
+        )
+        self._last_catch_up_n = 0
+        try:
+            self._restore_detach_snap()
+            self._replaying = True
+            self._render_pending = False
+            for kind, args, kwargs in entries:
+                fn = getattr(self, kind)
+                fn(*args, **(kwargs or {}))
+                self._last_catch_up_n += 1
+            self._journal = []
+            return True
+        except Exception:
+            self.conversations = live_convs
+            self.current = live_cur
+            (self._proj_event_count, self._proj_joined_text,
+             self._proj_events_end, self._struct_dirty,
+             self._retry_hint, self._spinner_frame) = live_proj
+            self._last_catch_up_n = 0
+            return False
+        finally:
+            self._replaying = False
+
+    def _restore_detach_snap(self) -> None:
+        """Replace live conversations/current with clones of the detach snapshot."""
+        cp = self._detach_snap or {}
+        self.conversations = [_clone_conv(c) for c in cp.get("conversations") or []]
+        self.current = _clone_conv(cp.get("current"))
+        self.restore_detach_projection()
+        self._render_pending = False
+
+    def _mark_buffer_dirty(self, kind, args=(), kwargs=None) -> None:
+        """Bump dirty; journal the call while viewless so catch-up can replay it."""
+        self._dirty += 1
+        if self._replaying:
+            return
+        if not self._has_view():
+            self._journal.append((kind, tuple(args), dict(kwargs or {})))
+
     # --- turn API ----------------------------------------------------------
 
     def prompt(self, text, context_names=None, context_refs=None):
         """Start a user turn. Viewless: records conversation, no buffer write."""
+        self._mark_buffer_dirty(
+            "prompt", (text,),
+            {"context_names": context_names, "context_refs": context_refs})
         if self._has_view():
             self.owner.show(focus=False)
         self._render_pending = False
@@ -271,6 +403,9 @@ class TurnRenderer:
             self.current.events.append(tool_call)
         session = get_session_for_view(self.owner.view)
         apply_tool_side_effects(self.current, name, tool_input, session)
+        self._mark_buffer_dirty(
+            "tool", (name,),
+            {"tool_input": tool_input, "tool_id": tool_id, "background": background})
         self._struct_dirty = True
         self._render_current()
 
@@ -306,6 +441,8 @@ class TurnRenderer:
             if self.current and not is_host_control_tool(name):
                 self.current.events.append(ToolCall(
                     name=name, tool_input={}, status=DONE, result=result, id=tool_id))
+                self._mark_buffer_dirty(
+                    "tool_done", (name,), {"result": result, "tool_id": tool_id})
                 self._struct_dirty = True
                 self._render_current()
             return
@@ -316,6 +453,8 @@ class TurnRenderer:
                 except Exception:
                     pass
             return
+        self._mark_buffer_dirty(
+            "tool_done", (name,), {"result": result, "tool_id": tool_id})
         primary = targets[0]
         cwd = None
         try:
@@ -349,6 +488,8 @@ class TurnRenderer:
             if self.current:
                 self.current.events.append(ToolCall(
                     name=name, tool_input={}, status=ERROR, result=result, id=tool_id))
+                self._mark_buffer_dirty(
+                    "tool_error", (name,), {"result": result, "tool_id": tool_id})
                 self._struct_dirty = True
                 self._render_current()
             return
@@ -356,9 +497,13 @@ class TurnRenderer:
         target.status = ERROR
         target.result = result
         if self._is_in_current(target):
+            self._mark_buffer_dirty(
+                "tool_error", (name,), {"result": result, "tool_id": tool_id})
             self._struct_dirty = True
             self._render_current()
         else:
+            self._mark_buffer_dirty(
+                "tool_error", (name,), {"result": result, "tool_id": tool_id})
             self._patch_tool_symbol(target, old_status)
 
     def text(self, content):
@@ -367,6 +512,7 @@ class TurnRenderer:
             return
         if content is None or content == "":
             return
+        self._mark_buffer_dirty("text", (content,))
         if self.current.events and isinstance(self.current.events[-1], str):
             self.current.events[-1] += content
         else:
@@ -391,6 +537,8 @@ class TurnRenderer:
         self.current.has_meta = True
         self.current.usage = usage
         self.current.working = False
+        self._mark_buffer_dirty(
+            "meta", (duration,), {"cost": cost, "usage": usage})
         self._render_pending = False
         self._struct_dirty = True
         self._do_render()
@@ -421,6 +569,7 @@ class TurnRenderer:
             self.owner.pending_question = None
         if show_banner:
             self.current.events.append("\n\n*[interrupted]*\n")
+        self._mark_buffer_dirty("interrupted", (), {"show_banner": show_banner})
         self._struct_dirty = True
         self._render_current()
 
@@ -443,6 +592,7 @@ class TurnRenderer:
             return
         self.current.todos = _open_todos(parsed)
         self.current.todos_all_done = not self.current.todos
+        self._mark_buffer_dirty("apply_plan_todos", (entries,))
         self._struct_dirty = True
         self._render_current()
 
@@ -450,6 +600,7 @@ class TurnRenderer:
         """Set the live retry hint. Viewless: records hint, no buffer write."""
         self._retry_hint = text or None
         if self.current and self.current.working:
+            self._mark_buffer_dirty("set_retry_hint", (text,))
             self._struct_dirty = True
             self._render_current()
 
@@ -537,6 +688,7 @@ class TurnRenderer:
                 if e is target:
                     del conv.events[i]
                     in_current = (conv is self.current)
+                    self._mark_buffer_dirty("remove_tool", (target,))
                     break
             else:
                 continue
@@ -673,6 +825,7 @@ class TurnRenderer:
 
     def clear(self, keep_supportive=True):
         """Clear the transcript. Viewless: drops conversations, no buffer write."""
+        self._mark_buffer_dirty("clear", (), {"keep_supportive": keep_supportive})
         c = self.owner.composer
         was_input_mode = c.is_input_mode()
         sess = get_session_for_view(self.owner.view)
@@ -810,6 +963,7 @@ class TurnRenderer:
         c._input_start = 0
         c._input_area_start = 0
         self._render_pending = False
+        self._mark_buffer_dirty("clear_keep_last")
         self._struct_dirty = True
         self._auto_scroll = True
         try:
@@ -867,6 +1021,7 @@ class TurnRenderer:
                     had_pending = True
             if had_pending:
                 self.current.events.append("\n\n*[session reconnected]*\n")
+                self._mark_buffer_dirty("reset_active_states", (), {"soft": False})
                 self._struct_dirty = True
                 self._render_current()
         view = self.owner.view
@@ -1587,6 +1742,69 @@ class TurnRenderer:
                 self._turn_context_phantom_set.update([])
             except Exception:
                 pass
+
+
+_REPLAYABLE = frozenset((
+    "prompt", "text", "tool", "tool_done", "tool_error",
+    "meta", "interrupted", "apply_plan_todos", "set_retry_hint",
+    "clear", "clear_keep_last", "reset_active_states",
+))
+
+
+def _clone_conv(conv):
+    """Deep-ish copy of a Conversation so catch-up can rewind without aliasing."""
+    if conv is None:
+        return None
+    from dataclasses import replace
+    events = []
+    for e in conv.events:
+        if isinstance(e, ToolCall):
+            tin = e.tool_input
+            events.append(ToolCall(
+                name=e.name,
+                tool_input=dict(tin) if isinstance(tin, dict) else tin,
+                status=e.status,
+                result=e.result,
+                id=e.id,
+            ))
+        else:
+            events.append(e)
+    todos = []
+    for t in conv.todos or []:
+        try:
+            todos.append(replace(t))
+        except Exception:
+            todos.append(t)
+    goal = None
+    if conv.goal is not None:
+        try:
+            goal = replace(conv.goal)
+        except Exception:
+            goal = conv.goal
+    usage = dict(conv.usage) if isinstance(conv.usage, dict) else conv.usage
+    region = conv.region
+    if region is not None:
+        try:
+            region = tuple(region)
+        except Exception:
+            pass
+    return Conversation(
+        prompt=conv.prompt,
+        events=events,
+        todos=todos,
+        todos_all_done=conv.todos_all_done,
+        goal=goal,
+        working=conv.working,
+        duration=conv.duration,
+        has_meta=conv.has_meta,
+        usage=usage,
+        region=region,
+        context_names=list(conv.context_names or []),
+        context_refs=[
+            dict(r) if isinstance(r, dict) else r
+            for r in (conv.context_refs or [])
+        ],
+    )
 
 
 def _R(a, b):

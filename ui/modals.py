@@ -57,6 +57,7 @@ class ModalUI:
         self._last_allowed_tool = None
         self._last_allowed_time = 0.0
         self._perm_timeout_token = 0
+        self._region_stash = None  # type: Optional[dict]
 
     def _has_view(self) -> bool:
         view = self.owner.view
@@ -100,8 +101,15 @@ class ModalUI:
             out.append(self.pending_question.descriptor())
         return out
 
+    def _bump_dirty(self) -> None:
+        """Mark the session dirty so a later attach does not take the clean path."""
+        r = getattr(self.owner, "renderer", None)
+        if r is not None:
+            r.mark_chrome_dirty()
+
     def drop_view_chrome(self) -> None:
         """Erase named regions/phantoms on the bound view, then null offsets."""
+        self._stash_regions()
         view = self.owner.view
         if view:
             for key in (
@@ -127,6 +135,72 @@ class ModalUI:
                     except Exception:
                         pass
         self.drop_regions()
+
+    def _stash_regions(self) -> None:
+        stash = {}  # type: dict
+        if self.pending_permission:
+            stash["permission"] = (
+                self.pending_permission.region,
+                dict(self.pending_permission.button_regions),
+            )
+        if self.pending_plan:
+            stash["plan"] = (
+                self.pending_plan.region,
+                dict(self.pending_plan.button_regions),
+            )
+        if self.pending_question:
+            stash["question"] = (
+                self.pending_question.region,
+                dict(self.pending_question.button_regions),
+            )
+        self._region_stash = stash or None
+
+    def restore_stashed_regions(self) -> None:
+        """Re-apply modal region tuples after an exact buffer restore."""
+        stash = self._region_stash
+        if not stash:
+            return
+        view = self.owner.view
+        perm = self.pending_permission
+        if perm and "permission" in stash:
+            region, buttons = stash["permission"]
+            perm.region = region
+            perm.button_regions = dict(buttons or {})
+            if view and region and sublime is not None:
+                try:
+                    self.owner.sheet.set_hidden_region(
+                        keys.PERM_BLOCK, region[0], region[1])
+                    for btn_type, (bs, be) in perm.button_regions.items():
+                        view.add_regions(
+                            "%s%s" % (keys.PERM_BTN_PREFIX, btn_type),
+                            [sublime.Region(bs, be)], "", "",
+                            getattr(sublime, "DRAW_NO_OUTLINE", 0),
+                        )
+                except Exception:
+                    pass
+        plan = self.pending_plan
+        if plan and "plan" in stash:
+            region, buttons = stash["plan"]
+            plan.region = region
+            plan.button_regions = dict(buttons or {})
+            if view and region and sublime is not None:
+                try:
+                    self.owner.sheet.set_hidden_region(
+                        keys.PLAN_BLOCK, region[0], region[1])
+                except Exception:
+                    pass
+        q = self.pending_question
+        if q and "question" in stash:
+            region, buttons = stash["question"]
+            q.region = region
+            q.button_regions = dict(buttons or {})
+            if view and region and sublime is not None:
+                try:
+                    self.owner.sheet.set_hidden_region(
+                        keys.QUESTION_BLOCK, region[0], region[1])
+                except Exception:
+                    pass
+        self._region_stash = None
 
     def drop_regions(self) -> None:
         """Invalidate stored region tuples. Live request objects are kept."""
@@ -160,6 +234,9 @@ class ModalUI:
         Resume after interrupt must not restore asking. Does not fire
         callbacks — the old turn's waiters are gone.
         """
+        if (self.pending_question or self.pending_permission
+                or self.pending_plan or self._permission_queue):
+            self._bump_dirty()
         if self.pending_question:
             try:
                 self.clear_question()
@@ -287,9 +364,11 @@ class ModalUI:
         )
         if self.pending_permission and self.pending_permission.callback:
             self._permission_queue.append(perm)
+            self._bump_dirty()
             self._notify_detached("permission")
             return
         self.pending_permission = perm
+        self._bump_dirty()
         self.owner.composer.hide_composer_for_modal()
         self._render_permission()
         self.owner.composer.scroll_to_end()
@@ -409,6 +488,7 @@ class ModalUI:
     def remove_permission_block(self):
         if not self.pending_permission:
             return
+        self._bump_dirty()
         if not self._has_view():
             self.pending_permission.region = None
             self.pending_permission.button_regions = {}
@@ -658,6 +738,7 @@ class ModalUI:
             id=plan_id, plan_file=plan_file,
             allowed_prompts=allowed_prompts, callback=callback,
         )
+        self._bump_dirty()
         self.owner.composer.hide_composer_for_modal()
         self._render_plan_approval()
         self.owner.composer.scroll_to_end()
@@ -709,6 +790,7 @@ class ModalUI:
     def clear_plan_approval(self):
         if not self.pending_plan:
             return
+        self._bump_dirty()
         if self._has_view():
             clear_pending_block(
                 self.owner.view,
@@ -777,6 +859,7 @@ class ModalUI:
             self.owner.show(focus=False)
         self.pending_question = QuestionRequest(
             qid=qid, questions=questions, callback=callback)
+        self._bump_dirty()
         self.owner.composer.hide_composer_for_modal()
         self.render_question()
         self.owner.composer.scroll_to_end(force=True)
@@ -904,6 +987,7 @@ class ModalUI:
     def clear_question(self, summary=""):
         if not self.pending_question:
             return
+        self._bump_dirty()
         if not self._has_view():
             self.pending_question.region = None
             self.pending_question.button_regions = {}

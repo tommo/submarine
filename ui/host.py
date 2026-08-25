@@ -25,6 +25,23 @@ PLACEHOLDER = "(no session)\n"
 
 _INSTANCES = {}  # type: dict
 _mode_override = None  # type: Optional[str]
+_CHROME_DEFER = True
+
+
+def set_chrome_defer(on):
+    # type: (bool) -> None
+    """Test hook: False runs post-paint chrome inline. Production never calls this."""
+    global _CHROME_DEFER
+    _CHROME_DEFER = bool(on)
+
+
+def _after_paint(fn):
+    # type: (Any) -> None
+    """Run `fn` after the swap paint. Tests with no sublime run it inline."""
+    if _CHROME_DEFER and sublime is not None:
+        sublime.set_timeout(fn, 0)
+    else:
+        fn()
 
 
 def set_ui_mode_override(mode):
@@ -104,9 +121,10 @@ class HostView(object):
     @classmethod
     def reset(cls):
         # type: () -> None
-        global _mode_override
+        global _mode_override, _CHROME_DEFER
         _INSTANCES.clear()
         _mode_override = None
+        _CHROME_DEFER = True
 
     @classmethod
     def forget_view_id(cls, view_id):
@@ -267,11 +285,13 @@ class HostView(object):
             remember_active_session(window, host)
         except Exception:
             pass
-        try:
-            from ui.session_list import schedule_session_list_refresh
-            schedule_session_list_refresh()
-        except Exception:
-            pass
+        def _list_refresh():
+            try:
+                from ui.session_list import schedule_session_list_refresh
+                schedule_session_list_refresh()
+            except Exception:
+                pass
+        _after_paint(_list_refresh)
         return True
 
     def _detach_session(self, session):
@@ -300,16 +320,22 @@ class HostView(object):
         output = getattr(session, "output", None)
         if output is None:
             return
-        try:
-            output.repaint_from_state()
-        except Exception:
-            pass
-        try:
-            persist = getattr(session, "_persist_view_identity", None)
-            if callable(persist):
-                persist()
-        except Exception:
-            pass
+        snap = getattr(session, "surface", None) or {}
+        if not snap:
+            snap = getattr(output, "_surface", None) or {}
+        kind = None
+        fast = getattr(output, "fast_paint", None)
+        if callable(fast):
+            try:
+                kind = fast(snap)
+            except Exception:
+                kind = None
+        if kind not in ("clean", "dirty", "fallback"):
+            try:
+                output.repaint_from_state()
+            except Exception:
+                pass
+            kind = "fallback"
         try:
             backend = getattr(session, "backend", None) or "claude"
             keys.write_setting(host.settings(), keys.BACKEND, backend)
@@ -318,50 +344,64 @@ class HostView(object):
                 sheet.apply_theme(backend)
         except Exception:
             pass
-        try:
-            name = getattr(session, "display_name", None) or getattr(session, "name", None)
+        if kind != "clean":
+            restore = getattr(output, "surface_restore", None)
+            if callable(restore):
+                try:
+                    restore(snap)
+                except Exception:
+                    pass
+        persist = getattr(session, "_persist_view_identity", None)
+        name = getattr(session, "display_name", None) or getattr(session, "name", None)
+
+        def _stamps():
+            if callable(persist):
+                try:
+                    persist()
+                except Exception:
+                    pass
             if name:
-                output.set_name(name)
-        except Exception:
-            pass
-        try:
-            modals = getattr(output, "modals", None)
-            if modals is not None and hasattr(modals, "rerender_pending"):
-                modals.rerender_pending()
-        except Exception:
-            pass
-        snap = getattr(session, "surface", None) or {}
-        if not snap:
-            snap = getattr(output, "_surface", None) or {}
-        restore = getattr(output, "surface_restore", None)
-        if callable(restore):
-            try:
-                restore(snap)
-            except Exception:
-                pass
+                try:
+                    output.set_name(name)
+                except Exception:
+                    pass
+
+        _after_paint(_stamps)
 
     def _finish_bound(self, window, session, host, focus=True):
         # type: (Any, Any, Any, bool) -> None
-        setter = getattr(session, "_set_unread", None)
-        if callable(setter):
-            try:
-                setter(False)
-            except Exception:
-                pass
-        else:
-            session.unread = False
-            chrome = getattr(session, "chrome", None) or getattr(session, "output", None)
-            if chrome is not None and hasattr(chrome, "set_unread"):
+        def _chrome():
+            setter = getattr(session, "_set_unread", None)
+            if callable(setter):
                 try:
-                    chrome.set_unread(False)
+                    setter(False)
                 except Exception:
                     pass
-        try:
-            output = getattr(session, "output", None)
-            if output is not None and hasattr(output, "refresh_tab_title"):
-                output.refresh_tab_title()
-        except Exception:
-            pass
+            else:
+                session.unread = False
+                chrome = getattr(session, "chrome", None) or getattr(
+                    session, "output", None)
+                if chrome is not None and hasattr(chrome, "set_unread"):
+                    try:
+                        chrome.set_unread(False)
+                    except Exception:
+                        pass
+            try:
+                output = getattr(session, "output", None)
+                if output is not None and hasattr(output, "refresh_tab_title"):
+                    output.refresh_tab_title()
+            except Exception:
+                pass
+            try:
+                queued = list(getattr(session, "_queued_prompts", None) or [])
+                chrome = getattr(session, "chrome", None) or getattr(
+                    session, "output", None)
+                if queued and chrome is not None and hasattr(chrome, "queue_chips"):
+                    chrome.queue_chips(queued)
+            except Exception:
+                pass
+
+        _after_paint(_chrome)
         if focus:
             try:
                 window.focus_view(host)

@@ -57,6 +57,10 @@ class SubmarineOutputView(FormatHelpers):
         self._tasks_expanded = False
         self._sel_guard = False
 
+    def mark_dirty(self) -> None:
+        """Bump the session dirty counter (chrome / queue / modal)."""
+        self.renderer.mark_chrome_dirty()
+
     def _has_view(self) -> bool:
         view = self.sheet.view
         if not view:
@@ -156,6 +160,7 @@ class SubmarineOutputView(FormatHelpers):
             pass
         self._tasks_expanded = tasks_expanded
         self.renderer._tasks_expanded = tasks_expanded
+        full_text, transcript_end = self._buffer_snapshot_text()
         surface = {
             "draft": draft,
             "input_mode": input_mode,
@@ -163,6 +168,12 @@ class SubmarineOutputView(FormatHelpers):
             "caret": caret,
             "tasks_expanded": tasks_expanded,
             "modals": self.modals.descriptors(),
+            "buffer_text": full_text,
+            "transcript_end": transcript_end,
+            "dirty": int(self.renderer._dirty),
+            "input_start": int(c._input_start or 0) if input_mode else 0,
+            "input_area_start": int(getattr(c, "_input_area_start", 0) or 0)
+            if input_mode else 0,
         }
         prev = self._surface or {}
         # If the composer was already peeled (HostView/QuickHost exit input
@@ -171,7 +182,15 @@ class SubmarineOutputView(FormatHelpers):
             surface["input_mode"] = True
             surface["draft"] = prev.get("draft") or surface["draft"]
             surface["caret"] = prev.get("caret", surface["caret"])
+            if prev.get("input_start"):
+                surface["input_start"] = prev.get("input_start")
+            if prev.get("input_area_start"):
+                surface["input_area_start"] = prev.get("input_area_start")
         self._surface = surface
+        try:
+            self.renderer.snapshot_detach()
+        except Exception:
+            pass
         return dict(surface)
 
     def surface_restore(self, surface: dict) -> None:
@@ -221,6 +240,182 @@ class SubmarineOutputView(FormatHelpers):
                     (float(scroll[0]), float(scroll[1])), False)
             except Exception:
                 pass
+
+    def restore_buffer_snapshot(self, text: str) -> None:
+        """Replace the bound buffer with a detach snapshot. One replace."""
+        view = self.view
+        if not view:
+            return
+        try:
+            end = view.size()
+        except Exception:
+            end = 0
+        self.sheet.replace(0, end, text or "")
+
+    def fast_paint(self, surface: dict) -> str:
+        """Attach paint: clean snapshot, incremental catch-up, or full repaint."""
+        try:
+            from plat.log import log_plugin
+        except ImportError:
+            def log_plugin(message):  # type: ignore
+                print("[Submarine] %s" % message)
+
+        surface = dict(surface or {})
+        text = surface.get("buffer_text")
+        journal = list(self.renderer._journal or [])
+        if not isinstance(text, str) or not self._has_view():
+            if self.conversations or self.current or journal:
+                log_plugin("swap fallback: missing snapshot")
+            self.repaint_from_state()
+            return "fallback"
+
+        snap_dirty = surface.get("dirty")
+        try:
+            current_dirty = int(self.renderer._dirty)
+        except Exception:
+            current_dirty = None
+        clean = (
+            snap_dirty == current_dirty
+            and not journal
+        )
+
+        if clean:
+            self.restore_buffer_snapshot(text)
+            self.renderer.restore_detach_projection()
+            self.renderer.stamp_live_regions()
+            try:
+                self.modals.restore_stashed_regions()
+            except Exception:
+                pass
+            self._rehydrate_surface(surface)
+            return "clean"
+
+        # Instant old content, then catch-up on the transcript span.
+        end = surface.get("transcript_end")
+        if isinstance(end, int) and 0 <= end <= len(text):
+            base = text[:end]
+        else:
+            base = text
+        self.restore_buffer_snapshot(base)
+
+        if journal:
+            ok = self.renderer.catch_up_events(journal)
+            if not ok:
+                log_plugin("swap fallback: journal cannot cover gap")
+                self.repaint_from_state()
+                return "fallback"
+            self.renderer.stamp_live_regions()
+            return "dirty"
+
+        if not self.renderer.state_matches_detach_snap():
+            log_plugin("swap fallback: snapshot cannot cover gap")
+            self.repaint_from_state()
+            return "fallback"
+
+        self.renderer.restore_detach_projection()
+        self.renderer.stamp_live_regions()
+        try:
+            self.modals.restore_stashed_regions()
+        except Exception:
+            pass
+        return "dirty"
+
+    def _rehydrate_surface(self, surface: dict) -> None:
+        """Restore composer/modal offsets after an exact buffer restore."""
+        surface = dict(surface or {})
+        self._surface = dict(surface)
+        if not self._has_view():
+            if "draft" in surface:
+                self.composer._detached_draft = surface.get("draft") or ""
+            return
+        view = self.view
+        tasks_expanded = bool(surface.get("tasks_expanded"))
+        self._tasks_expanded = tasks_expanded
+        self.renderer._tasks_expanded = tasks_expanded
+        try:
+            keys.write_setting(view.settings(), keys.TASKS_EXPANDED, tasks_expanded)
+        except Exception:
+            pass
+        want_input = bool(surface.get("input_mode"))
+        draft = surface.get("draft") or ""
+        if want_input:
+            c = self.composer
+            c._detached_draft = draft
+            c._input_mode = True
+            try:
+                c._input_start = max(0, int(surface.get("input_start") or 0))
+            except Exception:
+                c._input_start = 0
+            try:
+                c._input_area_start = max(
+                    0, int(surface.get("input_area_start") or c._input_start))
+            except Exception:
+                c._input_area_start = c._input_start
+            try:
+                keys.write_setting(view.settings(), keys.INPUT_MODE, True)
+            except Exception:
+                pass
+            caret = surface.get("caret")
+            if caret is not None:
+                try:
+                    c._draft_caret_off = max(0, int(caret))
+                    c.restore_draft_caret(force=True)
+                except Exception:
+                    pass
+            try:
+                c._update_composer_pad_phantom()
+            except Exception:
+                pass
+        elif draft:
+            self.composer._detached_draft = draft
+        scroll = surface.get("scroll")
+        if scroll:
+            try:
+                self.view.set_viewport_position(
+                    (float(scroll[0]), float(scroll[1])), False)
+            except Exception:
+                pass
+
+    def _buffer_snapshot_text(self):
+        """Return (full buffer text, transcript_end before composer/modals)."""
+        view = self.view
+        if not view:
+            return "", 0
+        size = 0
+        try:
+            size = view.size()
+        except Exception:
+            size = 0
+        full = ""
+        try:
+            if sublime is not None:
+                full = view.substr(sublime.Region(0, size))
+            else:
+                full = view.substr(_span(0, size))
+        except Exception:
+            try:
+                full = view.substr(None)
+            except Exception:
+                full = ""
+        cuts = []
+        try:
+            peel = self.composer.peel_start()
+            if peel is not None:
+                cuts.append(int(peel))
+        except Exception:
+            pass
+        try:
+            trail = self.modals.trailing_ui_start()
+            if trail is not None:
+                cuts.append(int(trail))
+        except Exception:
+            pass
+        end = min(cuts) if cuts else len(full)
+        if end < 0:
+            end = 0
+        if end > len(full):
+            end = len(full)
+        return full, end
 
     @property
     def conversations(self):
@@ -529,6 +724,7 @@ class SubmarineOutputView(FormatHelpers):
 
     def queue_chips(self, prompts=None):
         """Queued-prompt chips. Viewless: no-op."""
+        self.mark_dirty()
         items = list(prompts or [])
         if not items:
             self._set_banner("_queue_phantom", keys.PHANTOM_QUEUE, "", False)
@@ -952,6 +1148,16 @@ class SubmarineOutputView(FormatHelpers):
     def _format_tool_detail(self, tool):
         from .formatters import format_tool_detail
         return format_tool_detail(self, tool)
+
+
+def _span(a, b):
+    if sublime is not None:
+        return sublime.Region(a, b)
+    return type("R", (), {
+        "a": a, "b": b,
+        "begin": lambda self: min(self.a, self.b),
+        "end": lambda self: max(self.a, self.b),
+    })()
 
 
 # Back-compat alias used by tests / restore helpers
