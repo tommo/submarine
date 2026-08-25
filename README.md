@@ -131,7 +131,7 @@ All commands available via Command Palette (`Cmd+Shift+P`): type "Submarine"
 | Devtools Reload Package | - | Soft-reload the package |
 | Devtools Reload Package (hard) | - | Full ignored_packages cycle |
 | New Session | - | Start a fresh session (default backend) |
-| Switch Session… | `Cmd+\` | Quick panel: active, new, profiles, backends (`with Grok…` / `with Kimi Code…` show live subscription usage from Service Manager when available). `Cmd+Alt+\` is an alias |
+| Switch Session… | `Cmd+\` | Quick panel: active sessions, new session, backends (`with Grok…` / `with Kimi Code…` show live subscription usage from Service Manager when available). `Cmd+Alt+\` is an alias |
 | Session List | - | Scratch list of live + saved sessions |
 | Session List Reveal (keep focus) | - | Reveal list without stealing focus |
 | Open Session JSONL | - | Open this session’s transcript |

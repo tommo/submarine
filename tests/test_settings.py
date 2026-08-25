@@ -74,6 +74,34 @@ class TestLoadProfiles(unittest.TestCase):
         self.assertNotIn("should", profiles)
         self.assertNotIn("checkpoints", profiles)
 
+    def test_strips_persona_keys_from_profile(self):
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        jsonio.safe_json_dump({
+            "profiles": {
+                "work": {
+                    "model": "opus",
+                    "persona_id": 9,
+                    "persona_session_id": "ps",
+                    "persona_url": "http://gone.example",
+                    "system_prompt": "hi",
+                },
+            },
+        }, path)
+        original_dir = settings.USER_PROFILES_DIR
+        empty_home = tempfile.mkdtemp()
+        try:
+            settings.USER_PROFILES_DIR = empty_home
+            profiles = settings.load_profiles(path)
+        finally:
+            settings.USER_PROFILES_DIR = original_dir
+            os.remove(path)
+        self.assertEqual(profiles["work"]["model"], "opus")
+        self.assertEqual(profiles["work"]["system_prompt"], "hi")
+        self.assertNotIn("persona_id", profiles["work"])
+        self.assertNotIn("persona_session_id", profiles["work"])
+        self.assertNotIn("persona_url", profiles["work"])
+
 
 if __name__ == "__main__":
     unittest.main()

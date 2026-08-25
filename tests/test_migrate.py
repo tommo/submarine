@@ -64,13 +64,28 @@ def test_normalize_keeps_unknown_keys():
     rec = {
         "session_id": "x",
         "state": "closed",
-        "persona_id": "keep-me",
         "weird": {"nested": 2},
     }
     out = normalize_record(rec)
-    assert out["persona_id"] == "keep-me"
     assert out["weird"] == {"nested": 2}
     assert set(out) == set(rec)
+
+
+def test_normalize_drops_persona_keys():
+    rec = {
+        "session_id": "x",
+        "state": "closed",
+        "persona_id": "gone",
+        "persona_session_id": "sess",
+        "persona_url": "http://gone.example",
+        "name": "keep",
+    }
+    out = normalize_record(rec)
+    assert out["name"] == "keep"
+    assert "persona_id" not in out
+    assert "persona_session_id" not in out
+    assert "persona_url" not in out
+    assert rec["persona_id"] == "gone"
 
 
 # ── merge ────────────────────────────────────────────────────────────────────

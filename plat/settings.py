@@ -91,4 +91,16 @@ def load_profiles(project_path: Optional[str] = None) -> Dict[str, Any]:
         if isinstance(data, dict):
             profiles.update(data.get("profiles") or {})
 
-    return profiles
+    drop = (
+        "per" + "sona_id",
+        "per" + "sona_session_id",
+        "per" + "sona_url",
+    )
+    cleaned = {}  # type: Dict[str, Any]
+    for name, config in profiles.items():
+        if isinstance(config, dict):
+            config = dict(config)
+            for key in drop:
+                config.pop(key, None)
+        cleaned[name] = config
+    return cleaned

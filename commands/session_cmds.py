@@ -614,10 +614,6 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
             actions.append(("restart", active_session))
 
         profiles = load_profiles(_project_profiles_path(self.window))
-        for name, config in profiles.items():
-            desc = config.get("description", "%s model" % config.get("model", "default"))
-            items.append(["😶 %s%s" % (backend_prefix, name), desc])
-            actions.append(("profile", config))
 
         _mlabel = " [%s]" % model if model else ""
         items.append([
@@ -710,8 +706,6 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
                     self.window,
                     profile=({"model": model} if model else None),
                     backend=backend)
-            elif action == "profile":
-                create_session(self.window, profile=data, backend=backend)
             elif action == "fork" and data and data.session_id:
                 from core.session import fork_session_title
                 forked = create_session(

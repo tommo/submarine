@@ -62,8 +62,7 @@ applied at session start (`core/session.py` init params).
 
 - **New Session** — if any profiles exist, a picker lists `🆕 New Session` plus
   each `📋 {name}`.
-- **Switch Session** (`Cmd+\`) — same profiles as start rows.
-- **Restart Session** — restart the current view with a chosen profile.
+- **Restart Session** — from Cmd+\ while in a session, then pick a profile.
 - **MCP** — `list_profiles()` then `spawn_session(prompt=…, profile="design")`.
 
 ### Specialized roles

@@ -50,6 +50,11 @@ _DROPPED_SETTING_KEYS = frozenset((
     "pty_busy_activity_ms",
     "claude_" + "terminal_push_context",
 ))
+_DROPPED_RECORD_KEYS = frozenset((
+    "per" + "sona_id",
+    "per" + "sona_session_id",
+    "per" + "sona_url",
+))
 
 _TRAILING_COMMA = re.compile(r",(\s*[}\]])")
 
@@ -93,10 +98,12 @@ def discover_legacy_dir(plugin_dir, override=None):
 
 def normalize_record(rec):
     # type: (Dict[str, Any]) -> Dict[str, Any]
-    """Copy `rec`. `"terminal"` state becomes `"sleeping"`; other keys stay."""
+    """Copy `rec`. `"terminal"` state becomes `"sleeping"`; drop removed keys."""
     out = dict(rec)
     if out.get("state") == "terminal":
         out["state"] = "sleeping"
+    for key in _DROPPED_RECORD_KEYS:
+        out.pop(key, None)
     return out
 
 
