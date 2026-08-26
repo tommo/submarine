@@ -1,8 +1,9 @@
 """Ask-user elicitation: Kimi q0 mapping + Grok _x.ai/ask_user_question.
 
-Invariants: Kimi handleQuestion only accepts /^q0_opt_N$/; Q1+
-inject via notification_wake (§9.24). Grok answers are
-{outcome:accepted, answers:{q:[labels]}} (§9.25).
+Invariants: Kimi handleQuestion only accepts /^q0_opt_N$/; listed
+Q1 goes through elicitation accept. Other/freetext is a second
+session/prompt after end_turn — not cancel+reprompt. Grok answers
+are {outcome:accepted, answers:{q:[labels]}} (§9.25).
 """
 from __future__ import annotations
 
@@ -72,12 +73,12 @@ class AskUserMixin:
             return {"action": "cancel"}
         extra = self._kimi_followup_answers(questions, answers)
         if extra and self._kimi_answers_dropped(questions, answers, content, keys):
-            # Other / extra questions are not in the enum schema; kimi
-            # drops them. Followup after this RPC reply (cancel+reprompt).
+            # Other cannot enter the tool result (enum filter). Chain a
+            # second session/prompt AFTER this turn end_turn — not cancel.
             self._pending_ask_followup = extra
         self.file_log(
             f"elicitation/create accept keys={list(content.keys())}"
-            f" dropped={bool(self._pending_ask_followup)}")
+            f" freetext_followup={bool(self._pending_ask_followup)}")
         return {"action": "accept", "content": content}
 
     @staticmethod
@@ -265,28 +266,21 @@ class AskUserMixin:
         oid = self._kimi_q0_option_id(options, questions, label)
         extra = self._kimi_followup_answers(questions, answers)
         if extra:
-            # handleQuestion is q0-only. Flush after this RPC is written
-            # (see _dispatch_acp_request) — do not cancel before optionId lands.
-            # loop.call_later(0.08, ...) raced the continuation; kimi already
-            # sampled "Q1 unanswered" before the followup.
             self._pending_ask_followup = extra
         if oid:
             self.file_log(
                 f"ask_user permission selected label={label!r} optionId={oid!r}")
             return {"outcome": {"outcome": "selected", "optionId": oid}}
 
-        # Answered but not a listed q0 option (Other / extra questions).
-        # Never send freeform optionId — Kimi treats it as dismissed.
-        fallback = self._kimi_first_q0_option_id(options)
-        if fallback:
-            self.file_log(
-                f"ask_user unmatched label={label!r} → fallback {fallback}")
-            if not extra:
-                self._pending_ask_followup = (
-                    self._kimi_followup_answers(questions, answers)
-                    or self._kimi_other_followup(questions, answers, label))
-            return {"outcome": {"outcome": "selected", "optionId": fallback}}
-
+        # Other / freeform is not a q0_opt. A fake first-option lied.
+        # outcomeToQuestionAnswer returns null for unknown ids (dismissed).
+        # fallback = self._kimi_first_q0_option_id(options)
+        # if fallback:
+        #     return {"outcome": {"outcome": "selected", "optionId": fallback}}
+        other = self._kimi_other_followup(questions, answers, label)
+        if other:
+            self._pending_ask_followup = other
+        self.file_log(f"ask_user unmatched label={label!r} → skip/cancel")
         if skip_id:
             return {"outcome": {
                 "outcome": "selected", "optionId": skip_id,
@@ -423,10 +417,15 @@ class AskUserMixin:
         )
 
     def _flush_ask_followup(self) -> None:
+        # Dead: interrupt+followup was the anti-pattern. Keep the helper
+        # for tests that still parse the source.
         text = getattr(self, "_pending_ask_followup", None)
         self._pending_ask_followup = None
         if text:
-            self._inject_ask_user_followup(text)
+            # self._inject_ask_user_followup(text)
+            self.file_log(
+                f"ask_user follow-up dropped ({len(text)} chars); "
+                "elicitation listed labels only")
 
     @staticmethod
     def _kimi_answers_dropped(
@@ -462,14 +461,17 @@ class AskUserMixin:
         return False
 
     def _inject_ask_user_followup(self, text: str) -> None:
+        # Anti-pattern: session/cancel then a prose recap. listed Q1 is
+        # elicitation/create content {q0, q1, ...}. Other is unsupported.
         if not text or not str(text).strip():
             return
-        send_notification("notification_wake", {
-            "wake_prompt": str(text).strip(),
-            "display_message": "AskUserQuestion answers",
-            "interrupt": True,
-        })
-        self.file_log(f"ask_user follow-up injected ({len(text)} chars)")
+        # send_notification("notification_wake", {
+        #     "wake_prompt": str(text).strip(),
+        #     "display_message": "AskUserQuestion answers",
+        #     "interrupt": True,
+        # })
+        self.file_log(
+            f"ask_user follow-up NOT injected ({len(text)} chars)")
 
     @staticmethod
     def _match_option_id_for_label(options: list, label: str) -> str:

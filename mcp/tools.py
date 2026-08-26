@@ -114,7 +114,7 @@ def _tool_file_codegen(args: Dict[str, Any]) -> str:
 def _spawn_codegen(args: Dict[str, Any]) -> str:
     parts = ["prompt=%r" % (args.get("prompt") or "")]
     for key in (
-        "name", "profile", "backend",
+        "name", "profile", "backend", "model",
         "fork_from_agent_id", "_caller_agent_id",
     ):
         if args.get(key) is not None:
@@ -383,15 +383,16 @@ TOOL_TABLE = {
             "\n"
             "ALWAYS address workers by agent_id.\n"
             "Workflow for base context then workers:\n"
-            "  1) spawn_session(prompt=…, name=\"explorer\", backend=X)  # returns agent_id\n"
-            "  2) spawn workers with fork_from_agent_id=<explorer agent_id>\n"
+            "  1) spawn_session(prompt=…, name=\"explorer\", backend=X, model=Y)  # returns agent_id\n"
+            "  2) spawn workers with fork_from_agent_id=<explorer agent_id>  # keeps X/Y unless model= set\n"
             "\n"
             "Fork rules:\n"
             "  - fork_current: fork THIS (caller) session\n"
             "  - fork_from_agent_id: fork any open session\n"
             "  - Prefer list_sessions + send_to_session(agent_id=…) over re-spawning.\n"
             "\n"
-            "Host appends signal_complete reminder. Parent linkage uses parent_agent_id."
+            "Host appends signal_complete reminder. Parent linkage uses parent_agent_id.\n"
+            "Child reports done via signal_complete only — not send_to_session(parent)."
         ),
         "schema": {
             "type": "object",
@@ -402,6 +403,14 @@ TOOL_TABLE = {
                 "backend": {
                     "type": "string",
                     "description": "Optional: backend (claude, codex, grok, …). When forking, defaults to source.",
+                },
+                "model": {
+                    "type": "string",
+                    "description": (
+                        "Optional: submodel id from list_backends models "
+                        "(e.g. deepseek-v4-flash-vision-exp). Forking without "
+                        "this keeps the source session's model."
+                    ),
                 },
                 "fork_current": {"type": "boolean", "description": "Fork caller's history into the child (default false)."},
                 "fork_from_agent_id": {
@@ -419,13 +428,20 @@ TOOL_TABLE = {
     },
     "send_to_session": {
         "description": (
-            "Send a message by stable agent_id. The target sees a "
-            "[from agent <your agent_id>] header (or [from user] if no caller "
-            "session) so it can tell ◎ user input from inter-agent mail; reply "
-            "with send_to_session(agent_id=that id). Always list_sessions first if "
-            "unsure. Sleeping workers auto-wake. If the target is mid-turn, "
-            "the prompt is queued and runs after the current turn — do not "
-            "wait for signal_complete to retry. Prefer reuse over spawn."
+            "Send a message by stable agent_id (preferred). Direct mail only — "
+            "mid-task steer, questions, follow-ups.\n"
+            "\n"
+            "Do NOT use this to tell a parent that a spawned child is done. "
+            "That is signal_complete (parent wait_for_subsession / host inject). "
+            "Not for parent/child session completion. "
+            "Mailing the same summary AND signaling completion duplicates the "
+            "parent's turn.\n"
+            "\n"
+            "The target sees a [from agent <your agent_id>] header (or "
+            "[from user] if no caller session). Reply with "
+            "send_to_session(agent_id=that id). Sleeping workers auto-wake. "
+            "Mid-turn: queued (sent=true); do not retry the same prompt. "
+            "Prefer reuse over spawn."
         ),
         "schema": {
             "type": "object",
@@ -662,16 +678,17 @@ TOOL_TABLE = {
     },
     "signal_complete": {
         "description": (
-            "Signal that this subsession has completed.\n"
+            "Signal that this spawned subsession has completed.\n"
             "\n"
-            "ONLY for sessions spawned via spawn_session. Host looks up "
-            "parent_agent_id from this sheet — do NOT search for parent ids. "
-            "session_id defaults to this MCP session (omit it). Host attaches "
-            "context_budget and notifies the parent only after *this* turn is "
-            "fully idle (so parallel toolcalls with your final message do not "
-            "wake the parent early). Prefer: finish your final summary text, "
-            "then call signal_complete alone — not in the same parallel batch "
-            "as other tools.\n"
+            "This IS the parent notification (wait_for_subsession / host inject). "
+            "Do NOT also send_to_session the parent with the same result_summary "
+            "— that doubles the parent's next turn.\n"
+            "\n"
+            "ONLY for spawn_session children. Host looks up parent from this "
+            "sheet — do NOT search for parent ids. Omit session_id. Host attaches "
+            "context_budget and notifies the parent only after *this* turn is idle. "
+            "Finish your summary text, then call signal_complete alone — not in "
+            "parallel with other tools.\n"
             "\n"
             "Example:\n"
             "  signal_complete(result_summary=\"Task done. Files: … Findings: …\")"
@@ -697,16 +714,18 @@ TOOL_TABLE = {
     },
     "wait_for_subsession": {
         "description": (
-            "Wait for a child agent to complete (host-local; fires on signal_complete).\n"
+            "Wait for a child agent to complete (host-local; fires on child's signal_complete).\n"
             "\n"
-            "Prefer agent_id from spawn_session. subsession_id is the "
-            "same value for new spawns.\n"
+            "This is the subscribe path. Do NOT also send_to_session yourself the same "
+            "wake_prompt — you will run that text twice.\n"
+            "\n"
+            "Prefer agent_id from spawn_session (stable).\n"
             "\n"
             "Example:\n"
             "  r = spawn_session(prompt=\"Design solution\", name=\"architect\")\n"
             "  wait_for_subsession(agent_id=r['agent_id'], wake_prompt=\"Architect done — review.\")\n"
             "\n"
-            "Child must call signal_complete when finished. Returns wait_id / notification_id."
+            "Child must signal_complete when finished (not send_to_session you). Returns wait_id."
         ),
         "schema": {
             "type": "object",

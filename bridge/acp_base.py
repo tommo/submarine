@@ -4,6 +4,9 @@ Historical importers (kimi_main, grok_main, tests) keep
 ``from acp_base import AcpBridge``. See ``bridge/acp/``.
 """
 from acp import AcpBridge, run_bridge
-from acp.util import apply_plain_terminal_env, strip_ansi
+from acp.util import _acp_is_compact_text, apply_plain_terminal_env, strip_ansi
 
-__all__ = ["AcpBridge", "run_bridge", "apply_plain_terminal_env", "strip_ansi"]
+__all__ = [
+    "AcpBridge", "run_bridge", "_acp_is_compact_text",
+    "apply_plain_terminal_env", "strip_ansi",
+]

@@ -183,6 +183,7 @@ class Session:
         store=None,  # type: Optional[SessionStore]
         rpc_factory=None,  # type: Optional[Callable]
         window=None,  # type: Any
+        model=None,  # type: Optional[str]
     ):
         self.output = output
         self.chrome = chrome
@@ -224,7 +225,7 @@ class Session:
         self.initial_context = initial_context
         self.effort = None  # type: Optional[str]
         self.available_models = []  # type: list
-        self.model = None  # type: Optional[str]
+        self.model = (str(model).strip() if model else None)  # type: Optional[str]
         self.name = None  # type: Optional[str]
         self.first_prompt = None  # type: Optional[str]
         self._recovered_title = None  # type: Optional[str]
@@ -417,6 +418,7 @@ class Session:
                     self.query_count = saved_q
         view_model = read_stamp(self.persist, STAMP_MODEL) if self.resume_id else None
         chosen_raw = resolve_init_model(
+            requested_model=self.model,
             profile_model=(self.profile.get("model") if self.profile else None),
             session_model=self.model,
             view_model=view_model,
@@ -1419,6 +1421,7 @@ class Session:
         self._compacting = True
         self.current_tool = "compact…"
         self.chrome.set_status("compacting…")
+        self._set_turn_phase("waiting")
 
     def _on_interrupt_settle(self, gen):
         # type: (int) -> None

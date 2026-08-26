@@ -24,6 +24,7 @@ from .registry import (
     new_agent_id,
     parent_notify_should_inject,
     resolve_init_model,
+    resolve_spawn_model,
     stamp_sender_prompt,
 )
 from .rewind import RewindService, is_synthetic_turn
@@ -60,6 +61,7 @@ __all__ = [
     "remove_saved_session",
     "rename_saved_session",
     "resolve_init_model",
+    "resolve_spawn_model",
     "save_bookmarks",
     "stamp_sender_prompt",
     "toggle_bookmark",

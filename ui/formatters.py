@@ -723,6 +723,9 @@ def _spawn_session(view, tool) -> str:
         bits.append(str(name)[:30])
     if backend and backend != "claude":
         bits.append(str(backend))
+    mid = inp.get("model") or ""
+    if mid:
+        bits.append(str(mid))
     if profile:
         bits.append("profile=%s" % profile)
     if inp.get("fork_current"):

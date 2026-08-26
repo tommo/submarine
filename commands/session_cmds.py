@@ -710,7 +710,7 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
                 from core.session import fork_session_title
                 forked = create_session(
                     self.window, resume_id=data.session_id, fork=True,
-                    backend=data.backend)
+                    backend=data.backend, model=getattr(data, "model", None))
                 if forked:
                     forked_name = fork_session_title(
                         getattr(data, "name", None) or "session")
@@ -829,7 +829,8 @@ class SubmarineForkCommand(sublime_plugin.WindowCommand):
             sublime.status_message("No active session to fork")
             return
         forked = create_session(
-            self.window, resume_id=s.session_id, fork=True, backend=s.backend)
+            self.window, resume_id=s.session_id, fork=True,
+            backend=s.backend, model=getattr(s, "model", None))
         from core.session import fork_session_title
         forked_name = fork_session_title(s.name or "session")
         forked.name = forked_name
@@ -848,7 +849,7 @@ class SubmarineForkFromCommand(sublime_plugin.WindowCommand):
             name = session.name or "(unnamed)"
             cost = "$%.4f" % session.total_cost if session.total_cost > 0 else ""
             items.append(["● %s" % name, "active  %s  %sq" % (cost, session.query_count)])
-            sources.append(("active", session.session_id, name, session.backend))
+            sources.append(("active", session.session_id, name, session.backend, getattr(session, "model", None)))
         for s in load_saved_sessions():
             session_id = s.get("session_id")
             name = s.get("name") or "(unnamed)"
@@ -860,7 +861,7 @@ class SubmarineForkFromCommand(sublime_plugin.WindowCommand):
             cost = s.get("total_cost", 0)
             cost_str = "$%.4f" % cost if cost else ""
             items.append([name, "saved  %s  %s" % (project, cost_str)])
-            sources.append(("saved", session_id, name, s.get("backend", "claude")))
+            sources.append(("saved", session_id, name, s.get("backend", "claude"), s.get("model")))
         if not items:
             sublime.status_message("No sessions to fork from")
             return
@@ -868,9 +869,10 @@ class SubmarineForkFromCommand(sublime_plugin.WindowCommand):
         def on_select(idx):
             if idx < 0:
                 return
-            _kind, session_id, name, src_backend = sources[idx]
+            _kind, session_id, name, src_backend, src_model = sources[idx]
             forked = create_session(
-                self.window, resume_id=session_id, fork=True, backend=src_backend)
+                self.window, resume_id=session_id, fork=True,
+                backend=src_backend, model=src_model)
             from core.session import fork_session_title
             forked_name = fork_session_title(name)
             forked.name = forked_name

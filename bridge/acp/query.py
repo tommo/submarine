@@ -1,8 +1,9 @@
 """Host query / interrupt and session/prompt (+ images).
 
 Invariants: Grok session/cancel is a notification (§9.3); do not
-re-send cancel after the turn ended (§9.4); agent_busy wait then
-cancel+retry up to 8 times; Kimi PREEMPT_PROMPT=False (§9.40).
+re-send cancel after the turn ended (§9.4); agent_busy wait+retry
+without cancel (serialize on `_query_lock`); Kimi PREEMPT_PROMPT=False
+(§9.40).
 """
 from __future__ import annotations
 
@@ -94,6 +95,9 @@ class QueryMixin:
         if self.session_id is None:
             send_error(req_id, -32000, "session not initialized")
             return
+        if getattr(self, "_query_lock", None) is None:
+            self._query_lock = asyncio.Lock()
+        await self._query_lock.acquire()
         # A new query must not overlap an agent turn (Kimi: turn.agent_busy).
         # Tool ✔ is not end_turn — wait the live prompt out. Cancel only after
         # user Esc (cancel_in_flight) or when the live prompt is stuck.
@@ -132,9 +136,11 @@ class QueryMixin:
         try:
             result = None
             last_err: Optional[BaseException] = None
-            # Busy: wait the current agent turn out. Do not cancel a healthy
-            # in-progress turn (Bash already HANDLED) on the first hits.
-            for attempt in range(8):
+            # Busy: wait the live turn out. sandbox/kimi_busy overlap_retry:
+            # session/cancel here is what dirtied the path; wait + retry
+            # after end_turn delivers the second prompt. Esc still cancels.
+            attempt = 0
+            while True:
                 try:
                     result = await self._send_prompt(prompt_blocks) or {}
                     last_err = None
@@ -144,25 +150,15 @@ class QueryMixin:
                     if (not self._is_agent_busy_error(e)
                             or self._prompt_cancelled):
                         raise
-                    settle = min(8.0, 0.7 * (2 ** attempt))
+                    attempt += 1
+                    settle = min(10.0, 0.7 * (2 ** min(attempt, 5)))
                     self.file_log(
-                        f"query: agent_busy attempt {attempt + 1}/8 "
-                        f"settle={settle:.1f}s: {e}")
-                    if attempt >= 3:
-                        await self._cancel_agent_turn(
-                            reason=f"busy_retry_{attempt + 1}",
-                            wait_s=2.0 + attempt,
-                            settle_s=settle,
-                            force_local=True,
-                            orphan_ok=True,
-                        )
-                        self._prompt_cancelled = False
-                        self._cancel_in_flight = False
-                    else:
-                        try:
-                            await asyncio.sleep(settle)
-                        except Exception:
-                            pass
+                        f"query: agent_busy attempt {attempt} "
+                        f"settle={settle:.1f}s (no cancel): {e}")
+                    try:
+                        await asyncio.sleep(settle)
+                    except Exception:
+                        pass
             if last_err is not None and result is None:
                 raise last_err
             result = result or {}
@@ -171,6 +167,39 @@ class QueryMixin:
                 self._prompt_cancelled
                 or stop_reason in ("cancelled", "canceled", "interrupted")
             )
+            extra = getattr(self, "_pending_ask_followup", None)
+            if extra and not cancelled:
+                self._pending_ask_followup = None
+                self.file_log(
+                    "ask_user freetext: session/prompt after end_turn "
+                    "(no cancel)")
+                extra_blocks = self._build_prompt_blocks(extra, [])
+                extra_attempt = 0
+                while not self._prompt_cancelled:
+                    try:
+                        extra_res = await self._send_prompt(extra_blocks)
+                        if extra_res:
+                            result = extra_res
+                            stop_reason = result.get(
+                                "stopReason", "end_turn")
+                            cancelled = (
+                                self._prompt_cancelled
+                                or stop_reason in (
+                                    "cancelled", "canceled",
+                                    "interrupted")
+                            )
+                        break
+                    except Exception as e:
+                        if not self._is_agent_busy_error(e):
+                            self.file_log(
+                                f"ask_user freetext followup: {e}")
+                            break
+                        extra_attempt += 1
+                        settle = min(10.0, 0.7 * (2 ** min(extra_attempt, 5)))
+                        self.file_log(
+                            f"ask_user freetext busy retry "
+                            f"{extra_attempt} settle={settle:.1f}s")
+                        await asyncio.sleep(settle)
             usage = self.usage_from_prompt_result(result)
             duration_ms = max(0, int((time.time() - turn_t0) * 1000))
             if usage:
@@ -218,6 +247,12 @@ class QueryMixin:
             # that next query actually starts sending.
             self._prompt_fut = None
             self._prompt_acp_id = None
+            lock = getattr(self, "_query_lock", None)
+            if lock is not None and lock.locked():
+                try:
+                    lock.release()
+                except Exception:
+                    pass
 
     def _prompt_caps(self) -> dict:
         return (self.agent_capabilities or {}).get("promptCapabilities") or {}

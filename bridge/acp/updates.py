@@ -17,6 +17,7 @@ if _BRIDGE_DIR not in sys.path:
     sys.path.insert(0, _BRIDGE_DIR)
 
 from rpc_helpers import send_notification  # noqa: E402
+from acp.util import _acp_is_compact_text  # noqa: E402
 
 
 class UpdatesMixin:
@@ -260,6 +261,19 @@ class UpdatesMixin:
             out["exitStatus"] = slot["exit"]
         return out
 
+    def _emit_tool_use(self, tid, name, tool_input, background=False) -> None:
+        inp = dict(tool_input or {})
+        if name in ("Edit", "Write"):
+            stored = self._tool_inputs_by_id.get(tid) or {}
+            inp = self._edit_ui_input({**stored, **inp}, name)
+        send_notification("message", {
+            "type": "tool_use",
+            "id": tid,
+            "name": name,
+            "input": inp,
+            "background": bool(background),
+        })
+
     def _forward_update(self, params: dict) -> None:
         # Defense in depth: reader already drops foreign sessions; keep
         # filter here if anything calls this path directly.
@@ -307,6 +321,8 @@ class UpdatesMixin:
         if kind == "agent_message_chunk":
             text = (upd.get("content") or {}).get("text", "")
             if text:
+                if _acp_is_compact_text(text):
+                    self.file_log(f"compact chunk: {text[:160]!r}")
                 send_notification("message",
                                   {"type": "text_delta", "text": text})
         elif kind == "agent_thought_chunk":
@@ -385,13 +401,8 @@ class UpdatesMixin:
                 self._bg_tool_ids.add(tid)
                 if is_spawn:
                     self._last_bg_tool_id = tid
-            send_notification("message", {
-                "type": "tool_use",
-                "id": tid,
-                "name": tool_name,
-                "input": tool_input,
-                "background": bool(is_bg),
-            })
+            self._emit_tool_use(
+                tid, tool_name, tool_input, background=bool(is_bg))
         elif kind == "tool_call_update":
             usage = self.usage_from_tool_update(upd)
             if usage is not None:
@@ -428,6 +439,13 @@ class UpdatesMixin:
             tool_name, enriched = self._reclassify_read_dir(tool_name, enriched)
             if tid and tool_name and tool_name != "tool":
                 self._tool_names_by_id[tid] = tool_name
+            # Compare against stored args BEFORE merge — otherwise
+            # should_repaint sees old_string already applied and skips
+            # (Kimi Edit JSON-drip then rawInput never painted a diff).
+            need_paint = (
+                status in ("completed", "failed")
+                or self._should_repaint_tool(tid, upd, enriched)
+            )
             if tid and enriched:
                 prev = self._tool_inputs_by_id.get(tid) or {}
                 self._tool_inputs_by_id[tid] = {**prev, **enriched}
@@ -453,13 +471,10 @@ class UpdatesMixin:
                     )
                     if bg and tid:
                         self._bg_tool_ids.add(tid)
-                    send_notification("message", {
-                        "type": "tool_use",
-                        "id": tid,
-                        "name": tool_name,
-                        "input": enriched or self._tool_inputs_by_id.get(tid) or {},
-                        "background": bg,
-                    })
+                    self._emit_tool_use(
+                        tid, tool_name,
+                        enriched or self._tool_inputs_by_id.get(tid) or {},
+                        background=bg)
             elif tool_name != "tool" or (enriched and status not in ("completed", "failed")):
                 # Enrich open row (same id → output.tool upserts). Prefer real name.
                 # kimi-cli streams arg JSON one token at a time as tool_call_update;
@@ -476,17 +491,11 @@ class UpdatesMixin:
                     if newly_bg:
                         self._bg_tool_ids.add(tid)
                     bg = bool(tid and tid in self._bg_tool_ids)
-                    if status in ("completed", "failed") or self._should_repaint_tool(
-                            tid, upd, enriched) or newly_bg:
-                        send_notification("message", {
-                            "type": "tool_use",
-                            "id": tid,
-                            "name": enrich_name,
-                            "input": enriched or self._tool_inputs_by_id.get(tid) or {},
-                            # Re-paint must not demote a ⚙ row (spawn ack keeps
-                            # background until child/task_notification closes).
-                            "background": bg,
-                        })
+                    if need_paint or newly_bg:
+                        self._emit_tool_use(
+                            tid, enrich_name,
+                            enriched or self._tool_inputs_by_id.get(tid) or {},
+                            background=bg)
             # Cache run_in_background for create pairing. Do not drop pending
             # here — that left ⚙ unbound when create arrived later (or never).
             is_bg = bool(
@@ -524,19 +533,24 @@ class UpdatesMixin:
                     self._extract_diff_input(upd)
                     if tool_name in ("Edit", "Write") else None
                 )
-                if diff_input:
-                    # Attach diff onto the open row before closing (upsert).
-                    payload = dict(enriched or {})
-                    payload.update(diff_input)
-                    if tid not in self._tool_ids_emitted:
-                        self._tool_ids_emitted.add(tid)
-                    send_notification("message", {
-                        "type": "tool_use",
-                        "id": tid,
-                        "name": tool_name,
-                        "input": payload,
-                        "background": bool(tid and tid in self._bg_tool_ids),
-                    })
+                if tool_name in ("Edit", "Write"):
+                    # Kimi completed is "Replaced 1 occurrence" text — no
+                    # type=diff. Re-emit stored old/new as unified_diff.
+                    stored = dict(self._tool_inputs_by_id.get(tid) or {})
+                    payload = {**stored, **(enriched or {})}
+                    if diff_input:
+                        payload.update(diff_input)
+                    payload = self._edit_ui_input(payload, tool_name)
+                    if (payload.get("unified_diff")
+                            or payload.get("old_string")
+                            or payload.get("new_string")
+                            or payload.get("file_path")
+                            or payload.get("content")):
+                        if tid not in self._tool_ids_emitted:
+                            self._tool_ids_emitted.add(tid)
+                        self._emit_tool_use(
+                            tid, tool_name, payload,
+                            background=bool(tid and tid in self._bg_tool_ids))
                 # Bind terminal ids on completed payload (Kimi attaches them here)
                 if tid and tid in self._bg_tool_ids:
                     for term_id in self._terminal_ids_from_update(upd):
@@ -699,6 +713,16 @@ class UpdatesMixin:
             "user_message_chunk", "agent_message_chunk",
             "agent_thought_chunk",
         ):
+            # Auto-compact often starts during session/load. Dropping the
+            # chunk left a silent wait on the next prompt (kimi 0.38:
+            # "Compacting conversation context").
+            if kind == "agent_message_chunk":
+                text = ((upd.get("content") or {}) or {}).get("text") or ""
+                if text and _acp_is_compact_text(text):
+                    self.file_log(f"load compact: {text[:160]!r}")
+                    send_notification("message", {
+                        "type": "text_delta", "text": text,
+                    })
             return
         if kind == "tool_call":
             tool_name = self._normalize_tool_name(upd)

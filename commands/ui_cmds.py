@@ -184,12 +184,15 @@ class SubmarineSearchSessionsCommand(sublime_plugin.WindowCommand):
                     sid = results[idx][0]
                     title = results[idx][1]
                     saved_backend = "claude"
+                    saved_model = None
                     for rec in load_saved_sessions():
                         if rec.get("session_id") == sid:
                             saved_backend = rec.get("backend", "claude")
+                            saved_model = rec.get("model")
                             break
                     s = create_session(
-                        self.window, resume_id=sid, fork=True, backend=saved_backend)
+                        self.window, resume_id=sid, fork=True,
+                        backend=saved_backend, model=saved_model)
                     from core.session import fork_session_title
                     s.name = fork_session_title(title)
                     s.output.set_name(s.name)

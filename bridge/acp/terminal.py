@@ -115,10 +115,17 @@ class TerminalMixin:
         })
 
     def _should_synth_terminal_ui(self) -> bool:
-        """True when Kimi is using terminal/* without session/update tool_call.
+        """Kimi-only: terminal/* with no session/update tool_call.
 
-        When tool_call is also streaming, synthesizing would double-paint Bash.
+        Grok always streams tool_call first; synthesizing doubles ☐ next to ⚙.
+        Live timeout:0 create paired the execute then still synth'd because
+        spawn awaited >1.5s past `_last_session_tool_ts`.
         """
+        if getattr(self, "BACKEND_NAME", "") != "kimi":
+            return False
+        pending = getattr(self, "_pending_execute_ids", None) or []
+        if pending:
+            return False
         last = float(getattr(self, "_last_session_tool_ts", 0) or 0)
         return (time.time() - last) > 1.5
 
@@ -191,14 +198,19 @@ class TerminalMixin:
 
         # Kimi often runs tools ONLY via terminal/* with zero session/update
         # tool_call — host UI then shows empty "waiting" while agent is busy.
-        # Synthesize Bash rows when no recent session tool stream.
-        if self._should_synth_terminal_ui():
+        # Skip when this create already paired to a streamed tool_call (Grok
+        # timeout:0 paints ⚙ then create — synth was the leftover ☐ Bash).
+        paired = slot.get("tool_use_id")
+        already = paired and paired in getattr(self, "_tool_ids_emitted", set())
+        if already:
+            self.file_log(f"terminal/create {tid} paired {paired}; skip synth")
+        elif self._should_synth_terminal_ui():
             host_id = f"term-ui-{tid}"
             slot["host_tool_id"] = host_id
             self._host_emit_tool_use(
                 host_id, "Bash",
                 {"command": cmd_show or str(cmd)[:240]},
-                background=False,
+                background=bool(slot.get("bg")),
             )
             self.file_log(f"synth host Bash for {tid} (no session tool_call)")
 
@@ -335,10 +347,16 @@ class TerminalMixin:
         """⚙ only for this execute's explicit detach or native kimi detached."""
         eid = self._take_pending_execute_id()
         inp = (self._tool_inputs_by_id.get(eid) or {}) if eid else {}
+        grok_timeout0 = (
+            getattr(self, "BACKEND_NAME", "") == "grok"
+            and inp.get("timeout") in (0, 0.0)
+        )
         explicit = bool(
             eid and (
                 inp.get("run_in_background") is True
                 or inp.get("detached") is True
+                or inp.get("background") is True
+                or grok_timeout0
                 or eid in self._bg_tool_ids
             )
         )
@@ -439,10 +457,20 @@ class TerminalMixin:
             return {"exitCode": None, "signal": "SIGTERM"}
         # kimi-code AcpTerminalProcess: exitCode ?? -1. A null exit is
         # "killed", then ProcessTask fails and terminal/release kills the
-        # still-running command. wait_for_exit MUST stay pending until the
-        # process actually exits. Dispatch is create_task so this does not
-        # block the ACP reader. session/prompt already returned for
-        # run_in_background; ⚙ clears on real exit via wait_and_close.
+        # still-running command. Kimi wait_for_exit MUST stay pending until
+        # the process actually exits. Grok timeout:0 is the opposite: the
+        # agent still issues wait_for_exit, and holding it blocks the turn
+        # (bg=True, wait until interrupt SIGTERM). Ack 0 without setting
+        # slot.exit_status; release detaches (M4: reader stays alive).
+        if (
+            slot.get("bg")
+            and slot.get("exit_status") is None
+            and getattr(self, "BACKEND_NAME", "") == "grok"
+        ):
+            self.file_log(
+                f"terminal/wait_for_exit {tid} grok bg ack "
+                f"(process still running cmd={slot.get('cmd')!r})")
+            return {"exitCode": 0, "signal": None}
         reader = slot.get("reader")
         timeout = self.terminal_wait_timeout_s
         if reader is not None and not reader.done():

@@ -123,6 +123,7 @@ class AcpBridge(TransportMixin, SessionMixin, UpdatesMixin,
         self._prompt_cancelled: bool = False
         self._prompt_fut: Optional[asyncio.Future] = None
         self._prompt_acp_id: Optional[int] = None
+        self._query_lock: Optional[asyncio.Lock] = None
         # True from first cancel notify until query fully settles — blocks
         # spam session/cancel (Grok ChatStateActor dies on cancel-after-done).
         self._cancel_in_flight: bool = False

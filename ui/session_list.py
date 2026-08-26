@@ -382,6 +382,7 @@ def collect_live(window) -> List[dict]:
             "view_id": view_id,
             "name": session_title(s),
             "backend": getattr(s, "backend", None) or "claude",
+            "model": getattr(s, "model", None),
             "status": _status_of(s),
             "query_count": int(getattr(s, "query_count", 0) or 0),
             "same_window": True,
@@ -412,6 +413,7 @@ def collect_history(live_ids: set, cwd: str) -> Tuple[List[dict], List[dict]]:
             "view_id": None,
             "name": saved_title(s),
             "backend": s.get("backend") or "claude",
+            "model": s.get("model"),
             "status": s.get("state") or "closed",
             "query_count": int(s.get("query_count") or 0),
             "project": s.get("project") or "",
@@ -596,6 +598,7 @@ def _include_starred_saved(here: List[dict], live_ids: set, cwd: str,
             "view_id": None,
             "name": saved_title(s),
             "backend": s.get("backend") or "claude",
+            "model": s.get("model"),
             "status": s.get("state") or "closed",
             "query_count": int(s.get("query_count") or 0),
             "project": s.get("project") or "",
@@ -1005,8 +1008,10 @@ def fork_row(window, row: dict) -> bool:
     if not window or not sid:
         return False
     backend = (row or {}).get("backend") or "claude"
+    model = (row or {}).get("model")
     name = ((row or {}).get("name") or "").strip() or "session"
-    forked = create_session(window, resume_id=sid, fork=True, backend=backend)
+    forked = create_session(
+        window, resume_id=sid, fork=True, backend=backend, model=model)
     if not forked:
         return False
     from core.session import fork_session_title

@@ -262,8 +262,11 @@ def looks_like_compact_start(text: str) -> bool:
     if not text:
         return False
     low = text.lower()
+    # kimi acp auto-compact: "Compacting conversation context"
+    # (not "compaction started" — that phrase is TUI/slash only).
     return (
-        "compaction started" in low
+        "compacting conversation context" in low
+        or "compaction started" in low
         or "context compaction started" in low
         or "compacting context" in low
     )

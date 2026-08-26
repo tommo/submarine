@@ -183,8 +183,9 @@ def construct_session(
     initial_context=None,
     backend=None,
     attach_view=None,
+    model=None,
 ):
-    # type: (Any, Optional[str], bool, Optional[dict], Optional[dict], Optional[str], Any) -> Session
+    # type: (Any, Optional[str], bool, Optional[dict], Optional[dict], Optional[str], Any, Optional[str]) -> Session
     """Build a Session with ST ports. Does not show, register, or start."""
     if backend is None:
         backend = _default_backend()
@@ -219,6 +220,7 @@ def construct_session(
         profile=profile,
         initial_context=initial_context,
         backend=backend,
+        model=model,
         window=window,
         cwd=cwd,
         additional_dirs=additional_dirs,
@@ -245,8 +247,9 @@ def create_session(
     attach_view=None,
     start=None,
     show=None,
+    model=None,
 ):
-    # type: (Any, Optional[str], bool, Optional[dict], Optional[str], Optional[dict], bool, Any, Optional[bool], Optional[bool]) -> Session
+    # type: (Any, Optional[str], bool, Optional[dict], Optional[str], Optional[dict], bool, Any, Optional[bool], Optional[bool], Optional[str]) -> Session
     """Sublime-facing factory: live-resume dedupe, guard, register, start.
 
     Invariants:
@@ -316,6 +319,7 @@ def create_session(
         initial_context=initial_context,
         backend=backend,
         attach_view=attach_view,
+        model=model,
     )
     session._composer_allowed = True
 

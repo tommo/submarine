@@ -338,14 +338,29 @@ class BridgeEventRouter:
         if compacting and looks_like_compact_done(text):
             if self.turn.busy and self.on_phase is not None:
                 self.on_phase("responding")
-            if text:
-                self.output.text(text)
+            try:
+                self.output.text("\n*Compaction completed.*\n")
+            except Exception:
+                pass
             if self.on_compact_done is not None:
                 self.on_compact_done()
             return
         if looks_like_compact_start(text):
-            if self.on_compact_start is not None:
+            if self.turn.busy and self.on_compact_start is not None:
                 self.on_compact_start()
+            try:
+                self.output.text("\n*Compacting conversation context…*\n")
+            except Exception:
+                pass
+            return
+        if looks_like_compact_done(text):
+            try:
+                self.output.text("\n*Compaction completed.*\n")
+            except Exception:
+                pass
+            if compacting and self.on_compact_done is not None:
+                self.on_compact_done()
+            return
         action = self.turn.inbound_action("text")
         if action == "drop":
             return

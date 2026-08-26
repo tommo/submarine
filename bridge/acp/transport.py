@@ -339,7 +339,8 @@ class TransportMixin:
             await self._send_acp_response(rid, error={
                 "code": -32000, "message": str(e)})
             return
-        self._flush_ask_followup()
+        # cancel+reprompt anti-pattern. listed Q1 goes through elicitation.
+        # self._flush_ask_followup()
 
     async def _send_acp_response(self, rid: int, *, result: Any = None,
                                   error: Optional[dict] = None) -> None:

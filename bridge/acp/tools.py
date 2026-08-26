@@ -435,14 +435,16 @@ class ToolsMixin:
             if not prev or any(
                     enriched.get(k) and enriched.get(k) != prev.get(k)
                     for k in ("file_path", "path", "command", "pattern",
-                              "description", "query", "content", "old_string")):
+                              "description", "query", "content",
+                              "old_string", "new_string", "unified_diff")):
                 return True
         if self._parse_content_args_json(upd):
             prev = self._tool_inputs_by_id.get(tid) or {}
             if not prev:
                 return True
             # Only if a display-critical field newly appeared or grew a lot
-            for k in ("file_path", "path", "command", "pattern", "description"):
+            for k in ("file_path", "path", "command", "pattern", "description",
+                      "old_string", "new_string"):
                 a, b = str(prev.get(k) or ""), str(enriched.get(k) or "")
                 if b and (not a or len(b) > len(a) + 8):
                     return True
@@ -595,6 +597,32 @@ class ToolsMixin:
                 out["taskId"] = str(ids[0])
             elif out.get("task_id"):
                 out["taskId"] = str(out["task_id"])
+        # Grok: content [{type:diff, oldText, newText}]. Kimi never sends this
+        # (JSON-drip args + completed text "Replaced 1 occurrence").
+        diff = self._extract_diff_input(upd)
+        if diff:
+            for k, v in diff.items():
+                if v is not None and v != "" and not out.get(k):
+                    out[k] = v
+        return out
+
+    def _edit_ui_input(self, inp: dict, tool_name: str) -> dict:
+        """Formatter payload: path + unified_diff. Kimi old/new can be huge."""
+        if tool_name not in ("Edit", "Write") or not isinstance(inp, dict):
+            return inp or {}
+        out = dict(inp)
+        old = out.get("old_string") or ""
+        new = out.get("new_string") or ""
+        if tool_name == "Edit" and not out.get("unified_diff") and (old or new):
+            out["unified_diff"] = self._plan_unified_diff(
+                str(old), str(new), max_chars=8000)
+        # Plugin Edit formatter prefers unified_diff; drop bulky bodies so
+        # the host JSON-RPC line is not enormous (drip of a whole function).
+        if tool_name == "Edit" and out.get("unified_diff"):
+            for k in ("old_string", "new_string"):
+                v = out.get(k)
+                if isinstance(v, str) and len(v) > 2000:
+                    out.pop(k, None)
         return out
 
     @staticmethod

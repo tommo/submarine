@@ -959,7 +959,8 @@ class MCPSocketServer:
         summary.append("")
         summary.append("default backend: %s" % default)
         summary.append(
-            "Spawn via spawn_session(backend=<name>). "
+            "Spawn via spawn_session(backend=<name>, model=<id from models>). "
+            "Forking without model= keeps the source session's submodel. "
             "fork_current / fork_from_* only work within the same bridge family."
         )
         return {"summary": "\n".join(summary), "default": default, "backends": rows}
@@ -1017,6 +1018,7 @@ class MCPSocketServer:
         fork_current: bool = False,
         wait_for_completion: bool = False,
         fork_from_agent_id: str = None,
+        model: str = None,
         _caller_agent_id: str = None,
     ) -> dict:
         create_session = (
@@ -1058,15 +1060,17 @@ class MCPSocketServer:
         resume_id = None
         fork = False
         fork_source_backend = None
+        fork_source_model = None
 
         def _resolve_fork_source(source_session, label: str):
-            nonlocal resume_id, fork, fork_source_backend, backend
+            nonlocal resume_id, fork, fork_source_backend, fork_source_model, backend
             if not source_session:
                 return {"error": "Cannot fork: %s not found" % label}
             sid = getattr(source_session, "session_id", None)
             if not sid:
                 return {"error": "Cannot fork: %s has no session_id yet (still starting?)" % label}
             src_backend = getattr(source_session, "backend", None) or "claude"
+            fork_source_model = getattr(source_session, "model", None)
             if not backend:
                 backend = src_backend
             if not self._same_backend_family(src_backend, backend):
@@ -1130,9 +1134,28 @@ class MCPSocketServer:
             "subsession_id": subsession_id,
             "parent_agent_id": parent_agent_id,
         }
+        resolve_spawn_model = _try_import("core.registry.resolve_spawn_model")
+        spawn_model = None
+        if resolve_spawn_model is not None:
+            spawn_model = resolve_spawn_model(
+                requested=model,
+                source_model=fork_source_model,
+                forking=fork,
+            )
+        elif model:
+            spawn_model = str(model).strip() or None
+        elif fork and fork_source_model:
+            spawn_model = str(fork_source_model).strip() or None
+        if (backend or "") == "grok" and spawn_model:
+            try:
+                from backend import grok as grok_backend
+                spawn_model = grok_backend.normalize_grok_model(spawn_model)
+            except Exception:
+                pass
         session = create_session(
             window, resume_id=resume_id, fork=fork, profile=profile_config,
             initial_context=initial_context, backend=backend, focus=False,
+            model=spawn_model,
         )
         if name:
             session.name = name
@@ -1162,6 +1185,7 @@ class MCPSocketServer:
             "subsession_id": subsession_id,
             "parent_agent_id": parent_agent_id,
             "backend": backend,
+            "model": spawn_model or getattr(session, "model", None),
             "fork": fork,
             "profile": profile,
         }
@@ -1179,7 +1203,9 @@ class MCPSocketServer:
             body
             + "\n\nWhen fully done, call MCP signal_complete(result_summary=…) "
             "as its own step after your final message — not in parallel with "
-            "other tools. Parent is notified only after this turn idles; "
+            "other tools. That call IS the parent notification; do not also "
+            "send_to_session the parent with the same summary. "
+            "Parent is notified only after this turn idles; "
             "host attaches context_budget for strategy."
         )
 

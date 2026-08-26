@@ -165,7 +165,7 @@ def test_spawn_schema_has_no_persona_or_checkpoint():
     assert "persona_id" not in props
     assert "checkpoint" not in props
     assert set(props) == {
-        "prompt", "name", "profile", "backend",
+        "prompt", "name", "profile", "backend", "model",
         "fork_current", "fork_from_agent_id",
         "wait_for_completion",
     }

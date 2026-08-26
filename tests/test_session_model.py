@@ -11,7 +11,7 @@ for p in (_ROOT, _BRIDGE):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from core.registry import resolve_init_model
+from core.registry import resolve_init_model, resolve_spawn_model
 
 
 class TestResolveInitModel(unittest.TestCase):
@@ -31,6 +31,39 @@ class TestResolveInitModel(unittest.TestCase):
                 default_model="grok-4.6",
             ),
             "deepseek-v4-pro",
+        )
+
+    def test_requested_beats_profile(self):
+        self.assertEqual(
+            self.resolve(
+                requested_model="deepseek-v4-flash-vision-exp",
+                profile_model="deepseek-v4-pro",
+                default_model="grok-4.6",
+            ),
+            "deepseek-v4-flash-vision-exp",
+        )
+
+    def test_spawn_fork_inherits_source_model(self):
+        self.assertEqual(
+            resolve_spawn_model(
+                source_model="deepseek-v4-flash",
+                forking=True,
+            ),
+            "deepseek-v4-flash",
+        )
+        self.assertEqual(
+            resolve_spawn_model(
+                requested="deepseek-v4-pro",
+                source_model="deepseek-v4-flash",
+                forking=True,
+            ),
+            "deepseek-v4-pro",
+        )
+        self.assertIsNone(
+            resolve_spawn_model(
+                source_model="deepseek-v4-flash",
+                forking=False,
+            ),
         )
 
     def test_live_session_beats_default(self):
@@ -175,6 +208,22 @@ class TestGrokSpawnModelFlag(unittest.TestCase):
         argv = _Spawn().agent_argv()
         self.assertIn("--model", argv)
         self.assertIn("deepseek-v4-pro", argv)
+
+
+class TestGrokVisionCatalog(unittest.TestCase):
+    def test_flash_vision_is_vision(self):
+        from backend.grok import (
+            GROK_MODELS, model_supports_vision, normalize_grok_model,
+        )
+        ids = [mid for mid, _label in GROK_MODELS]
+        self.assertIn("deepseek-v4-flash-vision-exp", ids)
+        self.assertTrue(model_supports_vision("deepseek-v4-flash-vision-exp"))
+        self.assertTrue(model_supports_vision("ds-vision"))
+        self.assertFalse(model_supports_vision("deepseek-v4-flash"))
+        self.assertEqual(
+            normalize_grok_model("ds-flash-vision"),
+            "deepseek-v4-flash-vision-exp",
+        )
 
 
 if __name__ == "__main__":

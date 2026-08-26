@@ -20,6 +20,19 @@ def strip_ansi(text: str) -> str:
         return text or ""
     return _ANSI_ESCAPE_RE.sub("", text)
 
+
+def _acp_is_compact_text(text: str) -> bool:
+    """kimi auto-compact / /compact client-visible phrases."""
+    low = (text or "").lower()
+    return (
+        "compacting conversation context" in low
+        or "compaction completed" in low
+        or "compaction started" in low
+        or "compacting context" in low
+        or "context compaction" in low
+    )
+
+
 def apply_plain_terminal_env(env: dict) -> dict:
     """Force monochrome non-TTY env for agent-spawned shells/tools."""
     env["TERM"] = "dumb"
