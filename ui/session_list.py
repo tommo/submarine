@@ -43,6 +43,8 @@ from .session_api import (
 
 SETTING = keys.SESSION_LIST
 ROWS_KEY = keys.SESSION_LIST_ROWS
+WRITING_KEY = "submarine_slist_writing"
+FOLLOW_GEN_KEY = "submarine_slist_follow_gen"
 HISTORY_CAP = 200  # default; override with session_list_history_limit
 # Full row needs ~backend(8) + title(16+) + status/time. Below this, abbrev.
 COMPACT_COLS = 56
@@ -771,6 +773,14 @@ def resume_saved(window, row: dict, focus: bool = True) -> bool:
 _last_open = (0.0, None)
 
 
+def _wake_if_sleeping(session) -> None:
+    if session is None or not getattr(session, "is_sleeping", False):
+        return
+    wake = getattr(session, "wake", None)
+    if callable(wake):
+        wake()
+
+
 def open_row(window, row: dict) -> bool:
     if not row:
         return False
@@ -787,23 +797,75 @@ def open_row(window, row: dict) -> bool:
                 session = _live_session_for_row(row)
                 if session is not None:
                     if getattr(session, "torn_off", False) or row.get("torn_off"):
+                        _wake_if_sleeping(session)
                         return focus_live(window, row)
-                    return bool(HostView.for_window(window).attach(
-                        window, session, focus=True))
+                    hv = HostView.for_window(window)
+                    if hv.bound_session(window) is session:
+                        _wake_if_sleeping(session)
+                        return focus_live(window, row)
+                    ok = bool(hv.attach(window, session, focus=True))
+                    _wake_if_sleeping(session)
+                    return ok
             return resume_saved(window, row)
     except Exception:
         pass
     if row.get("kind") == "live":
+        session = _live_session_for_row(row)
+        _wake_if_sleeping(session)
         if focus_live(window, row):
             return True
     return resume_saved(window, row)
 
 
-def reveal_row(window, row: dict) -> bool:
+def _same_view(a, b) -> bool:
+    if a is None or b is None:
+        return False
+    if a is b:
+        return True
+    try:
+        return a.id() == b.id()
+    except Exception:
+        return False
+
+
+def follow_current_under_caret(view, force: bool = False) -> bool:
+    """Caret on a CURRENT live row → show that session; keep list focus.
+
+    ``force`` is for click-into / on_activated: the list may not be
+    ``active_view`` yet, but the caret line still names the session to show.
+    """
+    if not view or not getattr(view, "is_valid", lambda: False)():
+        return False
+    try:
+        if view.settings().get(WRITING_KEY):
+            return False
+    except Exception:
+        return False
+    win = view.window()
+    if not win:
+        return False
+    if not force and not _same_view(win.active_view(), view):
+        return False
+    if not view.sel():
+        return False
+    try:
+        line = view.rowcol(view.sel()[0].begin())[0] + 1
+        raw = view.settings().get(ROWS_KEY) or "[]"
+        index = json.loads(raw) if isinstance(raw, str) else (raw or [])
+    except Exception:
+        return False
+    row = row_at_line(index, line)
+    if not row or row.get("kind") != "live":
+        return False
+    return reveal_row(win, row, keep=view)
+
+
+def reveal_row(window, row: dict, keep=None) -> bool:
     """Show the session sheet but keep keyboard focus on the list."""
     if not row or not window:
         return False
-    keep = window.active_view()
+    if keep is None:
+        keep = window.active_view()
     ok = False
     try:
         from ui.host import HostView, is_single_mode
@@ -811,14 +873,16 @@ def reveal_row(window, row: dict) -> bool:
             if row.get("kind") == "live":
                 session = _live_session_for_row(row)
                 if session is not None:
+                    hv = HostView.for_window(window)
                     if getattr(session, "torn_off", False) or row.get("torn_off"):
                         ok = reveal_live_session(window, session, focus=False)
+                    elif hv.bound_session(window) is session:
+                        ok = True
                     else:
-                        ok = bool(HostView.for_window(window).attach(
-                            window, session, focus=False))
+                        ok = bool(hv.attach(window, session, focus=False))
             if not ok:
                 ok = resume_saved(window, row, focus=False)
-            if keep and keep.is_valid():
+            if keep and keep.is_valid() and not _same_view(window.active_view(), keep):
                 try:
                     window.focus_view(keep)
                 except Exception:
@@ -1115,6 +1179,7 @@ class SessionListView:
             vx, vy = 0.0, 0.0
         cols = view_cols(self.view)
         text, index = build_for_window(self.window, cols=cols)
+        self.view.settings().set(WRITING_KEY, True)
         cur = self.view.substr(sublime.Region(0, self.view.size()))
         keep_sid = None
         keep_kind = None
@@ -1150,6 +1215,13 @@ class SessionListView:
             self._write_list_text(text)
             wrote = True
         if not wrote and not follow:
+            try:
+                self.view.settings().erase(WRITING_KEY)
+            except Exception:
+                try:
+                    self.view.settings().set(WRITING_KEY, False)
+                except Exception:
+                    pass
             return
         target = None
         if keep_sid:
@@ -1169,6 +1241,13 @@ class SessionListView:
         if not follow:
             try:
                 self.view.set_viewport_position((float(vx), float(vy)), False)
+            except Exception:
+                pass
+        try:
+            self.view.settings().erase(WRITING_KEY)
+        except Exception:
+            try:
+                self.view.settings().set(WRITING_KEY, False)
             except Exception:
                 pass
 
@@ -1245,20 +1324,53 @@ class SessionListClickListener(sublime_plugin.EventListener):
             return ("submarine_session_list_open", {})
         return None
 
+    def _schedule_follow(self, view, force=False):
+        if not view or not view.settings().get(SETTING):
+            return
+        if view.settings().get(WRITING_KEY):
+            return
+        gen = int(view.settings().get(FOLLOW_GEN_KEY) or 0) + 1
+        view.settings().set(FOLLOW_GEN_KEY, gen)
+
+        def _go(expected=gen, v=view, forced=force):
+            try:
+                if not v.is_valid():
+                    return
+                if int(v.settings().get(FOLLOW_GEN_KEY) or 0) != expected:
+                    return
+            except Exception:
+                return
+            follow_current_under_caret(v, force=forced)
+
+        if sublime is not None:
+            sublime.set_timeout(_go, 30)
+        else:
+            _go()
+
+    def on_activated(self, view):
+        self._schedule_follow(view, force=True)
+
+    def on_selection_modified(self, view):
+        self._schedule_follow(view)
+
     def on_post_text_command(self, view, name, args):
         if not view or not view.settings().get(SETTING):
+            return
+        if name in ("move", "move_to", "move_word", "move_to_bof", "move_to_eof"):
+            self._schedule_follow(view)
             return
         if name != "drag_select":
             return
         args = args or {}
-        if args.get("by") != "words":
+        if args.get("by") == "words":
+            line = 0
+            if view.sel():
+                line = view.rowcol(view.sel()[0].begin())[0] + 1
+            if line <= 1:
+                return
+            view.run_command("submarine_session_list_open")
             return
-        line = 0
-        if view.sel():
-            line = view.rowcol(view.sel()[0].begin())[0] + 1
-        if line <= 1:
-            return
-        view.run_command("submarine_session_list_open")
+        self._schedule_follow(view, force=True)
 
 
 def refresh_session_list(window) -> None:

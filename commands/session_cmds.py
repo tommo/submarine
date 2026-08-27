@@ -725,8 +725,17 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
                 try:
                     from ui.host import HostView, is_single_mode
                     if is_single_mode() and not getattr(data, "torn_off", False):
-                        HostView.for_window(self.window).attach(
-                            self.window, data)
+                        hv = HostView.for_window(self.window)
+                        if hv.bound_session(self.window) is data:
+                            host = hv.host_view(self.window)
+                            if host is not None:
+                                self.window.focus_view(host)
+                            if getattr(data, "is_sleeping", False):
+                                data.wake()
+                            return
+                        hv.attach(self.window, data)
+                        if getattr(data, "is_sleeping", False):
+                            data.wake()
                         return
                 except Exception:
                     pass

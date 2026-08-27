@@ -147,6 +147,20 @@ class TestRenderSessionList(unittest.TestCase):
         self.assertEqual(text.count("\n- **P1"), 0)
         self.assertIn("↵", text)
 
+    def test_same_view_compares_ids(self):
+        class _V:
+            def __init__(self, i):
+                self._i = i
+
+            def id(self):
+                return self._i
+
+        a, b, c = _V(1), _V(1), _V(2)
+        self.assertTrue(sl._same_view(a, a))
+        self.assertTrue(sl._same_view(a, b))
+        self.assertFalse(sl._same_view(a, c))
+        self.assertFalse(sl._same_view(a, None))
+
     def test_backend_abbrev(self):
         self.assertEqual(sl.backend_abbrev("grok"), "GR")
         self.assertEqual(sl.backend_abbrev("kimi"), "KM")

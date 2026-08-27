@@ -80,8 +80,10 @@ action on the session, orthogonal to binding.
 
 ## The swap (session list → host)
 
-`open_row` in single mode calls `HostView.attach(window, target)` instead of
-`focus_live`'s `win.focus_view(view)` (`ui/session_list.py:514-544`):
+Moving the caret in the Sessions list onto a CURRENT live row previews
+that session in the host and keeps list focus (`follow_current_under_caret`).
+Enter (`open_row`) then focuses the host if the row is already bound;
+otherwise it calls `HostView.attach(window, target)`:
 
 1. **Save current surface** (bound session A): scroll position, caret, draft
    text + `_input_start`, input-mode flag, expanded tasks, pending modal

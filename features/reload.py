@@ -31,14 +31,36 @@ def dprint(*args, **kwargs):
 
 
 def package_modules(pkg_name: str = PKG) -> Dict[str, Any]:
-    """All loaded modules belonging to the package (with or without __init__)."""
+    """All loaded modules belonging to the package (with or without __init__).
+
+    Root plugin files insert the package dir on ``sys.path``, so ``ui.session_list``
+    is loaded as ``ui.session_list`` not ``Submarine.ui.session_list``. Match
+    those by ``__file__`` under the plugin directory.
+    """
     out = {}
     prefix = pkg_name + "."
+    root = None
+    try:
+        root = os.path.realpath(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    except Exception:
+        root = None
     for name, mod in list(sys.modules.items()):
         if mod is None:
             continue
         if name == pkg_name or name.startswith(prefix):
             out[name] = mod
+            continue
+        if not root:
+            continue
+        try:
+            fn = getattr(mod, "__file__", None)
+            if not fn:
+                continue
+            real = os.path.realpath(fn)
+            if real == root or real.startswith(root + os.sep):
+                out[name] = mod
+        except Exception:
+            continue
     return out
 
 

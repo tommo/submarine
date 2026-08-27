@@ -18,8 +18,11 @@ from ui.host import (
 )
 from ui.session_api import get_session_for_view
 from ui.session_list import (
+    ROWS_KEY,
+    SETTING,
     _fmt_row,
     collect_live,
+    follow_current_under_caret,
     open_row,
     tear_or_dock_row,
 )
@@ -178,6 +181,245 @@ class TestSessionList(_TearOffCase):
         self.assertIsNot(b.output.view, host)
         self.assertIs(get_session_for_view(b.output.view), b)
         self.assertIs(a.output.view, host)
+
+    def test_open_bound_row_focuses_host_without_reattach(self):
+        win = RecordingWindow()
+        a = _session(win, "FocusA")
+        b = _session(win, "FocusB")
+        hv = HostView.for_window(win)
+        hv.attach(win, a)
+        hv.attach(win, b)
+        host = hv.host_view(win)
+        list_view = win.new_file()
+        win.focus_view(list_view)
+        rows = collect_live(win)
+        bound = [r for r in rows if r.get("bound")][0]
+        self.assertEqual(bound["session_id"], b.session_id)
+        ops = host.buffer_ops
+        self.assertTrue(open_row(win, bound))
+        self.assertIs(win.active_view(), host)
+        self.assertIs(b.output.view, host)
+        self.assertIsNone(a.output.view)
+        self.assertEqual(host.buffer_ops, ops)
+
+    def test_open_sleeping_row_wakes(self):
+        win = RecordingWindow()
+        a = _session(win, "WakeA")
+        b = _session(win, "WakeB")
+        hv = HostView.for_window(win)
+        hv.attach(win, a)
+        hv.attach(win, b)
+        host = hv.host_view(win)
+        b.client = None
+        b.initialized = False
+        self.assertTrue(b.is_sleeping)
+        woken = []
+        b.wake = lambda: woken.append(1)
+        list_view = win.new_file()
+        win.focus_view(list_view)
+        rows = collect_live(win)
+        bound = [r for r in rows if r.get("bound")][0]
+        self.assertEqual(bound["session_id"], b.session_id)
+        self.assertTrue(open_row(win, bound))
+        self.assertEqual(woken, [1])
+        self.assertIs(win.active_view(), host)
+
+    def test_caret_on_current_row_swaps_host_keeps_list_focus(self):
+        import json
+        from tests.test_single_view import _Region, _Settings
+
+        win = RecordingWindow()
+        a = _session(win, "CaretA")
+        b = _session(win, "CaretB")
+        a.last_access = 1
+        b.last_access = 2
+        hv = HostView.for_window(win)
+        hv.attach(win, a)
+        hv.attach(win, b)
+        hv.attach(win, a)
+        host = hv.host_view(win)
+        rows = collect_live(win)
+        for i, r in enumerate(rows):
+            r["line"] = i + 4
+            r["section"] = "CURRENT"
+        b_row = [r for r in rows if r["session_id"] == b.session_id][0]
+        a_row = [r for r in rows if r["session_id"] == a.session_id][0]
+
+        class _ListView(object):
+            def __init__(self, line):
+                self._settings = _Settings()
+                self._settings.set(SETTING, True)
+                self._settings.set(ROWS_KEY, json.dumps(rows))
+                self._line = line
+                self._sel = [_Region(0)]
+
+            def is_valid(self):
+                return True
+
+            def settings(self):
+                return self._settings
+
+            def window(self):
+                return win
+
+            def sel(self):
+                return self._sel
+
+            def rowcol(self, pt):
+                return (self._line - 1, 0)
+
+            def id(self):
+                return 4242 + self._line
+
+        lv = _ListView(b_row["line"])
+
+        class _Proxy(object):
+            def __init__(self, inner):
+                self._inner = inner
+
+            def id(self):
+                return self._inner.id()
+
+            def is_valid(self):
+                return True
+
+            def settings(self):
+                return self._inner.settings()
+
+            def window(self):
+                return win
+
+            def sel(self):
+                return self._inner.sel()
+
+            def rowcol(self, pt):
+                return self._inner.rowcol(pt)
+
+        win.focus_view(_Proxy(lv))
+        self.assertTrue(follow_current_under_caret(lv))
+        self.assertIs(b.output.view, host)
+        self.assertIsNone(a.output.view)
+        self.assertEqual(win.active_view().id(), lv.id())
+
+        lv_a = _ListView(a_row["line"])
+        win.focus_view(lv_a)
+        self.assertTrue(follow_current_under_caret(lv_a))
+        self.assertIs(a.output.view, host)
+        self.assertIs(win.active_view(), lv_a)
+
+        hist = dict(b_row)
+        hist["kind"] = "saved"
+        hist["section"] = "HISTORY"
+        hist["line"] = 20
+        lv_h = _ListView(20)
+        lv_h.settings().set(ROWS_KEY, json.dumps(rows + [hist]))
+        win.focus_view(lv_h)
+        self.assertFalse(follow_current_under_caret(lv_h))
+        self.assertIs(a.output.view, host)
+
+    def test_caret_follow_does_not_wake_sleeping(self):
+        import json
+        from tests.test_single_view import _Region, _Settings
+        from ui.session_list import follow_current_under_caret, SETTING, ROWS_KEY
+
+        win = RecordingWindow()
+        a = _session(win, "NoWakeA")
+        b = _session(win, "NoWakeB")
+        hv = HostView.for_window(win)
+        hv.attach(win, a)
+        hv.attach(win, b)
+        b.client = None
+        b.initialized = False
+        woken = []
+        b.wake = lambda: woken.append(1)
+        rows = collect_live(win)
+        for i, r in enumerate(rows):
+            r["line"] = i + 4
+            r["section"] = "CURRENT"
+        b_row = [r for r in rows if r["session_id"] == b.session_id][0]
+
+        class _ListView(object):
+            def __init__(self):
+                self._settings = _Settings()
+                self._settings.set(SETTING, True)
+                self._settings.set(ROWS_KEY, json.dumps(rows))
+                self._sel = [_Region(0)]
+
+            def is_valid(self):
+                return True
+
+            def settings(self):
+                return self._settings
+
+            def window(self):
+                return win
+
+            def sel(self):
+                return self._sel
+
+            def rowcol(self, pt):
+                return (b_row["line"] - 1, 0)
+
+            def id(self):
+                return 9090
+
+        lv = _ListView()
+        win.focus_view(lv)
+        self.assertTrue(follow_current_under_caret(lv))
+        self.assertEqual(woken, [])
+
+    def test_click_into_list_follows_caret_line_while_host_is_active(self):
+        import json
+        from tests.test_single_view import _Region, _Settings
+        from ui.session_list import follow_current_under_caret, SETTING, ROWS_KEY
+
+        win = RecordingWindow()
+        a = _session(win, "ClickA")
+        b = _session(win, "ClickB")
+        hv = HostView.for_window(win)
+        hv.attach(win, a)
+        hv.attach(win, b)
+        hv.attach(win, a)
+        host = hv.host_view(win)
+        win.focus_view(host)
+        rows = collect_live(win)
+        for i, r in enumerate(rows):
+            r["line"] = i + 4
+            r["section"] = "CURRENT"
+        b_row = [r for r in rows if r["session_id"] == b.session_id][0]
+
+        class _ListView(object):
+            def __init__(self):
+                self._settings = _Settings()
+                self._settings.set(SETTING, True)
+                self._settings.set(ROWS_KEY, json.dumps(rows))
+                self._sel = [_Region(0)]
+
+            def is_valid(self):
+                return True
+
+            def settings(self):
+                return self._settings
+
+            def window(self):
+                return win
+
+            def sel(self):
+                return self._sel
+
+            def rowcol(self, pt):
+                return (b_row["line"] - 1, 0)
+
+            def id(self):
+                return 7070
+
+        lv = _ListView()
+        self.assertIs(win.active_view(), host)
+        self.assertFalse(follow_current_under_caret(lv))
+        self.assertIs(a.output.view, host)
+        self.assertTrue(follow_current_under_caret(lv, force=True))
+        self.assertIs(b.output.view, host)
+        self.assertIs(win.active_view(), lv)
 
     def test_list_key_tears_off_bound_and_docks_torn_off(self):
         win = RecordingWindow()
