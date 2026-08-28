@@ -174,4 +174,42 @@ class FsMixin:
                 f.write(content)
 
         await asyncio.to_thread(_write)
+        self._maybe_note_artifact_write(path)
         return {}
+
+    def _artifact_root(self) -> str:
+        env = os.environ.get("SUBMARINE_ARTIFACTS_DIR")
+        if env:
+            return os.path.abspath(os.path.expanduser(env))
+        return os.path.join(os.path.expanduser("~"), ".submarine", "artifacts")
+
+    def _is_under_artifact_root(self, path: str) -> bool:
+        if not path:
+            return False
+        root = os.path.realpath(self._artifact_root())
+        try:
+            ap = os.path.realpath(os.path.expanduser(path))
+            common = os.path.commonpath([ap, root])
+        except (OSError, ValueError):
+            return False
+        return common == root
+
+    def _maybe_note_artifact_write(self, path: str) -> None:
+        """Convention path: writes under ~/.submarine/artifacts journal on the host."""
+        if not self._is_under_artifact_root(path):
+            return
+        name = os.path.basename(path or "")
+        if name.endswith(".journal.jsonl") or name == "index.json":
+            return
+        try:
+            from rpc_helpers import send_notification
+        except ImportError:
+            return
+        payload = {
+            "path": os.path.abspath(os.path.expanduser(path)),
+            "agent_id": getattr(self, "_agent_id", None),
+        }
+        try:
+            send_notification("artifact_write", payload)
+        except Exception:
+            pass

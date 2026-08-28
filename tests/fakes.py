@@ -86,6 +86,7 @@ class FakeOutput:
         self.removed = []  # type: list  # tools passed to remove_tool
         self.view = None
         self.pending_context = []  # type: list
+        self.artifact_cards = []  # type: list
 
     def prompt(self, text, context_names=None, context_refs=None):
         self.prompts.append((text, context_names, context_refs))
@@ -207,6 +208,12 @@ class FakeOutput:
 
     def set_pending_context(self, context_items):
         self.pending_context = list(context_items or [])
+
+    def artifact_card(self, path, name, bytes=0, summary="", title=None):
+        self.artifact_cards.append({
+            "path": path, "name": name, "bytes": bytes,
+            "summary": summary, "title": title,
+        })
 
 
 class FakeChrome:

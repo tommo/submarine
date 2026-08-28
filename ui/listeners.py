@@ -342,6 +342,12 @@ class SubmarineEventListener(sublime_plugin.EventListener):
             for session in sessions_map().values():
                 if session.output:
                     session.output._apply_output_settings()
+        if fname:
+            try:
+                from core.artifacts import handle_external_save
+                handle_external_save(fname)
+            except Exception:
+                pass
 
     def on_pre_close(self, view):
         task_id = view.settings().get("submarine_workflow_view") or view.settings().get(

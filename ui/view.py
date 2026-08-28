@@ -118,6 +118,7 @@ class SubmarineOutputView(FormatHelpers):
         r = self.renderer
         r._media_phantom_set = None
         r._turn_context_phantom_set = None
+        r._artifact_phantom_set = None
 
     def surface_save(self) -> dict:
         """Snapshot per-session chrome. Viewless: return last snapshot unchanged."""
@@ -522,6 +523,11 @@ class SubmarineOutputView(FormatHelpers):
     def text(self, content):
         """Append assistant text. Viewless: records events, no buffer write."""
         self.renderer.text(content)
+
+    def artifact_card(self, path, name, bytes=0, summary="", title=None):
+        """Append an artifact card. Viewless: records event, chrome when bound."""
+        self.renderer.artifact_card(
+            path, name, bytes=bytes, summary=summary, title=title)
 
     def meta(self, duration, cost=None, usage=None):
         """Finish the live turn. Viewless: records meta, skips buffer flush."""
@@ -1109,6 +1115,51 @@ class SubmarineOutputView(FormatHelpers):
                 target.sel().clear()
                 target.sel().add(sublime.Region(pt, pt))
                 target.show(pt)
+
+    def _handle_artifact_href(self, href, fallback_path=""):
+        """Card [open] / [path] hrefs. open in ST; path copies the absolute path."""
+        href = href or ""
+        path = fallback_path or ""
+        if href.startswith("artifact-open:"):
+            path = href[len("artifact-open:"):] or fallback_path
+            self._open_artifact_path(path)
+            return
+        if href.startswith("artifact-path:"):
+            path = href[len("artifact-path:"):] or fallback_path
+            self._copy_artifact_path(path)
+            return
+        if href.startswith("open:") or href == "open":
+            self._open_artifact_path(path or href[5:])
+            return
+        if href.startswith("path:") or href == "path":
+            self._copy_artifact_path(path or href[5:])
+
+    def _open_artifact_path(self, path):
+        path = os.path.expanduser(path or "")
+        if not path:
+            return
+        window = self.view.window() if self.view else self.window
+        if not window:
+            return
+        try:
+            from core.placement import open_file_in_last_session_split
+            open_file_in_last_session_split(window, path)
+        except Exception:
+            try:
+                window.open_file(path)
+            except Exception:
+                pass
+
+    def _copy_artifact_path(self, path):
+        path = os.path.expanduser(path or "")
+        if not path:
+            return
+        if sublime is not None:
+            try:
+                sublime.set_clipboard(path)
+                sublime.status_message("Copied path: %s" % path)
+            except Exception:
+                pass
 
     def _handle_context_href(self, href):
         """Clickable 📎 chips: open:N (pending) or turn:N (frozen)."""

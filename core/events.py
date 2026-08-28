@@ -57,6 +57,7 @@ class BridgeEventRouter:
         drop_asking=None,  # type: Optional[Callable]
         is_asking_tool=None,  # type: Optional[Callable]
         resume_drop_asking=None,  # type: Optional[Callable[[], bool]]
+        on_artifact_write=None,  # type: Optional[Callable[[str], None]]
     ):
         self.output = output
         self.chrome = chrome
@@ -86,6 +87,7 @@ class BridgeEventRouter:
         self.drop_asking = drop_asking
         self.is_asking_tool = is_asking_tool
         self.resume_drop_asking = resume_drop_asking
+        self.on_artifact_write = on_artifact_write
         self.current_tool = None  # type: Optional[str]
         self._api_retry_hint = None  # type: Optional[str]
 
@@ -113,6 +115,7 @@ class BridgeEventRouter:
             "queued_inject": self.queued_inject,
             "notification_wake": self.notification_wake,
             "loop_scheduled": self.loop_scheduled,
+            "artifact_write": self.artifact_write,
         }
 
     def _message_handlers(self):
@@ -182,6 +185,21 @@ class BridgeEventRouter:
             self.send("question_response", {"id": _qid, "answers": answers})
 
         self.output.question_request(qid, questions, on_done)
+
+    def artifact_write(self, params):
+        # type: (dict) -> None
+        path = (params or {}).get("path") or ""
+        if not path:
+            return
+        if self.on_artifact_write is not None:
+            self.on_artifact_write(path)
+            return
+        try:
+            from .artifacts import handle_convention_write
+            handle_convention_write(
+                path, agent_id=(params or {}).get("agent_id"))
+        except Exception:
+            pass
 
     def plan_mode_enter(self, params):
         # type: (dict) -> None

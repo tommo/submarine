@@ -10,6 +10,7 @@ from plat.constants import CONTEXT_PREFIX, SPINNER_FRAMES
 from . import keys
 from .geometry import should_pin_view_state, stream_treat_as_composing
 from .models import (
+    ArtifactCard,
     BACKGROUND,
     Conversation,
     DONE,
@@ -76,6 +77,7 @@ class TurnRenderer:
         self._media_uri_cache = {}
         self._media_anchor = {}
         self._turn_context_phantom_set = None
+        self._artifact_phantom_set = None
         self._tasks_expanded = False
         self._region_stash = None  # type: Optional[tuple]
         self._dirty = 0
@@ -506,6 +508,34 @@ class TurnRenderer:
                 "tool_error", (name,), {"result": result, "tool_id": tool_id})
             self._patch_tool_symbol(target, old_status)
 
+    def artifact_card(self, path, name, bytes=0, summary="", title=None):
+        """Append a transcript artifact card. Viewless: records event, no chrome.
+
+        Card update rule: always append a new card (do not mutate a prior
+        row for the same path). Each write/edit is a timeline entry.
+        """
+        card = ArtifactCard(
+            path=path or "",
+            name=name or "",
+            bytes=int(bytes or 0),
+            summary=summary or "",
+            title=title,
+        )
+        conv = self.current
+        if conv is None and self.conversations:
+            conv = self.conversations[-1]
+        if conv is None:
+            self.current = Conversation(working=False)
+            conv = self.current
+        conv.events.append(card)
+        self._mark_buffer_dirty(
+            "artifact_card",
+            (path, name),
+            {"bytes": bytes, "summary": summary, "title": title},
+        )
+        self._struct_dirty = True
+        self._render_current()
+
     def text(self, content):
         """Append assistant text. Viewless: records events, no buffer write."""
         if not self.current:
@@ -785,6 +815,9 @@ class TurnRenderer:
                     continue
                 if isinstance(event, ToolCall) and not is_host_control_tool(event.name):
                     lines.append(format_tool_row(self.owner, event))
+                elif isinstance(event, ArtifactCard):
+                    line = event.line()
+                    lines.append(line if line.endswith("\n") else line + "\n")
                 i += 1
         if conv.has_meta or conv.duration > 0:
             meta_parts = []
@@ -1133,6 +1166,9 @@ class TurnRenderer:
                 continue
             if isinstance(event, ToolCall) and not is_host_control_tool(event.name):
                 parts.append(format_tool_row(self.owner, event))
+            elif isinstance(event, ArtifactCard):
+                line = event.line()
+                parts.append(line if line.endswith("\n") else line + "\n")
             i += 1
         text = "".join(parts)
         return text, len(text)
@@ -1495,6 +1531,7 @@ class TurnRenderer:
         if following or not self.current.working:
             if sublime is not None:
                 sublime.set_timeout(self._refresh_media_phantoms, 10)
+                sublime.set_timeout(self._refresh_artifact_phantoms, 10)
         self.owner._sel_guard = False
 
     def _try_append(self, delta):
@@ -1743,9 +1780,90 @@ class TurnRenderer:
             except Exception:
                 pass
 
+    def _iter_artifact_cards(self):
+        convs = list(self.conversations)
+        if self.current is not None:
+            convs.append(self.current)
+        for conv in convs:
+            for event in conv.events:
+                if isinstance(event, ArtifactCard):
+                    yield event
+
+    def _refresh_artifact_phantoms(self):
+        """Overlay [open]/[path] hrefs. Chrome only — skipped when detached."""
+        view = self.owner.view
+        if not view or not view.is_valid() or sublime is None:
+            return
+        if (self._artifact_phantom_set is None
+                or getattr(self, "_artifact_phantom_view_id", None) != view.id()):
+            try:
+                self._artifact_phantom_set = sublime.PhantomSet(
+                    view, keys.PHANTOM_ARTIFACT)
+                self._artifact_phantom_view_id = view.id()
+            except Exception:
+                return
+        cards = list(self._iter_artifact_cards())
+        if not cards:
+            try:
+                self._artifact_phantom_set.update([])
+            except Exception:
+                pass
+            return
+        import html as _html
+        content = view.substr(_R(0, view.size()))
+        phantoms = []
+        used = set()
+        for card in cards:
+            line = (card.line() or "").rstrip("\n")
+            if not line:
+                continue
+            start = 0
+            loc = -1
+            while True:
+                idx = content.find(line, start)
+                if idx < 0:
+                    break
+                if idx not in used:
+                    loc = idx
+                    used.add(idx)
+                    break
+                start = idx + 1
+            if loc < 0:
+                continue
+            open_at = content.find("[open]", loc)
+            path_at = content.find("[path]", loc)
+            line_end = content.find("\n", loc)
+            if line_end < 0:
+                line_end = loc + len(line)
+            if open_at < 0 or open_at > line_end:
+                continue
+            href_open = "artifact-open:%s" % card.path
+            href_copy = "artifact-path:%s" % card.path
+            html = (
+                '<body id="submarine-artifact" style="margin:0;padding:0;'
+                'font-size:11px;"><a href="%s">open</a> · '
+                '<a href="%s">path</a></body>'
+                % (_html.escape(href_open), _html.escape(href_copy))
+            )
+            pt = path_at + 6 if path_at >= 0 and path_at <= line_end else open_at + 6
+
+            def _nav(href, _p=card.path):
+                self.owner._handle_artifact_href(href, _p)
+
+            try:
+                phantoms.append(sublime.Phantom(
+                    sublime.Region(pt, pt), html, sublime.LAYOUT_INLINE, _nav))
+            except Exception:
+                pass
+        try:
+            self._artifact_phantom_set.update(phantoms)
+        except Exception:
+            pass
+
 
 _REPLAYABLE = frozenset((
     "prompt", "text", "tool", "tool_done", "tool_error",
+    "artifact_card",
     "meta", "interrupted", "apply_plan_todos", "set_retry_hint",
     "clear", "clear_keep_last", "reset_active_states",
 ))
@@ -1767,6 +1885,8 @@ def _clone_conv(conv):
                 result=e.result,
                 id=e.id,
             ))
+        elif isinstance(e, ArtifactCard):
+            events.append(replace(e))
         else:
             events.append(e)
     todos = []

@@ -241,6 +241,57 @@ def _cancel_timer_codegen(args: Dict[str, Any]) -> str:
     return "return cancel_timer()"
 
 
+def _write_artifact_codegen(args: Dict[str, Any]) -> str:
+    parts = [
+        "name=%r" % (args.get("name") or ""),
+        "content=%r" % (args.get("content") if args.get("content") is not None else ""),
+        "mode=%r" % (args.get("mode") or "write"),
+    ]
+    for key in ("title", "summary", "auto_open", "_caller_agent_id"):
+        if args.get(key) is not None:
+            parts.append("%s=%r" % (key, args[key]))
+    return "return write_artifact(%s)" % ", ".join(parts)
+
+
+def _edit_artifact_codegen(args: Dict[str, Any]) -> str:
+    if not args.get("path"):
+        raise ValueError("Missing required parameter: path")
+    if not args.get("op"):
+        raise ValueError("Missing required parameter: op")
+    parts = [
+        "path=%r" % args.get("path"),
+        "op=%r" % args.get("op"),
+    ]
+    for key in (
+        "old", "new", "offset", "length", "heading", "note",
+        "_caller_agent_id",
+    ):
+        if args.get(key) is not None:
+            parts.append("%s=%r" % (key, args[key]))
+    return "return edit_artifact(%s)" % ", ".join(parts)
+
+
+def _read_artifact_codegen(args: Dict[str, Any]) -> str:
+    if not args.get("path"):
+        raise ValueError("Missing required parameter: path")
+    parts = ["path=%r" % args.get("path")]
+    if args.get("offset") is not None:
+        parts.append("offset=%r" % args.get("offset"))
+    if args.get("limit") is not None:
+        parts.append("limit=%r" % args.get("limit"))
+    if args.get("_caller_agent_id") is not None:
+        parts.append("_caller_agent_id=%r" % args["_caller_agent_id"])
+    return "return read_artifact(%s)" % ", ".join(parts)
+
+
+def _list_artifacts_codegen(args: Dict[str, Any]) -> str:
+    parts = []  # type: List[str]
+    parts.append("scope=%r" % (args.get("scope") or "self"))
+    if args.get("_caller_agent_id") is not None:
+        parts.append("_caller_agent_id=%r" % args["_caller_agent_id"])
+    return "return list_artifacts(%s)" % ", ".join(parts)
+
+
 # ─── Catalog (single source of truth) ─────────────────────────────────────────
 # Each entry: description, schema (MCP inputSchema), codegen, optional flags:
 #   local=True  — handled in the stdio process (no socket); still in both tables
@@ -783,6 +834,166 @@ TOOL_TABLE = {
         },
         "codegen": _cancel_timer_codegen,
     },
+    "write_artifact": {
+        "description": (
+            "Write a report/analysis/walkthrough to the agent artifact store. "
+            "THIS WRITE IS THE OUTPUT — do not also print the report into the "
+            "transcript. The session gets a compact card (name, size, summary); "
+            "the file is the source of truth.\n"
+            "\n"
+            "Prefer this over dumping long text into the session. Reply with "
+            "the returned path and a short summary (signal_complete payload).\n"
+            "\n"
+            "Surgical edits: prefer the agent's native Edit/Write on the "
+            "returned path. Use edit_artifact only when you have no file-edit "
+            "tool (MCP-only callers) or need byte-range / heading ops.\n"
+            "\n"
+            "If read_artifact journal_tail shows op=external after your last "
+            "write, the user edited the file — re-read before rewriting.\n"
+            "\n"
+            "Returns {path, bytes} — not the content."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "File name/slug (e.g. auth-analysis). Sanitized; .md default.",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Full file contents (mode=write) or text to append (mode=append).",
+                },
+                "mode": {
+                    "type": "string",
+                    "description": "write (create/rewrite, default) or append.",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Optional display title for the card/index.",
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "One-line summary shown on the transcript card.",
+                },
+                "auto_open": {
+                    "description": (
+                        "Override artifacts_auto_open for this call: true/false "
+                        "or first/always/never."
+                    ),
+                },
+            },
+            "required": ["name", "content"],
+        },
+        "codegen": _write_artifact_codegen,
+    },
+    "edit_artifact": {
+        "description": (
+            "Edit an existing artifact (MCP-only callers / precise ops). "
+            "Prefer native Edit on the artifact path for surgical changes.\n"
+            "\n"
+            "ops:\n"
+            "  replace_text   old, new          unique match; fails on 0 or 2+\n"
+            "  replace_range  offset, length, new   byte-exact (pairs with read_artifact)\n"
+            "  insert_at      offset, new\n"
+            "  delete_range   offset, length\n"
+            "  replace_section heading, new     markdown body under ## heading\n"
+            "  append         new\n"
+            "\n"
+            "If journal_tail shows external (user) edits after your last write, "
+            "re-read before rewriting. Do not also print the file into the transcript.\n"
+            "\n"
+            "Returns {path, bytes, op}."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute artifact path from write_artifact / list_artifacts.",
+                },
+                "op": {
+                    "type": "string",
+                    "description": (
+                        "replace_text | replace_range | insert_at | "
+                        "delete_range | replace_section | append"
+                    ),
+                },
+                "old": {"type": "string", "description": "replace_text: exact unique substring"},
+                "new": {
+                    "type": "string",
+                    "description": "Replacement / insert / append / section body",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Byte offset (replace_range / insert_at / delete_range)",
+                },
+                "length": {
+                    "type": "integer",
+                    "description": "Byte length (replace_range / delete_range)",
+                },
+                "heading": {
+                    "type": "string",
+                    "description": "Markdown heading title (with or without ##) for replace_section",
+                },
+                "note": {
+                    "type": "string",
+                    "description": "One-liner stored on the journal event",
+                },
+            },
+            "required": ["path", "op"],
+        },
+        "codegen": _edit_artifact_codegen,
+    },
+    "read_artifact": {
+        "description": (
+            "Read an artifact with byte-accurate offset/limit paging. "
+            "Prefer artifact paths over read_session_output for anything "
+            "longer than a screen — session output is a rendered, truncated "
+            "buffer and dies when the view is detached.\n"
+            "\n"
+            "Returns {content, offset, total_bytes, truncated, journal_tail}. "
+            "journal_tail is recent change events (create/rewrite/append/edit/"
+            "external). If you see op=external after your last write, the user "
+            "annotated the file — re-read before rewriting."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute artifact path",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Byte offset (default 0)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max bytes to return (default 20000)",
+                },
+            },
+            "required": ["path"],
+        },
+        "codegen": _read_artifact_codegen,
+    },
+    "list_artifacts": {
+        "description": (
+            "List artifact index entries (MRU). scope=self (default) is this "
+            "agent's files; scope=all is every owner. Any agent may then "
+            "read_artifact any path (flat trust)."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "scope": {
+                    "type": "string",
+                    "description": "self (default) or all",
+                },
+            },
+        },
+        "codegen": _list_artifacts_codegen,
+    },
 }  # type: Dict[str, Dict[str, Any]]
 
 
@@ -795,6 +1006,10 @@ CALLER_INJECT_TOOLS = frozenset((
     "spawn_session",
     "send_to_session",
     "signal_complete",
+    "write_artifact",
+    "edit_artifact",
+    "read_artifact",
+    "list_artifacts",
 ))
 
 # Host-only debug ops (socket op=debug). Never in tools/list or TOOL_TABLE.

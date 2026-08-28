@@ -33,6 +33,16 @@ _HOST_CONTROL_TOOLS = frozenset({
     "sublime__quick_done",
     "mcp__submarine__quick_done",
     "submarine__quick_done",
+    "write_artifact",
+    "mcp__sublime__write_artifact",
+    "sublime__write_artifact",
+    "mcp__submarine__write_artifact",
+    "submarine__write_artifact",
+    "edit_artifact",
+    "mcp__sublime__edit_artifact",
+    "sublime__edit_artifact",
+    "mcp__submarine__edit_artifact",
+    "submarine__edit_artifact",
 })
 
 # Canonical host list: core/background.py SHELL_BG ∪ SUBAGENT_BG.
@@ -47,7 +57,11 @@ def is_host_control_tool(name: str) -> bool:
     if n in _HOST_CONTROL_TOOLS:
         return True
     low = n.lower()
-    return low.endswith("quick_done") or "quick_done" in low
+    return (
+        low.endswith("quick_done") or "quick_done" in low
+        or low.endswith("write_artifact") or "write_artifact" in low
+        or low.endswith("edit_artifact") or "edit_artifact" in low
+    )
 
 
 def may_background(name: str) -> bool:

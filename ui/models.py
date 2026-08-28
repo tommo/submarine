@@ -160,6 +160,32 @@ class ToolCall:
 
 
 @dataclass
+class ArtifactCard:
+    """Compact transcript row for an artifact write/edit.
+
+    Card update rule: every write/edit appends a new card (timeline).
+    User (external) saves are journaled only and do not emit a card.
+    """
+    path: str
+    name: str
+    bytes: int = 0
+    summary: str = ""
+    title: Optional[str] = None
+
+    def line(self) -> str:
+        try:
+            from core.artifacts import format_card_line
+            return format_card_line(self.name, self.bytes, self.summary)
+        except Exception:
+            size = "%s B" % int(self.bytes or 0)
+            summ = (self.summary or "").replace("\n", " ").strip()
+            if summ:
+                return "📄 %s — %s — %s        [open] [path]\n" % (
+                    self.name, size, summ)
+            return "📄 %s — %s        [open] [path]\n" % (self.name, size)
+
+
+@dataclass
 class TodoItem:
     """A todo item from TodoWrite or Task* tools."""
     content: str

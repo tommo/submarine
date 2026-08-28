@@ -49,6 +49,10 @@ KEEP = (
     "read_profile_doc",
     "set_timer",
     "cancel_timer",
+    "write_artifact",
+    "edit_artifact",
+    "read_artifact",
+    "list_artifacts",
 )
 
 DROP = (
@@ -174,6 +178,7 @@ def test_spawn_schema_has_no_persona_or_checkpoint():
 def test_caller_inject_set():
     assert CALLER_INJECT_TOOLS == frozenset((
         "spawn_session", "send_to_session", "signal_complete",
+        "write_artifact", "edit_artifact", "read_artifact", "list_artifacts",
     ))
 
 
@@ -278,6 +283,63 @@ def test_router_codegen_set_and_cancel_timer():
     assert kw["timer_id"] == "tmr-abc"
     src = route("cancel_timer", {})
     assert src == "return cancel_timer()"
+
+
+def test_router_codegen_write_artifact_injects_caller():
+    src = route("write_artifact", {
+        "name": "auth-analysis",
+        "content": "# hi",
+        "summary": "auth flow",
+        "_caller_agent_id": "agent-abc",
+        "auto_open": False,
+    })
+    call = _assert_call(src, "write_artifact")
+    kw = _kw(call)
+    assert kw["name"] == "auth-analysis"
+    assert kw["content"] == "# hi"
+    assert kw["summary"] == "auth flow"
+    assert kw["_caller_agent_id"] == "agent-abc"
+    assert kw["auto_open"] is False
+    assert "view_id" not in kw
+    assert "_caller_view_id" not in kw
+
+
+def test_router_codegen_edit_and_read_artifact():
+    src = route("edit_artifact", {
+        "path": "/tmp/a.md",
+        "op": "replace_text",
+        "old": "a",
+        "new": "b",
+        "note": "fix typo",
+        "_caller_agent_id": "agent-z",
+    })
+    kw = _kw(_assert_call(src, "edit_artifact"))
+    assert kw["path"] == "/tmp/a.md"
+    assert kw["op"] == "replace_text"
+    assert kw["old"] == "a"
+    assert kw["new"] == "b"
+    assert kw["note"] == "fix typo"
+    assert kw["_caller_agent_id"] == "agent-z"
+    src = route("read_artifact", {"path": "/tmp/a.md", "offset": 10, "limit": 5})
+    kw = _kw(_assert_call(src, "read_artifact"))
+    assert kw["path"] == "/tmp/a.md"
+    assert kw["offset"] == 10
+    assert kw["limit"] == 5
+    src = route("list_artifacts", {"scope": "all", "_caller_agent_id": "agent-z"})
+    kw = _kw(_assert_call(src, "list_artifacts"))
+    assert kw["scope"] == "all"
+    assert kw["_caller_agent_id"] == "agent-z"
+
+
+def test_artifact_tool_docs_steer_away_from_transcript_dump():
+    write_desc = TOOL_TABLE["write_artifact"]["description"].lower()
+    assert "is the output" in write_desc
+    assert "do not also print" in write_desc
+    assert "native" in write_desc and "edit" in write_desc
+    read_desc = TOOL_TABLE["read_artifact"]["description"].lower()
+    assert "read_session_output" in read_desc
+    assert "journal_tail" in read_desc
+    assert "external" in read_desc
 
 
 def test_router_unknown_tool_raises():

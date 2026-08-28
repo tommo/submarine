@@ -67,6 +67,7 @@ PHANTOM_SLEEP = "submarine_sleep"
 PHANTOM_QUEUE = "submarine_queue"
 PHANTOM_WAKEUP = "submarine_wakeup"
 PHANTOM_PERM_BANNER = "submarine_permission_banner"
+PHANTOM_ARTIFACT = "submarine_artifact"
 
 # Text commands used for buffer edits
 CMD_INSERT = "submarine_insert"

@@ -458,3 +458,43 @@ class SubmarineDevtoolsReloadCommand(sublime_plugin.WindowCommand):
         r = _devtools().reload_plugin(mode=mode or "soft")
         sublime.status_message("Submarine: reload scheduled (%s)" % r.get("mode", mode))
         print("[Submarine] reload scheduled: %s" % r)
+
+
+class SubmarineArtifactsCommand(sublime_plugin.WindowCommand):
+    def run(self):
+        from core.artifacts import list_artifacts
+
+        cap = 500
+        try:
+            from plat.constants import SETTINGS_FILE
+            cap = int(sublime.load_settings(SETTINGS_FILE).get(
+                "artifacts_index_cap", 500) or 500)
+        except Exception:
+            cap = 500
+        entries = list_artifacts(scope="all", index_cap=cap)
+        if not entries:
+            sublime.status_message("No artifacts")
+            return
+        items = []
+        for e in entries:
+            title = e.get("title") or e.get("name") or os.path.basename(
+                e.get("path") or "")
+            extra = "  ".join(
+                p for p in (
+                    e.get("owner") or "",
+                    e.get("summary") or "",
+                    e.get("path") or "",
+                ) if p
+            )
+            items.append([str(title), extra])
+
+        def on_done(idx, rows=entries):
+            if idx < 0 or idx >= len(rows):
+                return
+            path = rows[idx].get("path")
+            if not path:
+                return
+            from core.placement import open_file_in_last_session_split
+            open_file_in_last_session_split(self.window, path)
+
+        self.window.show_quick_panel(items, on_done)

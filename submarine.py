@@ -83,6 +83,7 @@ from commands import (  # noqa: F401
     SubmarineDevtoolsComposerCommand,
     SubmarineDevtoolsLogCommand,
     SubmarineDevtoolsReloadCommand,
+    SubmarineArtifactsCommand,
     SubmarineToggleSubmitModeCommand,
     SubmarineSendNowCommand,
     SubmarineSubmitInputCommand,

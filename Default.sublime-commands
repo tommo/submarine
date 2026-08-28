@@ -109,6 +109,10 @@
         "command": "submarine_session_list"
     },
     {
+        "caption": "Submarine: Artifacts…",
+        "command": "submarine_artifacts"
+    },
+    {
         "caption": "Submarine: Session List Reveal (keep focus)",
         "command": "submarine_session_list_reveal"
     },

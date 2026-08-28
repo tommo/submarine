@@ -65,6 +65,7 @@ from .ui_cmds import (  # noqa: F401
     SubmarineDevtoolsComposerCommand,
     SubmarineDevtoolsLogCommand,
     SubmarineDevtoolsReloadCommand,
+    SubmarineArtifactsCommand,
 )
 from .text_cmds import (  # noqa: F401
     SubmarineToggleSubmitModeCommand,

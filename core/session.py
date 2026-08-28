@@ -291,6 +291,7 @@ class Session:
         self._pending_signal_complete = None
         self._pending_retain = None
         self._saved_goal_json = None  # type: Optional[dict]
+        self._artifacts_auto_opened = False
 
         # Features/ui hook points (NOT implemented here).
         self.on_turn_end = []  # type: List[Callable]
@@ -337,6 +338,7 @@ class Session:
             drop_asking=self._drop_resume_asking_if_needed,
             is_asking_tool=self._is_asking_tool,
             resume_drop_asking=lambda: bool(self._resume_drop_asking),
+            on_artifact_write=self._on_artifact_write,
         )
         self.rewind = RewindService(
             send=self._send,
@@ -346,6 +348,20 @@ class Session:
             scheduler=scheduler,
             jsonl_finder=self._find_jsonl_path,
         )
+
+    def _on_artifact_write(self, path):
+        # type: (str) -> None
+        """Convention path: ACP fs write under the artifact root."""
+        try:
+            from .artifacts import handle_convention_write
+            handle_convention_write(
+                path,
+                session=self,
+                agent_id=getattr(self, "agent_id", None),
+                session_id=getattr(self, "session_id", None),
+            )
+        except Exception:
+            pass
 
     # ── derived state ─────────────────────────────────────────────────
 

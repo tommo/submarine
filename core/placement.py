@@ -118,6 +118,51 @@ def last_session_group(window) -> Optional[int]:
     return group
 
 
+def open_file_in_last_session_split(window, path: str):
+    """Open a file read-write in the last session split, word-wrapped.
+
+    Mirrors ui/modals._open_plan_file. Safe when sublime is missing
+    (tests): uses window.open_file if present.
+    """
+    if not window or not path:
+        return None
+    view = None
+    try:
+        view = window.open_file(path)
+    except Exception:
+        view = None
+    if view is not None:
+        try:
+            place_in_last_session_split(window, view)
+        except Exception:
+            pass
+        try:
+            st = view.settings()
+            st.set("word_wrap", True)
+        except Exception:
+            pass
+        try:
+            import sublime
+        except ImportError:
+            sublime = None  # type: ignore
+        if sublime is not None and getattr(view, "is_loading", None):
+
+            def enable_wrap(v=view):
+                try:
+                    if v.is_loading():
+                        sublime.set_timeout(lambda: enable_wrap(v), 100)
+                        return
+                    v.settings().set("word_wrap", True)
+                except Exception:
+                    pass
+
+            try:
+                sublime.set_timeout(enable_wrap, 0)
+            except Exception:
+                pass
+    return view
+
+
 def place_in_last_session_split(window, view) -> bool:
     """Move a new sheet into the last active session's split."""
     if not window or not view:

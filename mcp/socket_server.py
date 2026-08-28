@@ -501,6 +501,10 @@ class MCPSocketServer:
             "wait_for_subsession": self._wait_for_subsession,
             "set_timer": self._set_timer,
             "cancel_timer": self._cancel_timer,
+            "write_artifact": self._write_artifact,
+            "edit_artifact": self._edit_artifact,
+            "read_artifact": self._read_artifact,
+            "list_artifacts": self._list_artifacts,
         }
         required = exec_global_names()
         missing = required - set(impls)
@@ -1647,6 +1651,157 @@ class MCPSocketServer:
             except Exception as e:
                 return {"error": "features.scheduler.cancel_timer failed: %s" % e}
         return self._cancel_timer_local(session, timer_id)
+
+    def _artifact_index_cap(self) -> int:
+        try:
+            from plat.constants import SETTINGS_FILE
+            val = sublime.load_settings(SETTINGS_FILE).get("artifacts_index_cap", 500)
+            return max(1, int(val or 500))
+        except Exception:
+            return 500
+
+    def _artifact_auto_open_mode(self, session) -> str:
+        try:
+            from plat.constants import SETTINGS_FILE
+            val = sublime.load_settings(SETTINGS_FILE).get(
+                "artifacts_auto_open", "first")
+            if val:
+                return str(val)
+        except Exception:
+            pass
+        settings = getattr(session, "settings", None) or {}
+        try:
+            return str(settings.get("artifacts_auto_open") or "first")
+        except Exception:
+            return "first"
+
+    def _write_artifact(
+        self,
+        name: str,
+        content: str,
+        mode: str = "write",
+        title: str = None,
+        summary: str = None,
+        auto_open=None,
+        _caller_agent_id: str = None,
+    ) -> dict:
+        if _caller_agent_id is not None:
+            self._caller_agent_id = _caller_agent_id
+        caller = str(_caller_agent_id or getattr(self, "_caller_agent_id", None) or "")
+        if not caller:
+            return {"error": "write_artifact requires a caller agent_id"}
+        if not name:
+            return {"error": "name is required"}
+        session = _get_session_by_agent_id(caller)
+        try:
+            from core.artifacts import write as artifacts_write
+            from core.artifacts import maybe_auto_open_session, publish_to_session
+            rec = artifacts_write(
+                name=name,
+                content="" if content is None else str(content),
+                owner=caller,
+                mode=mode or "write",
+                title=title,
+                summary=summary,
+                session_id=getattr(session, "session_id", None) if session else None,
+                agent_id=caller,
+                index_cap=self._artifact_index_cap(),
+            )
+        except Exception as e:
+            return {"error": str(e)}
+        if session is not None:
+            publish_to_session(session, rec)
+            maybe_auto_open_session(
+                session,
+                rec.get("path") or "",
+                override=auto_open,
+                mode=self._artifact_auto_open_mode(session),
+            )
+        return {"path": rec.get("path"), "bytes": rec.get("bytes")}
+
+    def _edit_artifact(
+        self,
+        path: str,
+        op: str,
+        old: str = None,
+        new: str = None,
+        offset: int = None,
+        length: int = None,
+        heading: str = None,
+        note: str = None,
+        _caller_agent_id: str = None,
+    ) -> dict:
+        if _caller_agent_id is not None:
+            self._caller_agent_id = _caller_agent_id
+        caller = str(_caller_agent_id or getattr(self, "_caller_agent_id", None) or "")
+        if not caller:
+            return {"error": "edit_artifact requires a caller agent_id"}
+        if not path:
+            return {"error": "path is required"}
+        if not op:
+            return {"error": "op is required"}
+        session = _get_session_by_agent_id(caller)
+        try:
+            from core.artifacts import edit as artifacts_edit
+            from core.artifacts import publish_to_session
+            rec = artifacts_edit(
+                path=path,
+                op=op,
+                agent_id=caller,
+                old=old,
+                new=new,
+                offset=offset,
+                length=length,
+                heading=heading,
+                note=note,
+                session_id=getattr(session, "session_id", None) if session else None,
+                index_cap=self._artifact_index_cap(),
+            )
+        except Exception as e:
+            return {"error": str(e)}
+        if session is not None:
+            publish_to_session(session, rec)
+        return {
+            "path": rec.get("path"),
+            "bytes": rec.get("bytes"),
+            "op": rec.get("edit_op") or op,
+        }
+
+    def _read_artifact(
+        self,
+        path: str,
+        offset: int = 0,
+        limit: int = 20000,
+        _caller_agent_id: str = None,
+    ) -> dict:
+        if _caller_agent_id is not None:
+            self._caller_agent_id = _caller_agent_id
+        if not path:
+            return {"error": "path is required"}
+        try:
+            from core.artifacts import read as artifacts_read
+            return artifacts_read(path, offset=offset, limit=limit)
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _list_artifacts(
+        self,
+        scope: str = "self",
+        _caller_agent_id: str = None,
+    ) -> dict:
+        if _caller_agent_id is not None:
+            self._caller_agent_id = _caller_agent_id
+        caller = str(_caller_agent_id or getattr(self, "_caller_agent_id", None) or "")
+        try:
+            from core.artifacts import list_artifacts as artifacts_list
+            entries = artifacts_list(
+                scope=scope or "self",
+                agent_id=caller or None,
+                index_cap=self._artifact_index_cap(),
+            )
+        except Exception as e:
+            return {"error": str(e)}
+        return {"artifacts": entries, "count": len(entries)}
 
     def _set_timer_local(self, session, seconds: int, wake_prompt: str) -> dict:
         """Host-local stand-in until features/scheduler.py exists."""

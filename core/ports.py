@@ -132,6 +132,16 @@ class OutputPort(Protocol):
     def set_pending_context(self, context_items: list) -> None:
         ...
 
+    def artifact_card(
+        self,
+        path: str,
+        name: str,
+        bytes: int = 0,
+        summary: str = "",
+        title: Optional[str] = None,
+    ) -> None:
+        ...
+
 
 class ChromePort(Protocol):
     """Phantom / status / tab chrome. Implementations live in ui/."""

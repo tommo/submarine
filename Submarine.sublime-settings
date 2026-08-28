@@ -24,6 +24,14 @@
     // Session list HISTORY rows (this project). Default 200.
     "session_list_history_limit": 200,
 
+    // Auto-open artifacts in the last session split.
+    // "first" (default): open the first artifact a session creates.
+    // "always" / "never". Per-call write_artifact(auto_open=) overrides.
+    "artifacts_auto_open": "first",
+
+    // Max entries in ~/.submarine/artifacts/index.json (MRU-front). Default 500.
+    "artifacts_index_cap": 500,
+
     // One output view per window; session list swaps which session it shows.
     // Options: "single" (default — host view + tear-off), "tabs" (legacy:
     // one sheet per session).

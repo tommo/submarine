@@ -18,6 +18,7 @@ USER_HOME = Path.home()
 CLAUDE_USER_SETTINGS_FILE = USER_HOME / ".claude.json"
 USER_SETTINGS_FILE = CLAUDE_USER_SETTINGS_FILE
 USER_PROFILES_DIR = USER_HOME / ".submarine"
+ARTIFACTS_DIR = USER_PROFILES_DIR / "artifacts"
 
 # ─── Project directories (Claude CLI layout, still read by the cascade) ───────
 PROJECT_SETTINGS_DIR = ".claude"

@@ -710,6 +710,9 @@ class SubmarineOpenLinkCommand(sublime_plugin.TextCommand):
         if "super+click to expand" in line or "super+click to collapse" in line:
             self.view.run_command("submarine_toggle_tasks_fold")
             return
+        if line.lstrip().startswith("📄") and keys.is_output_view(self.view):
+            if self._handle_artifact_card_click(line, col):
+                return
         if line.strip().startswith("◎ goal ·") and keys.is_output_view(self.view):
             self.view.run_command("submarine_toggle_tasks_fold")
             return
@@ -761,6 +764,44 @@ class SubmarineOpenLinkCommand(sublime_plugin.TextCommand):
                             window.open_file(path_with_line)
                     return
         sublime.status_message("No link or file path found at cursor")
+
+    def _handle_artifact_card_click(self, line, col):
+        open_at = line.find("[open]")
+        path_at = line.find("[path]")
+        want_open = open_at >= 0 and open_at <= col <= open_at + 6
+        want_path = path_at >= 0 and path_at <= col <= path_at + 6
+        if not want_open and not want_path:
+            # Click anywhere on the card opens the file.
+            want_open = True
+        session = get_session_for_view(self.view)
+        card_path = None
+        if session and session.output:
+            from ui.models import ArtifactCard
+            out = session.output
+            convs = list(out.conversations)
+            if out.current is not None:
+                convs.append(out.current)
+            stripped = line.strip()
+            for conv in reversed(convs):
+                for event in reversed(getattr(conv, "events", []) or []):
+                    if not isinstance(event, ArtifactCard):
+                        continue
+                    if event.line().strip() == stripped:
+                        card_path = event.path
+                        break
+                if card_path:
+                    break
+        if not card_path:
+            return False
+        if want_path:
+            sublime.set_clipboard(card_path)
+            sublime.status_message("Copied path: %s" % card_path)
+            return True
+        window = self.view.window()
+        if window:
+            from core.placement import open_file_in_last_session_split
+            open_file_in_last_session_split(window, card_path)
+        return True
 
     def _media_path_from_line(self, line):
         import re
