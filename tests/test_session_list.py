@@ -7,6 +7,40 @@ import unittest
 from ui import session_list as sl
 
 
+def _live(sid, name, **kw):
+    row = {
+        "kind": "live",
+        "session_id": sid,
+        "agent_id": kw.pop("aid", sid),
+        "parent_agent_id": kw.pop("parent", None),
+        "view_id": kw.pop("view_id", None),
+        "name": name,
+        "backend": kw.pop("backend", "grok"),
+        "status": kw.pop("status", "ready"),
+        "query_count": kw.pop("queries", 1),
+        "same_window": True,
+        "last_access": kw.pop("access", 1),
+        "last_activity": kw.pop("activity", None),
+    }
+    if row["last_activity"] is None:
+        row["last_activity"] = row["last_access"]
+    row.update(kw)
+    return row
+
+
+def _saved(sid, name, **kw):
+    row = _live(sid, name, **kw)
+    row["kind"] = "saved"
+    row["status"] = kw.get("status", "closed")
+    row["view_id"] = None
+    return row
+
+
+def _session_lines(text):
+    marks = ("○", "●", "?", "!", "⏸", "▸", "⊡", "·", "⚙")
+    return [ln for ln in text.splitlines() if ln[:1] in marks]
+
+
 class TestRenderSessionList(unittest.TestCase):
     def tearDown(self):
         import sys
@@ -696,6 +730,264 @@ class TestRenderSessionList(unittest.TestCase):
         with open(path, encoding="utf-8") as f:
             src = f.read()
         self.assertNotIn('view.run_command("submarine_session_list_open")', src)
+
+    def test_tree_parent_children_grandchild_contiguous(self):
+        live = [
+            _live("g", "grand", aid="ag", parent="ac", access=10),
+            _live("c2", "child-b", aid="ac2", parent="ap", access=20),
+            _live("c1", "child-a", aid="ac", parent="ap", access=30),
+            _live("p", "parent", aid="ap", access=5),
+        ]
+        text, index = sl.render_list(live, [], [], cols=80)
+        ids = [r["session_id"] for r in index]
+        self.assertEqual(ids, ["p", "c1", "g", "c2"])
+        self.assertEqual([r.get("depth") for r in index], [0, 1, 2, 1])
+        lines = _session_lines(text)
+        by_name = {r["name"]: ln for r, ln in zip(index, lines)}
+        self.assertNotIn(sl.CHILD_MARK, by_name["parent"])
+        self.assertIn(sl.CHILD_MARK, by_name["child-a"])
+        self.assertIn(sl.CHILD_MARK, by_name["grand"])
+        self.assertIn(sl.CHILD_MARK, by_name["child-b"])
+        self.assertLess(by_name["child-a"].index(sl.CHILD_MARK),
+                        by_name["grand"].index(sl.CHILD_MARK))
+        self.assertEqual(
+            by_name["child-a"].index(sl.CHILD_MARK),
+            by_name["child-b"].index(sl.CHILD_MARK))
+        # Tree stays contiguous: grand sits between the two siblings.
+        self.assertEqual(
+            [ln for ln in lines if "child" in ln or "grand" in ln or "parent" in ln],
+            lines)
+
+    def test_tree_orphan_is_root(self):
+        live = [
+            _live("c", "orphan", aid="ac", parent="missing", access=10),
+            _live("p", "other", aid="ap", access=20),
+        ]
+        text, index = sl.render_list(live, [], [], cols=80)
+        self.assertEqual([r["session_id"] for r in index], ["p", "c"])
+        self.assertEqual([r.get("depth") for r in index], [0, 0])
+        self.assertNotIn(sl.CHILD_MARK, text)
+
+    def test_tree_root_and_sibling_recency(self):
+        live = [
+            _live("r1", "older-root", aid="a1", access=10),
+            _live("r2", "newer-root", aid="a2", access=50),
+            _live("c1", "older-sib", aid="c1", parent="a2", access=20),
+            _live("c2", "newer-sib", aid="c2", parent="a2", access=40),
+        ]
+        _, index = sl.render_list(live, [], [], cols=80)
+        self.assertEqual(
+            [r["session_id"] for r in index], ["r2", "c2", "c1", "r1"])
+        self.assertEqual([r.get("depth") for r in index], [0, 1, 1, 0])
+
+    def test_tree_cycle_no_hang_or_dup(self):
+        live = [
+            _live("a", "A", aid="aa", parent="ab", access=3),
+            _live("b", "B", aid="ab", parent="aa", access=2),
+            _live("c", "C", aid="ac", parent="ac", access=1),
+            _live("d", "D", aid="ad", parent="ae", access=4),
+            _live("e", "E", aid="ae", parent="af", access=5),
+            _live("f", "F", aid="af", parent="ad", access=6),
+        ]
+        ordered = sl.tree_order(live)
+        ids = [r["session_id"] for r in ordered]
+        self.assertEqual(sorted(ids), ["a", "b", "c", "d", "e", "f"])
+        self.assertEqual(len(ids), 6)
+        self.assertEqual([r.get("depth") for r in ordered], [0] * 6)
+        text, index = sl.render_list(live, [], [], cols=80)
+        self.assertEqual(len(index), 6)
+        self.assertNotIn(sl.CHILD_MARK, text)
+
+    def test_tree_starred_child_pins_to_section_top(self):
+        live = [
+            _live("p", "parent", aid="ap", access=30),
+            _live("c", "star-child", aid="ac", parent="ap", access=20),
+            _live("g", "grand", aid="ag", parent="ac", access=15),
+            _live("o", "other", aid="ao", access=10),
+        ]
+        text, index = sl.render_list(live, [], [], starred={"c"}, cols=80)
+        self.assertEqual(
+            [r["session_id"] for r in index], ["c", "g", "p", "o"])
+        self.assertEqual([r.get("depth") for r in index], [0, 1, 0, 0])
+        lines = _session_lines(text)
+        child = [ln for ln in lines if "star-child" in ln][0]
+        grand = [ln for ln in lines if "grand" in ln][0]
+        parent = [ln for ln in lines if ln.endswith("parent") or " parent" in ln][0]
+        self.assertIn("△", child)
+        self.assertNotIn(sl.CHILD_MARK, child)
+        self.assertIn(sl.CHILD_MARK, grand)
+        self.assertNotIn(sl.CHILD_MARK, parent)
+
+    def test_tree_starred_root_carries_subtree(self):
+        live = [
+            _live("p", "star-root", aid="ap", access=10),
+            _live("c", "kid", aid="ac", parent="ap", access=9),
+            _live("g", "grand", aid="ag", parent="ac", access=8),
+            _live("o", "newer-other", aid="ao", access=50),
+        ]
+        text, index = sl.render_list(
+            live, [], [], starred={"p"}, cols=80)
+        self.assertEqual(
+            [r["session_id"] for r in index], ["p", "c", "g", "o"])
+        self.assertEqual([r.get("depth") for r in index], [0, 1, 2, 0])
+        self.assertIn("△ star-root", text)
+        self.assertNotIn("△ kid", text)
+        kid = [ln for ln in _session_lines(text) if "kid" in ln][0]
+        self.assertIn(sl.CHILD_MARK, kid)
+
+    def test_tree_starred_child_under_starred_root_stays_indented(self):
+        live = [
+            _live("p", "star-root", aid="ap", access=10),
+            _live("c", "star-kid", aid="ac", parent="ap", access=9),
+            _live("o", "other", aid="ao", access=50),
+        ]
+        text, index = sl.render_list(
+            live, [], [], starred={"p", "c"}, cols=80)
+        self.assertEqual([r["session_id"] for r in index], ["p", "c", "o"])
+        self.assertEqual([r.get("depth") for r in index], [0, 1, 0])
+        kid = [ln for ln in _session_lines(text) if "star-kid" in ln][0]
+        self.assertIn(sl.CHILD_MARK, kid)
+        self.assertIn("△", kid)
+
+    def test_tree_row_index_opens_grandchild(self):
+        live = [
+            _live("p", "parent", aid="ap", access=30),
+            _live("c", "child", aid="ac", parent="ap", access=20),
+            _live("g", "grand", aid="ag", parent="ac", access=10),
+        ]
+        _, index = sl.render_list(live, [], [], cols=80)
+        grand = sl.row_at_line(index, index[2]["line"])
+        self.assertEqual(grand["session_id"], "g")
+        self.assertEqual(grand.get("depth"), 2)
+        opened = []
+        sl._last_open = (0.0, None)
+        orig_focus = sl.focus_live
+        orig_wake = sl._wake_if_sleeping
+        import ui.host as host
+        orig_sm = host.is_single_mode
+        sl.focus_live = lambda w, r, o=opened: (o.append(r["session_id"]) or True)
+        sl._wake_if_sleeping = lambda s: None
+        host.is_single_mode = lambda: False
+        try:
+            self.assertTrue(sl.open_row(None, grand))
+            self.assertEqual(opened, ["g"])
+        finally:
+            sl.focus_live = orig_focus
+            sl._wake_if_sleeping = orig_wake
+            host.is_single_mode = orig_sm
+
+    def test_tree_column_alignment_siblings_and_deep_backend(self):
+        live = [
+            _live("p", "parent", aid="ap", access=10, backend="grok"),
+            _live("c1", "sib-a", aid="ac1", parent="ap", access=9,
+                  backend="deepseek"),
+            _live("c2", "sib-b", aid="ac2", parent="ap", access=8,
+                  backend="grok"),
+        ]
+        chain = [_live("d0", "deep-root", aid="d0", access=1, backend="grok")]
+        for i in range(1, 8):
+            chain.append(_live(
+                "d%d" % i, "deep-%d" % i, aid="d%d" % i,
+                parent="d%d" % (i - 1), access=1, backend="deepseek"))
+        text, index = sl.render_list(live + chain, [], [], cols=80)
+        lines = _session_lines(text)
+        sib_a = [ln for ln in lines if "sib-a" in ln][0]
+        sib_b = [ln for ln in lines if "sib-b" in ln][0]
+        self.assertEqual(sib_a.index("deepseek"), sib_b.index("grok"))
+        self.assertEqual(sib_a.index("sib-a"), sib_b.index("sib-b"))
+        self.assertEqual(len(sib_a.rstrip()), 80)
+        self.assertEqual(len(sib_b.rstrip()), 80)
+        deep = [ln for ln in lines if "deep-7" in ln][0]
+        self.assertIn(sl.CHILD_MARK, deep)
+        self.assertEqual(len(deep.rstrip()), 80)
+        self.assertEqual(
+            sl.tree_prefix(7), sl.tree_prefix(sl.TREE_DEPTH_CAP))
+        parent = [ln for ln in lines if "parent" in ln][0]
+        self.assertEqual(len(parent.rstrip()), len(sib_a.rstrip()))
+
+    def test_tree_parent_deleted_children_become_roots(self):
+        kids = [
+            _live("c1", "kid-a", aid="ac1", parent="ap", access=9),
+            _live("c2", "kid-b", aid="ac2", parent="ap", access=8),
+        ]
+        with_p = [_live("p", "parent", aid="ap", access=10)] + kids
+        text1, idx1 = sl.render_list(with_p, [], [], cols=80)
+        self.assertEqual([r["session_id"] for r in idx1], ["p", "c1", "c2"])
+        self.assertIn(sl.CHILD_MARK, text1)
+        gone = []
+        prev_remove = sl.remove_saved_session
+        prev_live = sl._live_session_for_row
+
+        class _Sess:
+            output = None
+            agent_id = "ap"
+            stopped = False
+
+            def stop(self):
+                self.stopped = True
+
+        sess = _Sess()
+        sl.remove_saved_session = lambda sid, g=gone: (g.append(sid) or True)
+        sl._live_session_for_row = lambda row, s=sess: s
+        try:
+            self.assertTrue(sl.close_row(None, idx1[0]))
+            self.assertTrue(sess.stopped)
+            self.assertEqual(gone, [])
+        finally:
+            sl.remove_saved_session = prev_remove
+            sl._live_session_for_row = prev_live
+        text2, idx2 = sl.render_list(kids, [], [], cols=80)
+        self.assertEqual([r["session_id"] for r in idx2], ["c1", "c2"])
+        self.assertEqual([r.get("depth") for r in idx2], [0, 0])
+        self.assertNotIn(sl.CHILD_MARK, text2)
+
+    def test_tree_history_uses_saved_parent_agent_id(self):
+        here = [
+            _saved("c", "hist-child", aid="ac", parent="ap", access=9, queries=2),
+            _saved("p", "hist-parent", aid="ap", access=4, queries=3),
+        ]
+        text, index = sl.render_list([], here, [], cols=80)
+        self.assertEqual([r["session_id"] for r in index], ["p", "c"])
+        self.assertEqual([r.get("depth") for r in index], [0, 1])
+        child = [ln for ln in _session_lines(text) if "hist-child" in ln][0]
+        self.assertTrue(child.startswith("·"))
+        self.assertIn(sl.CHILD_MARK, child)
+
+    def test_collect_live_copies_parent_agent_id(self):
+        from tests.stubs import install
+        sublime = install()
+        parent = types.SimpleNamespace(
+            session_id="p", agent_id="ap", parent_agent_id=None,
+            name="parent", backend="grok", working=False, is_sleeping=False,
+            query_count=1, last_activity=1, last_access=2,
+            output=types.SimpleNamespace(view=None), window=None,
+            quick_mode=False,
+        )
+        child = types.SimpleNamespace(
+            session_id="c", agent_id="ac", parent_agent_id="ap",
+            name="child", backend="kimi", working=False, is_sleeping=False,
+            query_count=1, last_activity=1, last_access=1,
+            output=types.SimpleNamespace(view=None), window=None,
+            quick_mode=False,
+        )
+        sublime._claude_sessions = {1: parent, 2: child}
+        try:
+            rows = sl.collect_live(None)
+        finally:
+            sublime._claude_sessions = {}
+        by_id = {r["session_id"]: r for r in rows}
+        self.assertEqual(by_id["p"]["agent_id"], "ap")
+        self.assertFalse(by_id["p"].get("parent_agent_id"))
+        self.assertEqual(by_id["c"]["parent_agent_id"], "ap")
+
+    def test_tree_compact_keeps_child_mark(self):
+        live = [
+            _live("p", "parent", aid="ap", access=2),
+            _live("c", "child", aid="ac", parent="ap", access=1),
+        ]
+        text, _ = sl.render_list(live, [], [], cols=24)
+        child = [ln for ln in text.splitlines() if "ch" in ln or sl.CHILD_MARK in ln]
+        self.assertTrue(any(sl.CHILD_MARK in ln for ln in child))
 
 
 if __name__ == "__main__":

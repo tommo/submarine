@@ -61,6 +61,8 @@ contexts:
       pop: true
 
   row_rest:
+    - match: '↳'
+      scope: comment.tree.session-list
     - match: '[△★]'
       scope: keyword.star.session-list
     # First token is the backend column only — do not scan the title.

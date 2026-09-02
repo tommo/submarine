@@ -49,6 +49,12 @@ HISTORY_CAP = 200  # default; override with session_list_history_limit
 # Full row needs ~backend(8) + title(16+) + status/time. Below this, abbrev.
 COMPACT_COLS = 56
 BACKEND_COL = 8  # pad/clip so deepseek (8) and grok (4) share a column
+TREE_INDENT = 2
+TREE_DEPTH_CAP = 6
+CHILD_MARK = "↳"
+_LIVE_BAND = {
+    "input": 0, "unread": 0, "working": 1, "bg": 1, "ready": 1, "sleeping": 2,
+}
 
 
 def one_line_title(name: str, limit: int = 200) -> str:
@@ -213,6 +219,14 @@ def access_ts(obj) -> float:
         return float(getter("last_activity", 0) or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _section_sort_key(row: dict) -> Tuple[int, float]:
+    """CURRENT: status band then recency. HISTORY: recency only."""
+    band = 0
+    if row.get("kind") == "live":
+        band = _LIVE_BAND.get(row.get("status") or "", 1)
+    return (band, -access_ts(row))
 
 
 def _mark(status: str) -> str:
@@ -393,6 +407,7 @@ def collect_live(window) -> List[dict]:
             "kind": "live",
             "session_id": getattr(s, "session_id", None),
             "agent_id": getattr(s, "agent_id", None),
+            "parent_agent_id": getattr(s, "parent_agent_id", None),
             "view_id": view_id,
             "name": session_title(s),
             "backend": getattr(s, "backend", None) or "claude",
@@ -406,11 +421,7 @@ def collect_live(window) -> List[dict]:
             "torn_off": torn_off,
         })
     # Input wait first, then awake, then sleeping; access time within each band.
-    _band = {"input": 0, "unread": 0, "working": 1, "bg": 1, "ready": 1, "sleeping": 2}
-    out.sort(key=lambda r: (
-        _band.get(r.get("status"), 1),
-        -access_ts(r),
-    ))
+    out.sort(key=_section_sort_key)
     return out
 
 
@@ -424,6 +435,8 @@ def collect_history(live_ids: set, cwd: str) -> Tuple[List[dict], List[dict]]:
         row = {
             "kind": "saved",
             "session_id": sid,
+            "agent_id": s.get("agent_id"),
+            "parent_agent_id": s.get("parent_agent_id"),
             "view_id": None,
             "name": saved_title(s),
             "backend": s.get("backend") or "claude",
@@ -527,6 +540,122 @@ def pin_starred(rows: List[dict], starred: set) -> List[dict]:
     return pinned + rest
 
 
+def tree_prefix(depth: int) -> str:
+    """Indent + child glyph. Empty for roots. Visual depth is capped."""
+    try:
+        d = int(depth or 0)
+    except (TypeError, ValueError):
+        d = 0
+    if d <= 0:
+        return ""
+    vis = d if d < TREE_DEPTH_CAP else TREE_DEPTH_CAP
+    return (" " * (TREE_INDENT * vis)) + CHILD_MARK + " "
+
+
+def tree_order(rows: List[dict], starred: Optional[set] = None) -> List[dict]:
+    """Forest-order a section; attach ``depth`` on each copied row.
+
+    Parent link is ``parent_agent_id``. A child whose parent is missing from
+    this section (or whose parent link would cycle) is a root.
+
+    Roots and siblings sort by ``_section_sort_key``. Each root is followed
+    by its subtree, depth-first; a tree stays contiguous.
+
+    Starred pinning: a starred node with no starred ancestor pins to the
+    section top as a depth-0 root and carries its subtree. A starred child
+    whose parent tree is not pinned therefore loses indent. A starred root
+    carries its whole subtree (starred children stay indented under it).
+    """
+    src = list(rows or [])
+    n = len(src)
+    if n == 0:
+        return []
+    ids = set(starred or ())
+
+    by_aid = {}  # type: Dict[str, int]
+    for i, r in enumerate(src):
+        aid = r.get("agent_id")
+        if aid and aid not in by_aid:
+            by_aid[aid] = i
+
+    kids = [[] for _ in range(n)]  # type: List[List[int]]
+    parent_of = [None] * n  # type: List[Optional[int]]
+    for i, r in enumerate(src):
+        paid = r.get("parent_agent_id")
+        if not paid:
+            continue
+        p = by_aid.get(paid)
+        if p is None or p == i:
+            continue
+        seen = {i}
+        cur = p  # type: Optional[int]
+        cyclic = False
+        while cur is not None:
+            if cur in seen:
+                cyclic = True
+                break
+            seen.add(cur)
+            pp = src[cur].get("parent_agent_id")
+            cur = by_aid.get(pp) if pp else None
+        if cyclic:
+            continue
+        kids[p].append(i)
+        parent_of[i] = p
+
+    for i in range(n):
+        kids[i].sort(key=lambda j, _src=src: _section_sort_key(_src[j]))
+
+    def has_starred_ancestor(i: int) -> bool:
+        cur = parent_of[i]
+        seen = set()  # type: set
+        while cur is not None and cur not in seen:
+            if src[cur].get("session_id") in ids:
+                return True
+            seen.add(cur)
+            cur = parent_of[cur]
+        return False
+
+    leaders = [
+        i for i in range(n)
+        if src[i].get("session_id") in ids and not has_starred_ancestor(i)
+    ]
+    leaders.sort(key=lambda i: _section_sort_key(src[i]))
+    leader_set = set(leaders)
+    for i in leaders:
+        p = parent_of[i]
+        if p is not None:
+            kids[p] = [c for c in kids[p] if c != i]
+            parent_of[i] = None
+
+    rest_roots = [
+        i for i in range(n)
+        if parent_of[i] is None and i not in leader_set
+    ]
+    rest_roots.sort(key=lambda i: _section_sort_key(src[i]))
+    ordered_roots = leaders + rest_roots
+
+    out = []  # type: List[dict]
+    visited = set()  # type: set
+
+    def walk(i: int, depth: int) -> None:
+        if i in visited:
+            return
+        visited.add(i)
+        rec = dict(src[i])
+        rec["depth"] = depth
+        out.append(rec)
+        for c in kids[i]:
+            walk(c, depth + 1)
+
+    for ridx in ordered_roots:
+        walk(ridx, 0)
+    leftover = [i for i in range(n) if i not in visited]
+    leftover.sort(key=lambda i: _section_sort_key(src[i]))
+    for i in leftover:
+        walk(i, 0)
+    return out
+
+
 def _fmt_row(r: dict, starred: set, compact: bool = False, cols: int = 0) -> str:
     live = r.get("kind") == "live"
     name = one_line_title(r.get("name") or "")
@@ -536,11 +665,12 @@ def _fmt_row(r: dict, starred: set, compact: bool = False, cols: int = 0) -> str
     elif r.get("bound"):
         mark = "▸"
     star = "△ " if r.get("session_id") in (starred or ()) else ""
+    tree = tree_prefix(r.get("depth") or 0)
     if compact:
-        pre = f"{mark} {backend_abbrev(r.get('backend'))} "
+        pre = f"{mark} {tree}{backend_abbrev(r.get('backend'))} "
         return pre + star + fit_title(
             name, _name_budget(pre + star, "", cols, True))
-    pre = f"{mark} {backend_cell(r.get('backend'))} "
+    pre = f"{mark} {tree}{backend_cell(r.get('backend'))} "
     extra = _right_meta(r)
     return (
         pre + star
@@ -574,8 +704,8 @@ def render_list(live: List[dict], here: List[dict], other: List[dict],
             index.append(rec)
         lines.append("")
 
-    add_section("CURRENT", pin_starred(live, starred), _fmt_row)
-    add_section("HISTORY", pin_starred(here, starred), _fmt_row)
+    add_section("CURRENT", tree_order(live, starred), _fmt_row)
+    add_section("HISTORY", tree_order(here, starred), _fmt_row)
     return "\n".join(lines).rstrip() + "\n", index
 
 
@@ -610,6 +740,8 @@ def _include_starred_saved(here: List[dict], live_ids: set, cwd: str,
         extra.append({
             "kind": "saved",
             "session_id": sid,
+            "agent_id": s.get("agent_id"),
+            "parent_agent_id": s.get("parent_agent_id"),
             "view_id": None,
             "name": saved_title(s),
             "backend": s.get("backend") or "claude",
