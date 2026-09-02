@@ -49,7 +49,7 @@ HISTORY_CAP = 200  # default; override with session_list_history_limit
 # Full row needs ~backend(8) + title(16+) + status/time. Below this, abbrev.
 COMPACT_COLS = 56
 BACKEND_COL = 8  # pad/clip so deepseek (8) and grok (4) share a column
-TREE_INDENT = 2
+TREE_INDENT = 1
 TREE_DEPTH_CAP = 6
 CHILD_MARK = "↳"
 _LIVE_BAND = {
@@ -549,7 +549,7 @@ def tree_prefix(depth: int) -> str:
     if d <= 0:
         return ""
     vis = d if d < TREE_DEPTH_CAP else TREE_DEPTH_CAP
-    return (" " * (TREE_INDENT * vis)) + CHILD_MARK + " "
+    return (" " * (TREE_INDENT * vis)) + CHILD_MARK
 
 
 def tree_order(rows: List[dict], starred: Optional[set] = None) -> List[dict]:
