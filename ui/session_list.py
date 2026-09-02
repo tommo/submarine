@@ -173,6 +173,15 @@ def awaiting_input(session) -> bool:
     return False
 
 
+def _has_live_bg_tools(session) -> bool:
+    """⚙ Bash still running after the turn closed (Grok timeout:0 / bg)."""
+    try:
+        ov = getattr(session, "output", None)
+        return bool(ov and ov.active_background_tools())
+    except Exception:
+        return False
+
+
 def _status_of(session) -> str:
     if getattr(session, "is_sleeping", False):
         return "sleeping"
@@ -182,6 +191,8 @@ def _status_of(session) -> str:
     # compaction continues. working can drop; _compacting is the live flag.
     if getattr(session, "working", False) or getattr(session, "_compacting", False):
         return "working"
+    if _has_live_bg_tools(session):
+        return "bg"
     if getattr(session, "unread", False):
         return "unread"
     return "ready"
@@ -209,6 +220,7 @@ def _mark(status: str) -> str:
         "input": "?",
         "unread": "!",
         "working": "●",
+        "bg": "⚙",
         "sleeping": "⏸",
         "ready": "○",
     }.get(status, "·")
@@ -394,7 +406,7 @@ def collect_live(window) -> List[dict]:
             "torn_off": torn_off,
         })
     # Input wait first, then awake, then sleeping; access time within each band.
-    _band = {"input": 0, "unread": 0, "working": 1, "ready": 1, "sleeping": 2}
+    _band = {"input": 0, "unread": 0, "working": 1, "bg": 1, "ready": 1, "sleeping": 2}
     out.sort(key=lambda r: (
         _band.get(r.get("status"), 1),
         -access_ts(r),
@@ -451,6 +463,7 @@ def history_cap() -> int:
 # 4 letters so the state column is a fixed width.
 _STAMP = {
     "working": "busy",
+    "bg": "busy",
     "ready": "idle",
     "input": "wait",
     "unread": "new",
@@ -1286,7 +1299,11 @@ def show_session_list(window) -> Optional[SessionListView]:
 
 
 class SessionListClickListener(sublime_plugin.EventListener):
-    """Dclick is Default `drag_select` by=words; letter keys often fall through to insert."""
+    """Letter keys often fall through to insert. Dclick open is mousemap only.
+
+    Do not also open on Default `drag_select` by=words — word-select begin
+    is often the previous line, so one dclick opened the target and a neighbor.
+    """
 
     def on_query_context(self, view, key, operator, operand, match_all):
         if key != keys.SESSION_LIST and key != "claude_session_list":
@@ -1360,15 +1377,6 @@ class SessionListClickListener(sublime_plugin.EventListener):
             self._schedule_follow(view)
             return
         if name != "drag_select":
-            return
-        args = args or {}
-        if args.get("by") == "words":
-            line = 0
-            if view.sel():
-                line = view.rowcol(view.sel()[0].begin())[0] + 1
-            if line <= 1:
-                return
-            view.run_command("submarine_session_list_open")
             return
         self._schedule_follow(view, force=True)
 

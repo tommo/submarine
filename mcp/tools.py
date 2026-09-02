@@ -141,6 +141,17 @@ def _read_session_codegen(args: Dict[str, Any]) -> str:
     return "return read_session_output(%s)" % ", ".join(parts)
 
 
+def _read_session_edits_codegen(args: Dict[str, Any]) -> str:
+    parts = []  # type: List[str]
+    if args.get("agent_id"):
+        parts.append("agent_id=%r" % args["agent_id"])
+    parts.append("offset=%r" % args.get("offset", 0))
+    parts.append("limit=%r" % args.get("limit", 10))
+    if args.get("file_path"):
+        parts.append("file_path=%r" % args["file_path"])
+    return "return read_session_edits(%s)" % ", ".join(parts)
+
+
 def _lsp_codegen(args: Dict[str, Any]) -> str:
     return "return lsp(cmd=%r)" % (args.get("cmd") or "")
 
@@ -430,7 +441,11 @@ TOOL_TABLE = {
     },
     "spawn_session": {
         "description": (
-            "Spawn a subsession. Returns stable agent_id.\n"
+            'Spawn a subsession. Returns stable agent_id.\n'
+            "\n"
+            'This is the default sidecar when the user says "sidecar" or '
+            '"SUBLIME sidecar" (not grok/kimi/codex CLI). Named CLI drivers '
+            "still use those CLIs.\n"
             "\n"
             "ALWAYS address workers by agent_id.\n"
             "Workflow for base context then workers:\n"
@@ -512,6 +527,47 @@ TOOL_TABLE = {
         ),
         "schema": _EMPTY_SCHEMA,
         "codegen": _simple("list_sessions"),
+    },
+    "read_session_edits": {
+        "description": (
+            "Read Edit/Write diffs from a subsession transcript (not the full "
+            "chat).\n"
+            "\n"
+            "Use after spawn_session / list_sessions. Prefer agent_id. Page "
+            "with offset/limit (default limit 10, max 40). Optional file_path "
+            "filters to one file (suffix ok).\n"
+            "\n"
+            "Returns {total, offset, limit, count, has_more, "
+            "edits:[{i, tool, file_path, line, status, diff}]}. "
+            "If has_more, call again with offset += count.\n"
+            "\n"
+            "Complementary to read_artifact: this pages the session's edit "
+            "journal (what the agent Edit/Wrote). Artifacts are a durable "
+            "report store — use read_artifact for named reports."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": "string",
+                    "description": "Stable agent_id from spawn_session / list_sessions",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Skip this many edits (default 0)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max edits to return (default 10, max 40)",
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "Optional: only this file (exact or suffix)",
+                },
+            },
+            "required": [],
+        },
+        "codegen": _read_session_edits_codegen,
     },
     "read_session_output": {
         "description": (

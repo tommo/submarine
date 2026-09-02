@@ -147,6 +147,27 @@ class TestInterrupt(unittest.TestCase):
         self.assertTrue(t.end_live())
         self.assertFalse(t.working)
 
+    def test_grok_self_wake_resume_has_closer(self):
+        t = TurnState()
+        t.begin_query()
+        t.end_live()
+        self.assertFalse(t.working)
+        t.resume_stream()
+        self.assertTrue(t.working)
+        self.assertFalse(t.awaiting_rpc)
+        self.assertTrue(t.end_live())
+        self.assertFalse(t.working)
+
+    def test_synthetic_turn_completed_idles_resume(self):
+        """Self-wake has no session/prompt RPC; leftover_end must idle."""
+        t = TurnState()
+        t.resume_stream()
+        self.assertTrue(t.working)
+        self.assertFalse(t.awaiting_rpc)
+        self.assertTrue(t.end_live())
+        self.assertFalse(t.working)
+        self.assertFalse(t.end_live())
+
     def test_idle_interrupt_is_noop(self):
         t = TurnState()
         self.assertFalse(t.begin_interrupt())

@@ -245,6 +245,15 @@ class OutputSheet:
                 prefix = (STATUS_ACTIVE_WORKING if is_active else STATUS_INACTIVE_WORKING) + " "
         elif session and getattr(session, "unread", False):
             prefix = "! "
+        elif session:
+            try:
+                ov = getattr(session, "output", None)
+                if ov and ov.active_background_tools():
+                    prefix = "⚙ "
+                else:
+                    prefix = STATUS_IDLE + " "
+            except Exception:
+                prefix = STATUS_IDLE + " "
         else:
             prefix = STATUS_IDLE + " "
         abbr = ""

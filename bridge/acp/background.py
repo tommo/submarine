@@ -99,9 +99,9 @@ class BackgroundMixin:
             "output_file": output_file,
         })
         if tool_use_id:
-            self._bg_tool_ids.discard(tool_use_id)
-            self._tool_inputs_by_id.pop(tool_use_id, None)
-            self._tool_names_by_id.pop(tool_use_id, None)
+            call = self._call(tool_use_id)
+            if call:
+                call.background = False
 
     # Canonical host list lives in core/background.py (SHELL_BG ∪
     # SUBAGENT_BG). This process cannot import the plugin; keep the
@@ -239,6 +239,9 @@ class BackgroundMixin:
         """Remember this shell tool so the next terminal/create can pair to it."""
         if not tid or not self._is_shell_tool_name(tool_name):
             return
+        call = self._ensure_call(tid)
+        if tool_name and tool_name != "tool":
+            call.name = tool_name
         self._last_execute_id = tid
         pending = getattr(self, "_pending_execute_ids", None)
         if pending is None:
@@ -256,16 +259,36 @@ class BackgroundMixin:
             self._last_execute_id = None
 
     def _take_pending_execute_id(self) -> Optional[str]:
-        pending = getattr(self, "_pending_execute_ids", None) or []
-        if pending:
-            eid = pending.pop(0)
-            self._pending_execute_ids = pending
+        pending = list(getattr(self, "_pending_execute_ids", None) or [])
+        bound = {
+            info.get("tool_use_id")
+            for info in (getattr(self, "_terminal_bg", None) or {}).values()
+            if info.get("tool_use_id")
+        }
+
+        def _usable(tid: Optional[str]) -> bool:
+            if not tid or tid in bound:
+                return False
+            call = self._call(tid)
+            if call and getattr(call, "result_sent", False):
+                return False
+            return True
+
+        eid = None
+        kept = []
+        for tid in pending:
+            if eid is None and _usable(tid):
+                eid = tid
+            elif _usable(tid):
+                kept.append(tid)
+        self._pending_execute_ids = kept
+        if eid:
             if getattr(self, "_last_execute_id", None) == eid:
                 self._last_execute_id = None
             return eid
-        eid = getattr(self, "_last_execute_id", None)
+        last = getattr(self, "_last_execute_id", None)
         self._last_execute_id = None
-        return eid
+        return last if _usable(last) else None
 
     @staticmethod
     def _script_from_terminal_params(cmd, args_in) -> str:
@@ -300,12 +323,16 @@ class BackgroundMixin:
         })
 
     def _should_skip_bg_notify(self, task_id: str, tool_use_id: str = "") -> bool:
-        """True if we already sent task_notification for this logical bg job."""
-        if task_id and task_id in self._bg_notified_tasks:
-            return True
+        """True if this tool row already got a closer.
+
+        Do not skip a new tool_use_id just because a sibling terminal
+        shared a kimi bash-* task_id — that left a stack of ⚙ forever.
+        """
         if tool_use_id and tool_use_id in self._bg_notified_tools:
             return True
-        return False
+        if tool_use_id:
+            return False
+        return bool(task_id and task_id in self._bg_notified_tasks)
 
     def _mark_bg_notified(self, task_id: str, tool_use_id: str = "") -> None:
         if task_id:
@@ -331,7 +358,8 @@ class BackgroundMixin:
         tlow = (title or "").lower()
         if "reading output of task" in tlow or tlow.startswith("taskoutput"):
             return
-        name = self._tool_names_by_id.get(tool_use_id) or "Bash"
+        call = self._ensure_call(tool_use_id)
+        name = call.name or "Bash"
         is_sub = self._is_subagent_tool_name(name)
         # Never promote Read / TaskOutput / etc. to ⚙ background
         if not self._is_shell_tool_name(name) and not is_sub:
@@ -339,10 +367,10 @@ class BackgroundMixin:
         if name == "tool":
             name = "Bash"
         emit_name = "Subagent" if is_sub else "Bash"
-        already = tool_use_id in self._bg_tool_ids
-        self._bg_tool_ids.add(tool_use_id)
+        already = call.background
+        call.background = True
         self._last_bg_tool_id = tool_use_id
-        inp = dict(tool_input or self._tool_inputs_by_id.get(tool_use_id) or {})
+        inp = dict(tool_input or call.input or {})
         if title and not inp.get("command") and not is_sub:
             cmd = title
             for prefix in (
@@ -355,30 +383,28 @@ class BackgroundMixin:
             if cmd:
                 inp.setdefault("command", cmd)
         inp["run_in_background"] = True
-        self._tool_inputs_by_id[tool_use_id] = {
-            **(self._tool_inputs_by_id.get(tool_use_id) or {}),
-            **inp,
-        }
-        self._tool_names_by_id[tool_use_id] = emit_name
-        self._tool_ids_emitted.add(tool_use_id)
+        call.merge_input(inp)
+        call.name = emit_name
+        call.emitted = True
         if already:
             return
         send_notification("message", {
             "type": "tool_use",
             "id": tool_use_id,
             "name": emit_name,
-            "input": self._tool_inputs_by_id[tool_use_id],
+            "input": call.input,
             "background": True,
         })
 
     def _bind_terminal_to_bg_tool(self, terminal_id: str, tool_use_id: str) -> None:
         if not terminal_id or not tool_use_id:
             return
-        if tool_use_id not in self._bg_tool_ids:
+        call = self._call(tool_use_id)
+        if not call or not call.background:
             return
         if terminal_id in self._terminal_bg:
             return
-        cmd = (self._tool_inputs_by_id.get(tool_use_id) or {}).get("command", "")
+        cmd = call.input.get("command", "")
         task_id = f"acp-term-{terminal_id}"
         self._terminal_bg[terminal_id] = {
             "task_id": task_id,
@@ -398,32 +424,55 @@ class BackgroundMixin:
                 reader is None or reader.done()):
             self._emit_bg_terminal_complete(terminal_id)
 
+    def _bg_exit_status_label(self, slot: dict) -> str:
+        es = (slot or {}).get("exit_status") or {}
+        code = es.get("exitCode")
+        if code is None and es.get("signal"):
+            return "failed"
+        if code is None or int(code) == 0:
+            return "completed"
+        return "failed"
+
+    def _ui_close_bg(self, task_id: str, tool_use_id: str, status: str) -> None:
+        """Flip ⚙ even when the agent-wake notify is deduped."""
+        self._emit_system("task_updated", {
+            "task_id": task_id,
+            "tool_use_id": tool_use_id,
+            "patch": {"status": status},
+        })
+
     def _emit_bg_terminal_complete(self, terminal_id: str) -> None:
         """ACP process exit → one Claude task_notification."""
         info = self._terminal_bg.pop(terminal_id, None)
-        if not info:
-            return
-        task_id = info.get("task_id") or f"acp-term-{terminal_id}"
-        tool_use_id = info.get("tool_use_id") or f"bg-{task_id}"
-        if self._should_skip_bg_notify(task_id, tool_use_id):
-            return
         slot = (
             self._terminals.get(terminal_id)
             or getattr(self, "_detached_slots", {}).get(terminal_id)
             or {}
         )
         snap = getattr(self, "_detached_snaps", {}).get(terminal_id) or {}
+        if not info:
+            tuid = slot.get("tool_use_id") or slot.get("host_tool_id")
+            if not tuid and not slot.get("bg"):
+                return
+            info = {
+                "tool_use_id": tuid or f"term-bg-{terminal_id}",
+                "task_id": f"acp-term-{terminal_id}",
+                "cmd": slot.get("cmd") or "",
+            }
+        task_id = info.get("task_id") or f"acp-term-{terminal_id}"
+        tool_use_id = info.get("tool_use_id") or f"bg-{task_id}"
+        status = self._bg_exit_status_label(slot)
+        if self._should_skip_bg_notify(task_id, tool_use_id):
+            self.file_log(
+                f"bg complete skip wake task={task_id} tool={tool_use_id} "
+                f"status={status}")
+            self._ui_close_bg(task_id, tool_use_id, status)
+            return
         out = (slot.get("stdout") or "") + (slot.get("stderr") or "")
         if not out:
             out = snap.get("output") or ""
         es = slot.get("exit_status") or snap.get("exitStatus") or {}
         code = es.get("exitCode")
-        if code is None and es.get("signal"):
-            status = "failed"
-        elif code is None or int(code) == 0:
-            status = "completed"
-        else:
-            status = "failed"
         output_file = self._write_bg_output_file("acp-bg-", out or "")
         raw = (info.get("cmd") or tool_use_id or task_id or "").strip()
         summary = self._clip_bg_summary(raw, code)

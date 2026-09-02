@@ -206,9 +206,17 @@ class TransportMixin:
                 self.file_log(
                     f"← acp {method}: {json.dumps(params)[:600]}")
             elif method in (
+                "x.ai/session/prompt_complete",
+                "_x.ai/session/prompt_complete",
+            ):
+                # Host-driven session/prompt only. Self-wake is internal
+                # SessionCommand::Prompt — closer is turn_completed below.
+                self.file_log(
+                    f"← acp {method}: {json.dumps(params)[:400]}")
+                self._handle_grok_turn_end(params)
+            elif method in (
                 "x.ai/session/update", "_x.ai/session/update",
             ):
-                # Grok may nest schedule lifecycle under x.ai/session/update.
                 if self._is_foreign_session(params):
                     self._ingest_child_session(params)
                     self._note_foreign_session_drop(method, params)
@@ -217,11 +225,57 @@ class TransportMixin:
                     f"← acp {method}: {json.dumps(params)[:600]}")
                 upd = params.get("update") or params
                 if isinstance(upd, dict):
-                    self._handle_schedule_lifecycle(upd)
+                    kind = str(upd.get("sessionUpdate") or "")
+                    if kind in ("turn_completed", "TurnCompleted"):
+                        self._handle_grok_turn_end(params, upd)
+                    else:
+                        self._handle_schedule_lifecycle(upd)
             elif method and self._is_foreign_session(params):
                 self._ingest_child_session(params)
                 self._note_foreign_session_drop(method, params)
             # Other parent notifications (_x.ai/*, etc.) are intentionally ignored.
+
+    def _handle_grok_turn_end(self, params: dict, upd: dict = None) -> None:
+        """Closer for Grok turns that have no host session/prompt RPC.
+
+        Host-driven prompt: RPC result is the closer. prompt_complete and
+        turn_completed for that promptId are ignored. Self-wake is an
+        internal SessionCommand::Prompt — closer is `_x.ai/session/update`
+        turn_completed (prompt_id like task-completed-<term>).
+        """
+        src = upd if isinstance(upd, dict) else {}
+        pid = str(
+            src.get("prompt_id")
+            or src.get("promptId")
+            or params.get("promptId")
+            or params.get("prompt_id")
+            or ""
+        )
+        pf = getattr(self, "_prompt_fut", None)
+        if pf is not None and not pf.done():
+            if pid:
+                self._host_prompt_id = pid
+            return
+        if pid and pid == getattr(self, "_host_prompt_id", None):
+            self.file_log(f"grok turn_end skip host pid={pid}")
+            return
+        self._orphan_turn_notified = False
+        stop = (
+            src.get("stop_reason")
+            or src.get("stopReason")
+            or params.get("stopReason")
+            or params.get("stop_reason")
+            or "end_turn"
+        )
+        self.file_log(f"grok turn_end leftover pid={pid or '-'} stop={stop}")
+        send_notification("message", {
+            "type": "result",
+            "leftover_end": True,
+            "session_id": self.session_id or "",
+            "duration_ms": 0,
+            "is_error": False,
+            "stop_reason": stop,
+        })
 
     def _acp_id(self) -> int:
         self.next_acp_id += 1

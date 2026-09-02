@@ -17,12 +17,8 @@ class _Fwd(AcpBridge):
         self.session_id = "session_test"
         self._loading_session = False
         self._foreign_session_drops = 0
-        self._tool_names_by_id = {}
-        self._tool_inputs_by_id = {}
-        self._tool_ids_emitted = set()
-        self._tool_results_sent = set()
+        self._calls = {}
         self._tool_id_alias = {}
-        self._bg_tool_ids = set()
         self._pending_execute_ids = []
         self._last_execute_id = None
         self._terminals = {}
@@ -146,6 +142,39 @@ class TestKimiEditDiff(unittest.TestCase):
         if inp.get("unified_diff"):
             self.assertIn("-a = 1", inp["unified_diff"])
             self.assertIn("+a = 2", inp["unified_diff"])
+
+    def test_snippet_diff_uses_file_line_not_one(self):
+        import tempfile
+        old = "proc foo(): int =\n  1\n"
+        new = "proc foo(): int =\n  2\n"
+        prefix = "\n".join("line %d" % i for i in range(1, 21)) + "\n"
+        with tempfile.NamedTemporaryFile(
+                "w", suffix=".nim", delete=False, encoding="utf-8") as f:
+            f.write(prefix + old + "tail\n")
+            path = f.name
+        try:
+            diff = AcpBridge._snippet_unified_diff(old, new, path)
+            self.assertIn("@@ -21,", diff)
+            self.assertNotRegex(diff, r"(?m)^@@ -1,")
+            self.assertIn("-  1", diff)
+            self.assertIn("+  2", diff)
+            notes, _b = _fwd([{
+                "sessionUpdate": "tool_call",
+                "toolCallId": "0:tool_edit",
+                "title": "Edit",
+                "kind": "edit",
+                "status": "completed",
+                "rawInput": {
+                    "path": path,
+                    "old_string": old,
+                    "new_string": new,
+                },
+            }])
+            uses = [p for _, p in notes if p.get("type") == "tool_use"]
+            inp = uses[-1].get("input") or {}
+            self.assertIn("@@ -21,", inp.get("unified_diff") or "")
+        finally:
+            os.unlink(path)
 
 
 if __name__ == "__main__":

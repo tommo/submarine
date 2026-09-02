@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from typing import Optional
 
@@ -75,6 +76,80 @@ class PlanModeMixin:
                 root, "*", "session_*", "agents", "*", "plans", "*.md"))
         cands = [p for p in cands if os.path.isfile(p)]
         return max(cands, key=os.path.getmtime) if cands else ""
+
+    _HUNK_RE = re.compile(
+        r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$")
+
+    @staticmethod
+    def _file_line_of_snippet(path: str, snippet: str) -> int:
+        """1-based file line of snippet, or 0 if not found."""
+        if not path or not snippet or not os.path.isfile(path):
+            return 0
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except Exception:
+            return 0
+        pos = text.find(snippet)
+        if pos < 0:
+            first = (snippet.splitlines() or [""])[0]
+            if first:
+                pos = text.find(first)
+        if pos < 0:
+            return 0
+        return text[:pos].count("\n") + 1
+
+    @staticmethod
+    def _shift_unified_hunks(diff: str, start_line: int) -> str:
+        """Move snippet-relative @@ hunks onto file line numbers."""
+        if start_line <= 1 or not diff:
+            return diff
+        delta = start_line - 1
+        out = []
+        for line in diff.splitlines():
+            m = PlanModeMixin._HUNK_RE.match(line)
+            if not m:
+                out.append(line)
+                continue
+            old_a, old_n, new_a, new_n, rest = m.groups()
+            oa, na = int(old_a), int(new_a)
+            if oa > 0:
+                oa += delta
+            if na > 0:
+                na += delta
+            old_part = "-%s" % oa + (",%s" % old_n if old_n is not None else "")
+            new_part = "+%s" % na + (",%s" % new_n if new_n is not None else "")
+            out.append("@@ %s %s @@%s" % (old_part, new_part, rest))
+        return "\n".join(out)
+
+    @staticmethod
+    def _snippet_unified_diff(
+            before: str, after: str, path: str = "",
+            *, max_chars: int = 8000) -> str:
+        """Unified diff of an Edit snippet, @@ headers in file coordinates."""
+        import difflib
+        if (before or "") == (after or ""):
+            return ""
+        start = (
+            PlanModeMixin._file_line_of_snippet(path, before)
+            or PlanModeMixin._file_line_of_snippet(path, after)
+            or 1
+        )
+        lines = list(difflib.unified_diff(
+            (before or "").splitlines(),
+            (after or "").splitlines(),
+            fromfile=path or "a",
+            tofile=path or "b",
+            lineterm="",
+        ))
+        if not lines:
+            return ""
+        diff = "\n".join(lines)
+        if start > 1:
+            diff = PlanModeMixin._shift_unified_hunks(diff, start)
+        if len(diff) > max_chars:
+            return diff[:max_chars] + "\n… (diff truncated)"
+        return diff
 
     @staticmethod
     def _plan_unified_diff(before: str, after: str, *, max_chars: int = 12000) -> str:
@@ -300,10 +375,11 @@ class PlanModeMixin:
             f"exit_plan_mode: toolCallId={tool_call_id!r} "
             f"plan_chars={len(plan_content)}")
 
-        if tool_call_id and tool_call_id not in self._tool_ids_emitted:
+        plan_call = self._ensure_call(tool_call_id) if tool_call_id else None
+        if plan_call and not plan_call.emitted:
             # session/update often already opened this id — don't second-paint
-            self._tool_ids_emitted.add(tool_call_id)
-            self._tool_names_by_id[tool_call_id] = "ExitPlanMode"
+            plan_call.emitted = True
+            plan_call.name = "ExitPlanMode"
             send_notification("message", {
                 "type": "tool_use",
                 "id": tool_call_id,
@@ -387,8 +463,8 @@ class PlanModeMixin:
             )
         else:
             summary = "Continue planning"
-        if tool_call_id and tool_call_id not in self._tool_results_sent:
-            self._tool_results_sent.add(tool_call_id)
+        if plan_call and not plan_call.result_sent:
+            plan_call.close()
             send_notification("message", {
                 "type": "tool_result",
                 "tool_use_id": tool_call_id,

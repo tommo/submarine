@@ -62,7 +62,7 @@ class TerminalMixin:
         except (ProcessLookupError, PermissionError, OSError):
             try:
                 proc.terminate()
-            except ProcessLookupError:
+            except (ProcessLookupError, AttributeError):
                 pass
 
         # Escalate after a beat if still alive (done by waiters).
@@ -157,7 +157,9 @@ class TerminalMixin:
         # shell / agent env has TERM=xterm-256color or FORCE_COLOR=1.
         apply_plain_terminal_env(env)
         # ACP outputByteLimit: honor request but hard-cap so one terminal
-        # cannot pin unbounded memory.
+        # cannot pin unbounded memory. Grok bash default is 20k
+        # (DEFAULT_TOOL_OUTPUT_CHARS); bg terminals bump this in
+        # _mark_terminal_bg so long editor logs are not frozen there.
         max_out = max(4096, self.terminal_output_max_bytes)
         raw_lim = params.get("outputByteLimit")
         try:
@@ -194,14 +196,15 @@ class TerminalMixin:
         self._mark_terminal_bg(tid, slot)
         self.file_log(
             f"terminal/create {tid} pid={proc.pid} shell={use_shell} "
-            f"bg={bool(slot.get('bg'))}")
+            f"bg={bool(slot.get('bg'))} limit={slot.get('limit')}")
 
         # Kimi often runs tools ONLY via terminal/* with zero session/update
         # tool_call — host UI then shows empty "waiting" while agent is busy.
         # Skip when this create already paired to a streamed tool_call (Grok
         # timeout:0 paints ⚙ then create — synth was the leftover ☐ Bash).
         paired = slot.get("tool_use_id")
-        already = paired and paired in getattr(self, "_tool_ids_emitted", set())
+        pc = self._call(paired) if paired else None
+        already = bool(pc and pc.emitted)
         if already:
             self.file_log(f"terminal/create {tid} paired {paired}; skip synth")
         elif self._should_synth_terminal_ui():
@@ -215,32 +218,32 @@ class TerminalMixin:
             self.file_log(f"synth host Bash for {tid} (no session tool_call)")
 
         async def drain(stream, key):
-            buf = []
-            total = 0
+            # ACP: when outputByteLimit is exceeded, truncate from the
+            # *beginning* (keep the tail). Prefix-cap froze Grok's
+            # reconstructed editor log at ~20k (startup) so the agent
+            # never saw shutdown.
+            raw = bytearray()
             try:
                 while True:
                     chunk = await stream.read(4096)
                     if not chunk:
                         break
-                    if total >= slot["limit"]:
+                    raw.extend(chunk)
+                    lim = int(slot.get("limit") or 0)
+                    if lim > 0 and len(raw) > lim:
                         slot["truncated"] = True
-                        continue
-                    if total + len(chunk) > slot["limit"]:
-                        slot["truncated"] = True
-                        remaining = slot["limit"] - total
-                        if remaining > 0:
-                            buf.append(
-                                chunk[:remaining].decode("utf-8", "replace"))
-                            total += remaining
-                        continue
-                    buf.append(chunk.decode("utf-8", "replace"))
-                    total += len(chunk)
+                        del raw[:len(raw) - lim]
+                        i = 0
+                        while i < len(raw) and raw[i] & 0xC0 == 0x80:
+                            i += 1
+                        if i:
+                            del raw[:i]
                     # Incremental: Kimi polls terminal/output while running;
                     # publishing only in finally left every poll empty.
-                    slot[key] = strip_ansi("".join(buf))
+                    slot[key] = strip_ansi(raw.decode("utf-8", "replace"))
             finally:
                 # Plain text for agent + plugin UI (no raw ESC sequences).
-                slot[key] = strip_ansi("".join(buf))
+                slot[key] = strip_ansi(bytes(raw).decode("utf-8", "replace"))
 
         async def wait_and_close():
             try:
@@ -251,11 +254,8 @@ class TerminalMixin:
                 code = await proc.wait()
                 slot["exit_status"] = self._exit_status_from_code(code)
             except asyncio.CancelledError:
-                if slot.get("detached"):
-                    if slot.get("exit_status") is None:
-                        slot["exit_status"] = {
-                            "exitCode": 0, "signal": None}
-                    raise
+                # Detach-keep used to stamp exitCode 0 here. That made
+                # Grok's watch_for_exit treat the job as done.
                 self._kill_terminal_proc(proc)
                 code = None
                 try:
@@ -290,8 +290,6 @@ class TerminalMixin:
                             hid, out or f"exit {code}", is_error=is_err)
                     except Exception as e:
                         self.file_log(f"synth tool_result {tid}: {e}")
-                if slot.get("detached"):
-                    return
                 # Claude-compatible wake when host is already idle after end_turn
                 try:
                     self._emit_bg_terminal_complete(tid)
@@ -306,6 +304,10 @@ class TerminalMixin:
         slot = self._terminals.get(tid)
         if slot:
             out = (slot.get("stdout") or "") + (slot.get("stderr") or "")
+            self.file_log(
+                f"terminal/output {tid} n={len(out)} "
+                f"exit={slot.get('exit_status')!r} "
+                f"truncated={bool(slot.get('truncated'))}")
             return {"output": out, "truncated": bool(slot["truncated"]),
                     "exitStatus": slot.get("exit_status")}
         dslot = getattr(self, "_detached_slots", {}).get(tid)
@@ -324,8 +326,12 @@ class TerminalMixin:
             return self._child_output_payload(child)
         snap = getattr(self, "_detached_snaps", {}).get(tid)
         if snap:
+            out = snap.get("output") or ""
+            self.file_log(
+                f"terminal/output {tid} snap n={len(out)} "
+                f"exit={snap.get('exitStatus')!r}")
             return {
-                "output": snap.get("output") or "",
+                "output": out,
                 "truncated": bool(snap.get("truncated")),
                 "exitStatus": snap.get("exitStatus"),
             }
@@ -346,7 +352,8 @@ class TerminalMixin:
     def _mark_terminal_bg(self, tid: str, slot: dict) -> None:
         """⚙ only for this execute's explicit detach or native kimi detached."""
         eid = self._take_pending_execute_id()
-        inp = (self._tool_inputs_by_id.get(eid) or {}) if eid else {}
+        call = self._call(eid) if eid else None
+        inp = call.input if call else {}
         grok_timeout0 = (
             getattr(self, "BACKEND_NAME", "") == "grok"
             and inp.get("timeout") in (0, 0.0)
@@ -357,7 +364,7 @@ class TerminalMixin:
                 or inp.get("detached") is True
                 or inp.get("background") is True
                 or grok_timeout0
-                or eid in self._bg_tool_ids
+                or (call and call.background)
             )
         )
         native = None
@@ -375,9 +382,15 @@ class TerminalMixin:
             return
         if not eid:
             eid = f"term-bg-{tid}"
+            call = self._call(eid)
         slot["bg"] = True
         slot["tool_use_id"] = eid
-        if eid not in self._bg_tool_ids:
+        cap = int(getattr(self, "terminal_output_max_bytes", 0) or 0)
+        if cap > 0:
+            cap = max(4096, cap)
+            if int(slot.get("limit") or 0) < cap:
+                slot["limit"] = cap
+        if not (call and call.background):
             self._register_bg_tool(
                 eid, inp if inp else {"command": slot.get("cmd")})
         self._bind_terminal_to_bg_tool(tid, eid)
@@ -450,27 +463,18 @@ class TerminalMixin:
                         "signal": es.get("signal")}
             snap = getattr(self, "_detached_snaps", {}).get(tid)
             if snap and snap.get("exitStatus"):
-                es = snap.get("exitStatus") or {"exitCode": 0, "signal": None}
+                es = snap.get("exitStatus") or {
+                    "exitCode": None, "signal": "SIGTERM"}
                 return {"exitCode": es.get("exitCode"),
                         "signal": es.get("signal")}
             # Already released/killed (e.g. on interrupt) — report cancelled.
             return {"exitCode": None, "signal": "SIGTERM"}
-        # kimi-code AcpTerminalProcess: exitCode ?? -1. A null exit is
-        # "killed", then ProcessTask fails and terminal/release kills the
-        # still-running command. Kimi wait_for_exit MUST stay pending until
-        # the process actually exits. Grok timeout:0 is the opposite: the
-        # agent still issues wait_for_exit, and holding it blocks the turn
-        # (bg=True, wait until interrupt SIGTERM). Ack 0 without setting
-        # slot.exit_status; release detaches (M4: reader stays alive).
-        if (
-            slot.get("bg")
-            and slot.get("exit_status") is None
-            and getattr(self, "BACKEND_NAME", "") == "grok"
-        ):
-            self.file_log(
-                f"terminal/wait_for_exit {tid} grok bg ack "
-                f"(process still running cmd={slot.get('cmd')!r})")
-            return {"exitCode": 0, "signal": None}
+        # ACP wait_for_exit returns once the command completes. Grok
+        # run_background spawns watch_for_exit AFTER create returns —
+        # holding wait does not block the turn. Early ack {exitCode:0}
+        # made Grok complete the task, release, then poll empty+done.
+        # Release kills (official ACP + Zed). Keep _detach_terminal for
+        # any remaining internal detach path; do not invent exitCode 0.
         reader = slot.get("reader")
         timeout = self.terminal_wait_timeout_s
         if reader is not None and not reader.done():
@@ -521,9 +525,11 @@ class TerminalMixin:
         if isinstance(code, int) and code < 0:
             es = self._exit_status_from_code(code)
             slot["exit_status"] = es
+        out_n = len((slot.get("stdout") or "") + (slot.get("stderr") or ""))
         self.file_log(
             f"terminal/wait_for_exit {tid} → "
-            f"exitCode={es.get('exitCode')} signal={es.get('signal')}")
+            f"exitCode={es.get('exitCode')} signal={es.get('signal')} "
+            f"out={out_n}")
         # Ensure Claude bg wake even if bind raced with process exit
         try:
             self._emit_bg_terminal_complete(tid)
@@ -548,11 +554,9 @@ class TerminalMixin:
             # Detach the poll handle; the child session keeps running.
             self.file_log(f"terminal/release {tid} is subagent session; ignore")
             return {}
-        slot = self._terminals.get(tid)
-        # Grok timeout:0 / run_in_background: release is detach, not kill.
-        if slot and slot.get("bg"):
-            await self._detach_terminal(tid)
-            return {}
+        # Official ACP + Zed: release kills if still running; the id is
+        # then invalid. Grok only releases AFTER wait_for_exit returns.
+        # Detach-keep cancelled the stdout drain and SIGPIPE'd the child.
         await self._terminal_close(tid)
         return {}
 
@@ -612,6 +616,9 @@ class TerminalMixin:
     async def _terminal_close(self, tid: str) -> None:
         slot = self._terminals.pop(tid, None)
         if not slot:
+            if not hasattr(self, "_released_terminals"):
+                self._released_terminals = set()
+            self._released_terminals.add(tid)
             return
         if not hasattr(self, "_released_terminals"):
             self._released_terminals = set()
@@ -634,4 +641,17 @@ class TerminalMixin:
                     proc.kill()
                 except Exception:
                     pass
+        out = (slot.get("stdout") or "") + (slot.get("stderr") or "")
+        es = slot.get("exit_status") or {
+            "exitCode": None, "signal": "SIGTERM"}
+        if not hasattr(self, "_detached_snaps"):
+            self._detached_snaps = {}
+        self._detached_snaps[tid] = {
+            "output": out,
+            "truncated": bool(slot.get("truncated")),
+            "exitStatus": es,
+        }
+        extra = list(self._detached_snaps)[:-32]
+        for old in extra:
+            self._detached_snaps.pop(old, None)
         self.file_log(f"terminal/release {tid}")

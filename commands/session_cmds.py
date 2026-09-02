@@ -543,6 +543,14 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
         current_file = current_view.file_name() if current_view else None
         backend_prefix = "[%s] " % backend if backend != "claude" else ""
 
+        # New Session stays on top (commits accumulated backend/transport/model).
+        _mlabel = " [%s]" % model if model else ""
+        items.append([
+            "🆕 %sNew Session%s" % (backend_prefix, _mlabel),
+            "Start fresh with %s" % model if model else "Start fresh with default model",
+        ])
+        actions.append(("new", None))
+
         if not in_output_view and current_file:
             filename = os.path.basename(current_file)
             items.append([
@@ -614,13 +622,6 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
             actions.append(("restart", active_session))
 
         profiles = load_profiles(_project_profiles_path(self.window))
-
-        _mlabel = " [%s]" % model if model else ""
-        items.append([
-            "🆕 %sNew Session%s" % (backend_prefix, _mlabel),
-            "Start fresh with %s" % model if model else "Start fresh with default model",
-        ])
-        actions.append(("new", None))
 
         backend_models = _models_for_backend(backend, active_session)
         for m in backend_models:

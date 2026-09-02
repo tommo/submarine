@@ -154,9 +154,9 @@ class TestF2EscDoesNotResumeForSubagent(unittest.TestCase):
 class TestF3BindBeforeComplete(unittest.TestCase):
     def test_complete_before_subagent_id_text_closes_spawn_row(self):
         b = _FwdStub()
-        b._bg_tool_ids.add("spawn-1")
-        b._tool_names_by_id["spawn-1"] = "Subagent"
-        b._tool_inputs_by_id["spawn-1"] = {"description": "working check"}
+        b._ensure_call("spawn-1").background = True
+        b._ensure_call("spawn-1").name = "Subagent"
+        b._ensure_call("spawn-1").merge_input({"description": "working check"})
         sid = "01a00fast-bbbb-cccc-dddd-eeeeffff0000"
         b._ingest_child_session({
             "sessionId": sid,
@@ -188,8 +188,8 @@ class TestF3BindBeforeComplete(unittest.TestCase):
             },
         })
         self.assertFalse(b._child_sessions[sid].get("tool_use_id"))
-        b._bg_tool_ids.add("spawn-1")
-        b._tool_names_by_id["spawn-1"] = "Subagent"
+        b._ensure_call("spawn-1").background = True
+        b._ensure_call("spawn-1").name = "Subagent"
         b._bind_child_to_tool("subagent_id: %s\n" % sid, "spawn-1")
         self.assertEqual(b._child_sessions[sid].get("tool_use_id"), "spawn-1")
         started = [d for st, d in b._systems if st == "task_started"]
@@ -222,7 +222,7 @@ class TestF4SpawnGates(unittest.TestCase):
         self.assertEqual(len(uses), 1, uses)
         self.assertEqual(uses[0].get("name"), "Task")
         self.assertFalse(uses[0].get("background"))
-        self.assertNotIn("task-fg", b._bg_tool_ids)
+        self.assertFalse(bool(b._call("task-fg") and b._call("task-fg").background))
 
     def test_forward_subagent_is_gear(self):
         notes = []
@@ -245,15 +245,15 @@ class TestF4SpawnGates(unittest.TestCase):
         uses = [p for _, p in notes if p.get("type") == "tool_use"]
         self.assertEqual(len(uses), 1, uses)
         self.assertTrue(uses[0].get("background"))
-        self.assertIn("sub-1", b._bg_tool_ids)
+        self.assertTrue(b._call("sub-1") and b._call("sub-1").background)
 
 
 class TestF5InterruptCancelsChildren(unittest.TestCase):
     def test_cancel_signals_waiter_and_fails_notify(self):
         b = _FwdStub()
         sid = "01a00wait-bbbb-cccc-dddd-eeeeffff0000"
-        b._bg_tool_ids.add("spawn-1")
-        b._tool_names_by_id["spawn-1"] = "Subagent"
+        b._ensure_call("spawn-1").background = True
+        b._ensure_call("spawn-1").name = "Subagent"
         b._register_child_session(sid)
 
         async def _go():

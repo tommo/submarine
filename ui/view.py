@@ -508,6 +508,10 @@ class SubmarineOutputView(FormatHelpers):
         """Start a user turn. Viewless: records conversation, no buffer write."""
         self.renderer.prompt(text, context_names, context_refs)
 
+    def begin_continued(self):
+        """Open a live sheet after @done without wiping the last turn."""
+        self.renderer.begin_continued()
+
     def tool(self, name, tool_input=None, tool_id=None, background=False):
         """Open a tool row. Viewless: records ToolCall, no buffer write."""
         self.renderer.tool(name, tool_input, tool_id, background)

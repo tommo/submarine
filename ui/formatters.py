@@ -383,6 +383,10 @@ def _edit(view, tool) -> str:
     if unified:
         diff_str = view._format_unified_diff(unified)
         line_num = view._extract_diff_line_num(unified)
+        if (not line_num or line_num == 1) and file_path and (old or new):
+            found = view._find_line_number(file_path, old, new)
+            if found:
+                line_num = found
     else:
         diff_str = view._format_edit_diff(old, new)
         line_num = view._find_line_number(file_path, old, new)
@@ -765,6 +769,31 @@ def _list_sessions(view, tool) -> str:
     return ""
 
 
+def _read_session_edits(view, tool) -> str:
+    inp = _tool_input(tool)
+    aid = inp.get("agent_id")
+    off = inp.get("offset")
+    lim = inp.get("limit")
+    bits = []
+    if aid:
+        bits.append(str(aid)[:12])
+    if off:
+        bits.append("off %s" % off)
+    if lim:
+        bits.append("n %s" % lim)
+    out = _join_bits(*bits)
+    if tool.status == "done" and tool.result:
+        r = tool.result
+        if isinstance(r, dict):
+            tot = r.get("total")
+            n = r.get("count")
+            more = " +" if r.get("has_more") else ""
+            if tot is not None:
+                out += ": %s/%s%s" % (n, tot, more)
+        out += view._format_mcp_result(tool.result)
+    return out
+
+
 def _read_session_output(view, tool) -> str:
     inp = _tool_input(tool)
     vid = inp.get("view_id")
@@ -926,6 +955,7 @@ SUBLIME_MCP_FORMATTERS = {
     "list_sessions": _list_sessions,
     "session_info": _session_info,
     "read_session_output": _read_session_output,
+    "read_session_edits": _read_session_edits,
     "list_profile_docs": _list_profile_docs,
     "read_profile_doc": _read_profile_doc,
     "lsp": _lsp,

@@ -487,6 +487,7 @@ class MCPSocketServer:
             "send_to_session": self._send_to_session,
             "list_sessions": self._list_sessions,
             "read_session_output": self._read_session_output,
+            "read_session_edits": self._read_session_edits,
             "list_profile_docs": self._list_profile_docs,
             "read_profile_doc": self._read_profile_doc,
             "lsp": self._lsp,
@@ -1361,6 +1362,29 @@ class MCPSocketServer:
                 "count": 0,
             }
         return {"summary": "\n".join(lines), "sessions": sessions, "count": len(sessions)}
+
+    def _read_session_edits(
+        self,
+        agent_id: str = None,
+        offset: int = 0,
+        limit: int = 10,
+        file_path: str = None,
+    ) -> dict:
+        """Page Edit/Write diffs from a subsession transcript."""
+        from core.session_edits import collect_session_edits, conversations_of, page_edits
+
+        session = _get_session_by_agent_id(str(agent_id)) if agent_id else None
+        if not session:
+            return {
+                "error": "Session not found for %r" % agent_id,
+                "hint": "Prefer agent_id from list_sessions / spawn_session",
+                "available_agent_ids": list(_agents_map()),
+            }
+        edits = collect_session_edits(conversations_of(session))
+        page = page_edits(
+            edits, offset=offset, limit=limit, file_path=file_path)
+        page["agent_id"] = getattr(session, "agent_id", None)
+        return page
 
     def _read_session_output(
         self,

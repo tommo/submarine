@@ -9,7 +9,11 @@ from __future__ import annotations
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
 from .background import is_shell_background_tool
-from .turn import looks_like_compact_done, looks_like_compact_start
+from .turn import (
+    _SELF_WAKE_BACKENDS,
+    looks_like_compact_done,
+    looks_like_compact_start,
+)
 
 if TYPE_CHECKING:
     from .background import BackgroundTaskGate
@@ -545,6 +549,19 @@ class BridgeEventRouter:
                 self.on_tool_name(None)
             return
         if was_background:
+            # Running-ack only. A completed result (or ACP wait closer)
+            # must flip ⚙ — skip left a stack of dead "background" rows.
+            # Subagent spawn acks still carry the child id in the body;
+            # ⚙ stays until child turn_completed / task_notification.
+            low = str(content or "").lower()
+            name = str(tool_name or "")
+            if (
+                "status: running" in low
+                or low.strip() in ("background", "backgrounded")
+                or name in ("Task", "Subagent", "spawn_subagent")
+            ):
+                return
+            self.bg.finalize_tool(tool_use_id, keep=not is_error)
             return
         if is_error:
             self.output.tool_error(tool_name, content, tool_id=tool_use_id)
@@ -585,6 +602,12 @@ class BridgeEventRouter:
             self.on_usage(usage)
         stop = params.get("stop_reason") or params.get("stopReason") or ""
         leftover_end = bool(params.get("leftover_end"))
+        # Duplicate closer: Grok prompt_complete after the RPC already idled.
+        # Host query owns the turn via session/prompt — leftover_end must
+        # not @done that sheet (self-wake closer can arrive late).
+        if leftover_end and (
+                not self.turn.busy or self.turn.awaiting_rpc):
+            return
         if (
             not leftover_end
             and (
@@ -641,6 +664,9 @@ class BridgeEventRouter:
             self.bg.on_task_updated(data)
         elif subtype == "task_notification":
             self.bg.on_task_notification(data, working=self.turn.busy)
+        elif subtype == "agent_continue":
+            if (self.backend or "") in _SELF_WAKE_BACKENDS:
+                self._maybe_resume_stream()
         elif subtype == "api_retry":
             self._on_api_retry(data)
         elif subtype == "compact_boundary":

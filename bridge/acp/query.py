@@ -347,6 +347,7 @@ class QueryMixin:
         self.pending[rid] = fut
         self._prompt_fut = fut
         self._prompt_acp_id = rid
+        self._orphan_turn_notified = False
         params = {"sessionId": self.session_id, "prompt": prompt_blocks}
         # Log without dumping multi-MB base64 image payloads
         def _summarize_block(b: dict) -> dict:
@@ -411,6 +412,17 @@ class QueryMixin:
                     raise RuntimeError(
                         f"agent process exited during prompt (returncode={rc})")
             result = await fut
+            if isinstance(result, dict):
+                meta = result.get("_meta") if isinstance(
+                    result.get("_meta"), dict) else {}
+                pid = (
+                    (meta or {}).get("promptId")
+                    or (meta or {}).get("prompt_id")
+                    or result.get("promptId")
+                    or result.get("prompt_id")
+                )
+                if pid:
+                    self._host_prompt_id = str(pid)
             try:
                 self.file_log(
                     f"← acp session/prompt (id={rid}) result: "

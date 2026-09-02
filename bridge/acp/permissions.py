@@ -295,9 +295,9 @@ class PermissionsMixin:
         # Recover rawInput.questions from earlier tool_call_update (permission
         # payload often only has title + truncated content).
         tid = tool_call.get("toolCallId")
-        if tid and isinstance(self._tool_inputs_by_id.get(tid), dict):
-            prev = self._tool_inputs_by_id[tid]
-            for k, v in prev.items():
+        prev_call = self._call(tid) if tid else None
+        if prev_call:
+            for k, v in prev_call.input.items():
                 tool_input.setdefault(k, v)
 
         # EnterPlanMode: notify host, allow (Claude bridge parity).

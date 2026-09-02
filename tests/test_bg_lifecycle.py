@@ -83,11 +83,8 @@ class LiveBridge(AcpBridge):
         self.session_id = "session_test"
         self._loading_session = False
         self._foreign_session_drops = 0
-        self._tool_names_by_id = {}
-        self._tool_inputs_by_id = {}
-        self._tool_ids_emitted = set()
+        self._calls = {}
         self._tool_id_alias = {}
-        self._bg_tool_ids = set()
         self._pending_execute_ids = []
         self._last_execute_id = None
         self._terminals = {}
@@ -106,7 +103,6 @@ class LiveBridge(AcpBridge):
         self._prompt_cancelled = False
         self._cancel_in_flight = False
         self._leftover_end_pending = False
-        self._tool_results_sent = set()
         self._resumed = False
         self._resume_fallback = False
         self._in_plan_mode = False
@@ -282,8 +278,8 @@ class TestA1ShellBgSpawnToDone(unittest.TestCase):
             s, b = st.session, st.bridge
             s.query("run sleep")
             b._note_shell_execute("tool-bash", "Bash")
-            b._tool_inputs_by_id["tool-bash"] = {
-                "command": "sleep 9", "run_in_background": True}
+            b._ensure_call("tool-bash").merge_input({
+                "command": "sleep 9", "run_in_background": True})
             slot = {
                 "cmd": "sleep 9",
                 "stdout": "slept\n",
@@ -535,7 +531,7 @@ class TestA4KimiForegroundTaskNotGear(unittest.TestCase):
             self.assertIsNotNone(tool)
             self.assertNotEqual(tool.status, "background")
             self.assertNotIn("task-fg", s.bg.bg_tools)
-            self.assertNotIn("task-fg", b._bg_tool_ids)
+            self.assertFalse(bool(b._call("task-fg") and b._call("task-fg").background))
             b._forward_update({
                 "sessionId": "session_test",
                 "update": {
@@ -927,8 +923,8 @@ class TestC13EscLiveShellBgKillsTerminal(unittest.TestCase):
             s, b = st.session, st.bridge
             s.query("bg sleep")
             b._note_shell_execute("tool-bash", "Bash")
-            b._tool_inputs_by_id["tool-bash"] = {
-                "command": "sleep 99", "run_in_background": True}
+            b._ensure_call("tool-bash").merge_input({
+                "command": "sleep 99", "run_in_background": True})
             slot = {
                 "cmd": "sleep 99",
                 "stdout": "",
@@ -997,8 +993,8 @@ class TestD15InterruptCancelsWaitersAndRows(unittest.TestCase):
             b._forward_update(_spawn_update("spawn-1"))
             b._bind_child_to_tool("subagent_id: %s\n" % SID_A, "spawn-1")
             b._note_shell_execute("tool-bash", "Bash")
-            b._tool_inputs_by_id["tool-bash"] = {
-                "command": "sleep 99", "run_in_background": True}
+            b._ensure_call("tool-bash").merge_input({
+                "command": "sleep 99", "run_in_background": True})
             b._terminals["term_x"] = {
                 "cmd": "sleep 99", "stdout": "", "stderr": "",
                 "exit_status": None, "reader": None, "proc": None,
@@ -1329,9 +1325,9 @@ class TestF24NoRawSessionUlidOnSurfaces(unittest.TestCase):
         self.assertNotIn("01a00fc4", block)
 
         b = LiveBridge()
-        b._bg_tool_ids.add("spawn-1")
-        b._tool_names_by_id["spawn-1"] = "Subagent"
-        b._tool_inputs_by_id["spawn-1"] = {"description": "working check"}
+        b._ensure_call("spawn-1").background = True
+        b._ensure_call("spawn-1").name = "Subagent"
+        b._ensure_call("spawn-1").merge_input({"description": "working check"})
         notes = []
         orig = _patch_all_notify(lambda m, p: notes.append((m, p)))
         try:

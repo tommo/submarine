@@ -421,17 +421,16 @@ class ToolsMixin:
         if not tid:
             return True
         title = (upd.get("title") or "").strip()
-        prev_title = getattr(self, "_tool_titles_by_id", {}).get(tid) or ""
-        if not hasattr(self, "_tool_titles_by_id"):
-            self._tool_titles_by_id = {}
+        call = self._ensure_call(tid)
+        prev_title = call.title or ""
         if title and title != prev_title:
-            self._tool_titles_by_id[tid] = title
+            call.title = title
             # Prefer titles that gained a subtitle ("Bash: cmd") or Agent label
             if ":" in title or len(title) > len(prev_title) + 2:
                 return True
+        prev = call.input
         # Full rawInput or complete content JSON → paint once usable
         if isinstance(upd.get("rawInput"), dict) and upd.get("rawInput"):
-            prev = self._tool_inputs_by_id.get(tid) or {}
             if not prev or any(
                     enriched.get(k) and enriched.get(k) != prev.get(k)
                     for k in ("file_path", "path", "command", "pattern",
@@ -439,7 +438,6 @@ class ToolsMixin:
                               "old_string", "new_string", "unified_diff")):
                 return True
         if self._parse_content_args_json(upd):
-            prev = self._tool_inputs_by_id.get(tid) or {}
             if not prev:
                 return True
             # Only if a display-critical field newly appeared or grew a lot
@@ -614,8 +612,12 @@ class ToolsMixin:
         old = out.get("old_string") or ""
         new = out.get("new_string") or ""
         if tool_name == "Edit" and not out.get("unified_diff") and (old or new):
-            out["unified_diff"] = self._plan_unified_diff(
-                str(old), str(new), max_chars=8000)
+            path = (
+                out.get("file_path") or out.get("path")
+                or out.get("target_file") or ""
+            )
+            out["unified_diff"] = self._snippet_unified_diff(
+                str(old), str(new), str(path), max_chars=8000)
         # Plugin Edit formatter prefers unified_diff; drop bulky bodies so
         # the host JSON-RPC line is not enormous (drip of a whole function).
         if tool_name == "Edit" and out.get("unified_diff"):
@@ -645,6 +647,11 @@ class ToolsMixin:
         if isinstance(raw, str):
             return raw
         if isinstance(raw, dict):
+            result = raw.get("Result") or raw.get("result")
+            if isinstance(result, dict):
+                body = result.get("output") or result.get("stdout") or ""
+                if body:
+                    return str(body)
             if tool_name == "Bash":
                 stdout = raw.get("stdout") or ""
                 stderr = raw.get("stderr") or ""

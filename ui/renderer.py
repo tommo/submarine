@@ -253,6 +253,24 @@ class TurnRenderer:
 
     # --- turn API ----------------------------------------------------------
 
+    def begin_continued(self):
+        """Open a live sheet after @done without wiping the last turn.
+
+        _do_render replaces the conversation region. Assigning a new
+        Conversation onto `current` leaves that region covering the
+        finished @done sheet, so the next spinner/tool render erases it.
+        `prompt()` freezes the old region and tracks only the new turn.
+        """
+        cur = self.current
+        if cur is not None and not getattr(cur, "has_meta", False):
+            cur.working = True
+            try:
+                self.owner.refresh_tab_title()
+            except Exception:
+                pass
+            return
+        self.prompt("(continued)")
+
     def prompt(self, text, context_names=None, context_refs=None):
         """Start a user turn. Viewless: records conversation, no buffer write."""
         self._mark_buffer_dirty(

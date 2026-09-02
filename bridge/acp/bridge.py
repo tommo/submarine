@@ -30,6 +30,7 @@ from acp.terminal import TerminalMixin  # noqa: E402
 from acp.tools import ToolsMixin  # noqa: E402
 from acp.transport import TransportMixin  # noqa: E402
 from acp.updates import UpdatesMixin  # noqa: E402
+from acp.util import AcpCall  # noqa: E402
 
 class AcpBridge(TransportMixin, SessionMixin, UpdatesMixin,
                ToolsMixin, QueryMixin, PermissionsMixin, AskUserMixin,
@@ -93,16 +94,10 @@ class AcpBridge(TransportMixin, SessionMixin, UpdatesMixin,
         self.negotiated_protocol_version: int = 1
         # Live ACP terminals (real subprocesses)
         self._terminals: Dict[str, Dict[str, Any]] = {}
-        # Generic ACP bg: tool_use ids marked ⚙ + terminalId → job.
-        # Kimi bash-*.json tracking lives on KimiBgMixin, not here.
-        self._bg_tool_ids: set = set()
+        self._calls: Dict[str, Any] = {}
         self._terminal_bg: Dict[str, Dict[str, Any]] = {}
         self._bg_notified_tasks: set = set()
         self._bg_notified_tools: set = set()
-        # toolCallIds already shown as tool_use (avoid duplicate ☐ rows).
-        self._tool_ids_emitted: set = set()
-        # toolCallIds already closed with tool_result (avoid a second ✔ row).
-        self._tool_results_sent: set = set()
         # Secondary ExitPlanMode/… toolCallId → primary open id (one UI row).
         self._tool_id_alias: Dict[str, str] = {}
         # Session/load + plan/mode advertisement
@@ -123,6 +118,9 @@ class AcpBridge(TransportMixin, SessionMixin, UpdatesMixin,
         self._prompt_cancelled: bool = False
         self._prompt_fut: Optional[asyncio.Future] = None
         self._prompt_acp_id: Optional[int] = None
+        # Grok promptId of the host session/prompt RPC. Self-wake uses a
+        # different id (task-completed-*); leftover_end only for those.
+        self._host_prompt_id: Optional[str] = None
         self._query_lock: Optional[asyncio.Lock] = None
         # True from first cancel notify until query fully settles — blocks
         # spam session/cancel (Grok ChatStateActor dies on cancel-after-done).
@@ -132,13 +130,10 @@ class AcpBridge(TransportMixin, SessionMixin, UpdatesMixin,
         self._pending_ask_followup: Optional[str] = None
         # Grok scheduler: track next fire for loop banner / wakes.
         self._schedule_next_fire: Optional[float] = None
-        # toolCallId → last known input (completed updates often omit rawInput).
-        self._tool_inputs_by_id: Dict[str, dict] = {}
-        # toolCallId → normalized name (completed updates often omit title/_meta).
-        self._tool_names_by_id: Dict[str, str] = {}
         self._last_execute_id: Optional[str] = None
         self._pending_execute_ids: List[str] = []
         self._last_bg_tool_id: Optional[str] = None
+        self._orphan_turn_notified: bool = False
         self._agent_exited: bool = False
         # Client-side backup timers when host does not inject scheduled prompts.
         # task_id (or toolCallId) → asyncio.Task
@@ -255,6 +250,24 @@ class AcpBridge(TransportMixin, SessionMixin, UpdatesMixin,
             pass
 
     # ── BaseBridge overrides ───────────────────────────────────────────
+
+    def _ensure_call(self, tid: Optional[str]) -> Optional[AcpCall]:
+        if not tid:
+            return None
+        calls = getattr(self, "_calls", None)
+        if calls is None:
+            self._calls = {}
+            calls = self._calls
+        c = calls.get(tid)
+        if c is None:
+            c = AcpCall(id=tid)
+            calls[tid] = c
+        return c
+
+    def _call(self, tid: Optional[str]) -> Optional[AcpCall]:
+        if not tid:
+            return None
+        return (getattr(self, "_calls", None) or {}).get(tid)
 
     def extra_dispatch(self):
         return {

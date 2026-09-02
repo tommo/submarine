@@ -16,8 +16,12 @@ import sys
 import tempfile
 from typing import Any
 
-# Standalone: only tools.py is imported from the plugin tree.
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Standalone: tools.py + plugin root (sidecar_skill).
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_PLUGIN = os.path.dirname(_HERE)
+for _p in (_HERE, _PLUGIN):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 from tools import (  # noqa: E402
     CALLER_INJECT_TOOLS,
     is_gated_tool,
@@ -246,11 +250,22 @@ def handle_request(request: dict) -> dict | None:
     params = request.get("params") or {}
 
     if method == "initialize":
-        return make_response(req_id, {
+        sidecar_rule = ""
+        try:
+            from sidecar_skill import RULE as sidecar_rule
+        except Exception:
+            sidecar_rule = (
+                'Unqualified "sidecar" means SUBLIME SIDECAR: MCP spawn_session, '
+                "not grok/kimi/codex CLI."
+            )
+        payload = {
             "protocolVersion": "2024-11-05",
             "capabilities": {"tools": {}},
             "serverInfo": {"name": "submarine", "version": "0.1.0"},
-        })
+        }
+        if sidecar_rule:
+            payload["instructions"] = sidecar_rule
+        return make_response(req_id, payload)
 
     if method in ("notifications/initialized", "notifications/cancelled"):
         return None

@@ -209,6 +209,13 @@ def construct_session(
             additional_dirs = [str(x) for x in extra if x]
     except Exception:
         pass
+    try:
+        from sidecar_skill import additional_skill_dirs
+        for d in additional_skill_dirs():
+            if d not in additional_dirs:
+                additional_dirs.append(d)
+    except Exception:
+        pass
     session = Session(
         output=output,
         chrome=output,

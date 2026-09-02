@@ -147,25 +147,43 @@ class SessionMixin:
         meta: Dict[str, Any] = {}
         if system_prompt:
             meta["systemPromptOverride"] = system_prompt
+        rules = []
         if resume_failed:
-            meta["rules"] = (
+            rules.append(
                 "This Sublime session was reopened without a loadable agent "
                 "transcript. The user can still see prior UI history; do not "
                 "assume you remember earlier turns unless restated."
             )
+        sidecar = self._sidecar_rule()
+        if sidecar:
+            rules.append(sidecar)
+        if rules:
+            meta["rules"] = "\n".join(rules)
         return meta
+
+    @staticmethod
+    def _sidecar_rule() -> str:
+        try:
+            plugin = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            plugin = os.path.dirname(plugin)
+            if plugin not in sys.path:
+                sys.path.insert(0, plugin)
+            from sidecar_skill import RULE
+            return RULE
+        except Exception:
+            return (
+                'Unqualified "sidecar" means SUBLIME SIDECAR: MCP spawn_session, '
+                "not grok/kimi/codex CLI."
+            )
 
     def _reset_conversation_local(self) -> None:
         """Drop turn-local maps that belong to the conversation being cleared."""
-        self._bg_tool_ids.clear()
+        (getattr(self, "_calls", None) or {}).clear()
+        self._calls = {}
         self._terminal_bg.clear()
         self._bg_notified_tasks.clear()
         self._bg_notified_tools.clear()
-        self._tool_ids_emitted.clear()
-        self._tool_results_sent.clear()
         self._tool_id_alias.clear()
-        self._tool_inputs_by_id.clear()
-        self._tool_names_by_id.clear()
         self._pending_execute_ids.clear()
         self._last_execute_id = None
         self._last_bg_tool_id = None

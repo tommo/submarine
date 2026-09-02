@@ -72,9 +72,10 @@ class AskUserMixin:
         if not content:
             return {"action": "cancel"}
         extra = self._kimi_followup_answers(questions, answers)
-        if extra and self._kimi_answers_dropped(questions, answers, content, keys):
-            # Other cannot enter the tool result (enum filter). Chain a
-            # second session/prompt AFTER this turn end_turn — not cancel.
+        if extra and self._kimi_has_freetext(questions, answers):
+            # Native wire: answers[question]=typed string. ACP enum filter
+            # may still drop it from the tool result — chain a followup
+            # session/prompt after end_turn (no cancel).
             self._pending_ask_followup = extra
         self.file_log(
             f"elicitation/create accept keys={list(content.keys())}"
@@ -162,26 +163,35 @@ class AskUserMixin:
                     if label in allowed:
                         picked.append(label)
                         continue
+                    hit = False
                     for ol in allowed:
                         if AskUserMixin._labels_match(label, ol):
                             picked.append(ol)
+                            hit = True
                             break
-                # declared order
-                picked = [ol for ol in allowed if ol in picked]
-                if picked:
-                    content[key] = picked
+                    if not hit and label:
+                        picked.append(label)
+                listed = [ol for ol in allowed if ol in picked]
+                extra = [p for p in picked if p not in listed]
+                if listed or extra:
+                    content[key] = listed + extra
                 continue
             label = (
                 str(val[0]) if isinstance(val, (list, tuple)) and val
                 else str(val or "")
             )
+            if not label:
+                continue
             if label in allowed:
                 content[key] = label
                 continue
+            matched = ""
             for ol in allowed:
                 if AskUserMixin._labels_match(label, ol):
-                    content[key] = ol
+                    matched = ol
                     break
+            # Native Kimi Other: answers[question] is the typed string.
+            content[key] = matched or label
         return content
 
     async def _handle_acp_ask_user_permission(
@@ -265,7 +275,7 @@ class AskUserMixin:
         label = self._first_answer_label(answers, questions)
         oid = self._kimi_q0_option_id(options, questions, label)
         extra = self._kimi_followup_answers(questions, answers)
-        if extra:
+        if extra and self._kimi_has_freetext(questions, answers):
             self._pending_ask_followup = extra
         if oid:
             self.file_log(
@@ -372,38 +382,64 @@ class AskUserMixin:
         return ""
 
     @staticmethod
-    def _kimi_followup_answers(questions: list, answers: dict) -> str:
-        """Text for Q1+ (Kimi ACP drops them) or a full recap when useful."""
+    def _kimi_native_answers_map(questions: list, answers: dict) -> dict:
+        """Same shape as native tool.result: {question_text: answer}."""
         if not isinstance(answers, dict) or not answers:
-            return ""
-        if not questions or len(questions) < 2:
-            return ""
-        lines = [
-            "The user answered AskUserQuestion. ACP only forwards the "
-            "first question — do NOT treat this as dismissed. Honor every "
-            "answer below:",
-        ]
-        for q in questions:
+            return {}
+        out = {}
+        for q in questions or []:
             if not isinstance(q, dict):
                 continue
-            header = q.get("header") or ""
-            qtext = q.get("question") or header or "Question"
+            qtext = q.get("question") or q.get("header") or ""
             val = ""
-            for key in (q.get("question") or "", header):
+            for key in (q.get("question") or "", q.get("header") or ""):
+                if key and key in answers:
+                    val = AskUserMixin._answer_as_label(answers[key])
+                    if val:
+                        break
+            if qtext and val:
+                out[qtext] = val
+        return out
+
+    @staticmethod
+    def _kimi_followup_answers(questions: list, answers: dict) -> str:
+        """Native AskUserQuestion tool result JSON. Works for one question."""
+        native = AskUserMixin._kimi_native_answers_map(questions, answers)
+        if not native:
+            return ""
+        payload = json.dumps({"answers": native}, ensure_ascii=False)
+        return (
+            "AskUserQuestion tool result (user typed Other/free text; "
+            "do NOT treat as dismissed):\n" + payload
+        )
+
+    @staticmethod
+    def _kimi_has_freetext(questions: list, answers: dict) -> bool:
+        """True if any UI answer is not a declared option label."""
+        if not isinstance(answers, dict) or not answers:
+            return False
+        for q in questions or []:
+            if not isinstance(q, dict):
+                continue
+            val = ""
+            for key in (q.get("question") or "", q.get("header") or ""):
                 if key and key in answers:
                     val = AskUserMixin._answer_as_label(answers[key])
                     if val:
                         break
             if not val:
                 continue
-            prefix = f"{header}: " if header and header != qtext else ""
-            lines.append(f"- {prefix}{qtext}: {val}" if prefix else f"- {qtext}: {val}")
-        if len(lines) <= 1:
-            return ""
-        lines.append(
-            "If a tool result said the user dismissed or only includes "
-            "the first choice, ignore that and use this list.")
-        return "\n".join(lines)
+            allowed = [
+                str(o.get("label") or "")
+                for o in (q.get("options") or [])
+                if isinstance(o, dict)
+            ]
+            if val in allowed:
+                continue
+            if any(AskUserMixin._labels_match(val, ol) for ol in allowed):
+                continue
+            return True
+        return False
 
     @staticmethod
     def _kimi_other_followup(questions: list, answers: dict, label: str) -> str:
@@ -599,9 +635,10 @@ class AskUserMixin:
 
         # session/update already opened this id — do not paint a second ☐.
         tool_call_id = params.get("toolCallId") or f"ask_{self.permission_id + 1}"
-        if tool_call_id not in self._tool_ids_emitted:
-            self._tool_ids_emitted.add(tool_call_id)
-            self._tool_names_by_id[tool_call_id] = "ask_user"
+        ask_call = self._ensure_call(tool_call_id)
+        if not ask_call.emitted:
+            ask_call.emitted = True
+            ask_call.name = "ask_user"
             send_notification("message", {
                 "type": "tool_use",
                 "id": tool_call_id,
@@ -628,8 +665,8 @@ class AskUserMixin:
 
         if answers is None:
             # User cancelled / interrupted the question UI.
-            if tool_call_id not in self._tool_results_sent:
-                self._tool_results_sent.add(tool_call_id)
+            if not ask_call.result_sent:
+                ask_call.close()
                 send_notification("message", {
                     "type": "tool_result",
                     "tool_use_id": tool_call_id,
@@ -643,8 +680,8 @@ class AskUserMixin:
 
         summary = "; ".join(
             f"{k}: {', '.join(v)}" for k, v in norm.items())
-        if tool_call_id not in self._tool_results_sent:
-            self._tool_results_sent.add(tool_call_id)
+        if not ask_call.result_sent:
+            ask_call.close()
             send_notification("message", {
                 "type": "tool_result",
                 "tool_use_id": tool_call_id,

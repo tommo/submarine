@@ -34,6 +34,7 @@ KEEP = (
     "send_to_session",
     "list_sessions",
     "read_session_output",
+    "read_session_edits",
     "lsp",
     "sublime_eval",
     "sublime_tool",

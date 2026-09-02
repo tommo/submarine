@@ -143,11 +143,13 @@ class KimiBgMixin:
             return
         if task_id in self._kimi_bg:
             return
-        name = self._tool_names_by_id.get(tool_use_id) or "Bash"
+        call = self._ensure_call(tool_use_id)
+        name = call.name or "Bash"
         if name not in _EXEC_NAMES:
             name = "Bash"
             tool_use_id = f"bg-{task_id}"
-        self._bg_tool_ids.add(tool_use_id)
+            call = self._ensure_call(tool_use_id)
+        call.background = True
         self._kimi_bg[task_id] = {
             "tool_use_id": tool_use_id,
             "description": description or task_id,
@@ -158,14 +160,14 @@ class KimiBgMixin:
             "run_in_background": True,
             "task_id": task_id,
         }
-        self._tool_inputs_by_id[tool_use_id] = inp
-        self._tool_names_by_id[tool_use_id] = "Bash"
-        self._tool_ids_emitted.add(tool_use_id)
+        call.merge_input(inp)
+        call.name = "Bash"
+        call.emitted = True
         send_notification("message", {
             "type": "tool_use",
             "id": tool_use_id,
             "name": "Bash",
-            "input": inp,
+            "input": call.input,
             "background": True,
         })
         self._emit_system("task_started", {
@@ -179,8 +181,6 @@ class KimiBgMixin:
         if not info:
             return
         tool_use_id = info.get("tool_use_id") or f"bg-{task_id}"
-        if self._should_skip_bg_notify(task_id, tool_use_id):
-            return
         meta = meta or self.read_kimi_task_meta(task_id) or {}
         raw_status = str(meta.get("status") or "completed").lower()
         if raw_status in ("cancelled", "canceled", "lost"):
@@ -191,6 +191,14 @@ class KimiBgMixin:
             status = "failed"
         else:
             status = "completed"
+        if self._should_skip_bg_notify(task_id, tool_use_id):
+            self.file_log(
+                f"kimi native complete skip wake {task_id} {tool_use_id}")
+            self._ui_close_bg(task_id, tool_use_id, status)
+            for term_id, tinfo in list(self._terminal_bg.items()):
+                if tinfo.get("task_id") == task_id or tinfo.get("tool_use_id") == tool_use_id:
+                    self._terminal_bg.pop(term_id, None)
+            return
         code = meta.get("exitCode")
         output_file = ""
         tdir = self.kimi_tasks_dir()
@@ -229,7 +237,8 @@ class KimiBgMixin:
             if info.get("kimi_native"):
                 continue
             tool_use_id = info.get("tool_use_id") or ""
-            if not tool_use_id or tool_use_id not in self._bg_tool_ids:
+            call = self._call(tool_use_id) if tool_use_id else None
+            if not tool_use_id or not (call and call.background):
                 continue
             meta = self.find_matching_kimi_task(str(info.get("cmd") or ""))
             if meta and meta.get("taskId"):
@@ -274,12 +283,21 @@ class KimiBgMixin:
         best = None
         best_score = 0
         best_t = 0
+        used = set()
+        for info in (getattr(self, "_terminal_bg", None) or {}).values():
+            tid = info.get("task_id")
+            if tid:
+                used.add(str(tid))
         try:
             for name in os.listdir(tdir):
                 if not (name.startswith("bash-") and name.endswith(".json")):
                     continue
+                if name[:-5] in used:
+                    continue
                 meta = self.read_kimi_task_meta(name[:-5])
                 if not meta or str(meta.get("status") or "").lower() != "running":
+                    continue
+                if str(meta.get("taskId") or "") in used:
                     continue
                 mcmd = " ".join(str(meta.get("command") or "").split())
                 if not mcmd:
@@ -330,7 +348,8 @@ class KimiBgMixin:
                 )
                 slot["bg"] = True
                 slot["tool_use_id"] = eid
-                if eid not in getattr(self, "_bg_tool_ids", ()):
+                c = self._call(eid)
+                if not (c and c.background):
                     self._register_bg_tool(
                         eid, {"command": slot.get("cmd"), "detached": True})
                 self._bind_terminal_to_bg_tool(terminal_id, eid)
@@ -377,7 +396,8 @@ class KimiBgMixin:
                 info = self._terminal_bg.get(terminal_id)
                 if not info or info.get("kimi_native"):
                     return
-                if tool_use_id not in self._bg_tool_ids:
+                c = self._call(tool_use_id)
+                if not (c and c.background):
                     return
                 meta = self.find_matching_kimi_task(cmd)
                 if meta and meta.get("taskId"):
@@ -418,8 +438,9 @@ class KimiBgMixin:
             return False
         if not tid or tool_name not in _EXEC_NAMES:
             return False
+        stored = self._call(tid)
         cmd = (enriched or {}).get("command") or (
-            self._tool_inputs_by_id.get(tid) or {}
+            stored.input if stored else {}
         ).get("command") or ""
         self._register_kimi_native_bg(
             tid, kg["task_id"],
@@ -437,9 +458,10 @@ class KimiBgMixin:
     def _bind_terminal_to_bg_tool(self, terminal_id: str, tool_use_id: str) -> None:
         if not terminal_id or not tool_use_id:
             return
-        if tool_use_id not in self._bg_tool_ids:
+        call = self._call(tool_use_id)
+        if not call or not call.background:
             return
-        cmd = (self._tool_inputs_by_id.get(tool_use_id) or {}).get("command", "")
+        cmd = call.input.get("command", "")
         if terminal_id in self._terminal_bg:
             info = self._terminal_bg[terminal_id]
             if not info.get("kimi_native"):
@@ -457,36 +479,14 @@ class KimiBgMixin:
         self._schedule_kimi_relink(terminal_id, tool_use_id, str(cmd))
 
     def _emit_bg_terminal_complete(self, terminal_id: str) -> None:
-        info = self._terminal_bg.get(terminal_id)
-        if not info:
-            return
-        tool_use_id = info.get("tool_use_id") or ""
+        info = self._terminal_bg.get(terminal_id) or {}
+        tuid = info.get("tool_use_id") or ""
         kid = info.get("task_id") if info.get("kimi_native") else None
+        # Close this terminal's ⚙ even if several creates matched one
+        # bash-*.json — native complete used to pop that id and skip the rest.
+        super()._emit_bg_terminal_complete(terminal_id)
         if not kid:
-            for bid, kinfo in list(self._kimi_bg.items()):
-                if kinfo.get("tool_use_id") == tool_use_id:
-                    kid = bid
-                    break
-        if not kid:
-            meta_match = self.find_matching_kimi_task(str(info.get("cmd") or ""))
-            if meta_match and meta_match.get("taskId"):
-                kid = str(meta_match.get("taskId"))
-        if not kid:
-            super()._emit_bg_terminal_complete(terminal_id)
             return
-        self._terminal_bg.pop(terminal_id, None)
-        meta = self.read_kimi_task_meta(str(kid)) or {}
-        if str(meta.get("status") or "").lower() not in _KIMI_BG_TERM:
-            meta = dict(meta)
-            meta["status"] = "completed"
-            slot = self._terminals.get(terminal_id) or {}
-            es = slot.get("exit_status") or {}
-            if es.get("exitCode") is not None:
-                meta["exitCode"] = es.get("exitCode")
-        if kid not in self._kimi_bg and tool_use_id:
-            self._kimi_bg[kid] = {
-                "tool_use_id": tool_use_id,
-                "description": str(meta.get("description") or kid),
-                "command": str(meta.get("command") or info.get("cmd") or ""),
-            }
-        self._emit_kimi_native_bg_complete(str(kid), meta)
+        kinfo = self._kimi_bg.get(kid)
+        if kinfo and kinfo.get("tool_use_id") == tuid:
+            self._kimi_bg.pop(kid, None)

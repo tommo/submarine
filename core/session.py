@@ -1451,8 +1451,19 @@ class Session:
 
     def _resume_interrupt_stream(self):
         # type: () -> None
+        """Own busy for leftover stream / Grok bg self-wake (no session/prompt)."""
+        if self.working:
+            return
         self.turn.resume_stream()
         self._set_turn_phase("responding")
+        try:
+            if self.output:
+                # Must go through prompt() / begin_continued — swapping
+                # current in-place left the conversation region on the
+                # @done sheet and the next render wiped the session view.
+                self.output.begin_continued()
+        except Exception:
+            pass
         self.chrome.refresh_tab_title()
 
     def _result_idle(self):
@@ -1464,6 +1475,13 @@ class Session:
         if self.bg.pending_notifications:
             try:
                 self.bg.flush()
+            except Exception:
+                pass
+        # Kimi end_turn while wait_for_exit is pending is fine; a closer
+        # that skip-dropped left ⚙ under @done. Poll now.
+        if self.bg.bg_tools or self.bg.bg_task_ids or self.bg.task_tool_map:
+            try:
+                self.bg._poll()
             except Exception:
                 pass
         if not self.working:

@@ -182,7 +182,11 @@ class BackgroundTaskGate:
         status = (data.get("patch") or {}).get("status", "")
         if not task_id or status not in _TASK_TERMINAL:
             return
-        tool_use_id = self.task_tool_map.get(task_id)
+        tool_use_id = (
+            data.get("tool_use_id")
+            or self.task_tool_map.get(task_id)
+            or ""
+        )
         if not tool_use_id:
             return
         self.finalize_tool(tool_use_id, keep=(status == "completed"))
@@ -385,7 +389,7 @@ class BackgroundTaskGate:
         # type: () -> None
         if self._poll_armed:
             return
-        if not self.task_tool_map and not self.bg_task_ids:
+        if not (self.task_tool_map or self.bg_task_ids or self.bg_tools):
             return
         epoch = self.poll_epoch
         self._poll_armed = True
@@ -401,7 +405,7 @@ class BackgroundTaskGate:
     def _poll(self):
         # type: () -> None
         epoch = self.poll_epoch
-        if not self.task_tool_map and not self.bg_task_ids:
+        if not (self.task_tool_map or self.bg_task_ids or self.bg_tools):
             return
         if self.turn.busy:
             self._arm_poll(POLL_BUSY_MS, epoch)
@@ -418,7 +422,7 @@ class BackgroundTaskGate:
         try:
             self.send_poll(_cb)
         except Exception:
-            if self.task_tool_map or self.bg_task_ids:
+            if self.task_tool_map or self.bg_task_ids or self.bg_tools:
                 self._arm_poll(POLL_IDLE_MS, epoch)
 
     def _arm_poll(self, delay_ms, epoch):
@@ -444,7 +448,7 @@ class BackgroundTaskGate:
         except Exception:
             running = None
         self.reconcile(running)
-        if not (self.task_tool_map or self.bg_task_ids):
+        if not (self.task_tool_map or self.bg_task_ids or self.bg_tools):
             return
         self._arm_poll(POLL_IDLE_MS, self.poll_epoch)
 
@@ -459,17 +463,25 @@ class BackgroundTaskGate:
             return
         live = set(running or [])
         self.seen_running |= live
+        live_tools = set()
+        for task_id, tool_use_id in self.task_tool_map.items():
+            if task_id in live:
+                live_tools.add(tool_use_id)
+        for tuid in self.bg_task_ids:
+            if tuid in live:
+                live_tools.add(tuid)
+
+        from .turn import _SELF_WAKE_BACKENDS
         for task_id, tool_use_id in list(self.task_tool_map.items()):
-            if not (
-                tool_use_id in self.bg_task_ids
-                and task_id in self.seen_running
-                and task_id not in live
-            ):
+            if task_id in live:
                 continue
-            if self.already(task_id, tool_use_id):
-                self.finalize_tool(tool_use_id, keep=False)
-                self.drop_tool(tool_use_id)
-            else:
+            # Missed terminal event. Grok still needs a wake; Kimi already
+            # got the native completion mid-turn — only flip ⚙.
+            if (
+                not self.already(task_id, tool_use_id)
+                and not self.turn.busy
+                and (self.backend or "") in _SELF_WAKE_BACKENDS
+            ):
                 self.on_task_notification({
                     "task_id": task_id,
                     "tool_use_id": tool_use_id,
@@ -477,8 +489,17 @@ class BackgroundTaskGate:
                     "summary": "%s (completed)" % task_id,
                     "output_file": "",
                 }, working=self.turn.busy)
+            else:
+                self.finalize_tool(tool_use_id, keep=True)
+                self.drop_tool(tool_use_id)
             self.task_tool_map.pop(task_id, None)
             self.seen_running.discard(task_id)
+
+        for tuid in list(self.bg_task_ids):
+            if tuid in live_tools or tuid in live:
+                continue
+            self.finalize_tool(tuid, keep=True)
+            self.drop_tool(tuid)
 
     def abort(self):
         # type: () -> None

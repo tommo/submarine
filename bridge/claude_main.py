@@ -279,6 +279,14 @@ class Bridge:
         session_id_info = f"sublime.{session_id}"
         agent_id_info = agent_id or session_id
         parent_agent_id = params.get("parent_agent_id")
+        sidecar_rule = ""
+        try:
+            from sidecar_skill import RULE as sidecar_rule
+        except Exception:
+            sidecar_rule = (
+                'Unqualified "sidecar" means SUBLIME SIDECAR: MCP spawn_session, '
+                "not grok/kimi/codex CLI."
+            )
         session_guide = f"""
 
 ## Session Info
@@ -286,6 +294,8 @@ class Bridge:
 Session ID: {session_id_info}
 Agent ID: {agent_id_info}
 """
+        if sidecar_rule:
+            session_guide += "\n%s\n" % sidecar_rule
         if parent_agent_id:
             session_guide += f"Parent Agent ID: {parent_agent_id}\n"
 

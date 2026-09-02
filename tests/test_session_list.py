@@ -396,6 +396,15 @@ class TestRenderSessionList(unittest.TestCase):
             ),
         )
         self.assertEqual(sl._status_of(unread_working), "working")
+        bg_idle = types.SimpleNamespace(
+            is_sleeping=False, working=False, unread=False, _compacting=False,
+            output=types.SimpleNamespace(
+                pending_permission=None, pending_question=None, pending_plan=None,
+                active_background_tools=lambda: [object()],
+            ),
+        )
+        self.assertEqual(sl._status_of(bg_idle), "bg")
+        self.assertEqual(sl._mark("bg"), "⚙")
         row = {
             "kind": "live", "session_id": "ask", "view_id": 1,
             "name": "needs a choice", "backend": "kimi", "status": "input",
@@ -658,6 +667,35 @@ class TestRenderSessionList(unittest.TestCase):
         by_id = {r["session_id"]: r.get("section") for r in index}
         self.assertEqual(by_id["cur"], "CURRENT")
         self.assertEqual(by_id["old"], "HISTORY")
+
+    def test_dclick_does_not_open_neighbor(self):
+        opened = []
+        sl._last_open = (0.0, None)
+        orig_focus = sl.focus_live
+        orig_wake = sl._wake_if_sleeping
+        import ui.host as host
+        orig_sm = host.is_single_mode
+        sl.focus_live = lambda w, r, o=opened: (o.append(r["session_id"]) or True)
+        sl._wake_if_sleeping = lambda s: None
+        host.is_single_mode = lambda: False
+        a = {"kind": "live", "session_id": "target", "agent_id": "a1"}
+        b = {"kind": "live", "session_id": "neighbor", "agent_id": "a2"}
+        try:
+            self.assertTrue(sl.open_row(None, a))
+            # Same-key debounce still swallows a second click on `a`.
+            self.assertTrue(sl.open_row(None, a))
+            self.assertEqual(opened, ["target"])
+        finally:
+            sl.focus_live = orig_focus
+            sl._wake_if_sleeping = orig_wake
+            host.is_single_mode = orig_sm
+        import os
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "ui", "session_list.py")
+        with open(path, encoding="utf-8") as f:
+            src = f.read()
+        self.assertNotIn('view.run_command("submarine_session_list_open")', src)
 
 
 if __name__ == "__main__":

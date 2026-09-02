@@ -87,8 +87,8 @@ class UpdatesMixin:
         """Most recent Subagent/Task row that has no child yet."""
         bound = self._bound_child_tool_ids()
         found = None
-        for tid, name in (getattr(self, "_tool_names_by_id", {}) or {}).items():
-            if not self._is_subagent_tool_name(name or ""):
+        for tid, call in list((getattr(self, "_calls", None) or {}).items()):
+            if not self._is_subagent_tool_name(call.name or ""):
                 continue
             if tid in bound:
                 continue
@@ -98,8 +98,8 @@ class UpdatesMixin:
         last = getattr(self, "_last_bg_tool_id", None)
         if last and last not in bound:
             return last
-        for tid in getattr(self, "_bg_tool_ids", ()) or ():
-            if tid not in bound:
+        for tid, call in list((getattr(self, "_calls", None) or {}).items()):
+            if call.background and tid not in bound:
                 return tid
         return None
 
@@ -110,8 +110,8 @@ class UpdatesMixin:
             return
         late = bool(slot.get("done")) and not slot.get("tool_use_id")
         slot["tool_use_id"] = tool_use_id
-        inp = (getattr(self, "_tool_inputs_by_id", {}) or {}).get(
-            tool_use_id) or {}
+        call = self._ensure_call(tool_use_id)
+        inp = call.input if call else {}
         desc = (
             slot.get("description")
             or inp.get("description")
@@ -121,16 +121,13 @@ class UpdatesMixin:
         )
         if desc and not self._is_child_session_id(str(desc)):
             slot["description"] = desc
-        if tool_use_id not in getattr(self, "_bg_tool_ids", set()):
-            self._bg_tool_ids.add(tool_use_id)
+        if call and not call.background:
+            call.background = True
             try:
                 send_notification("message", {
                     "type": "tool_use",
                     "id": tool_use_id,
-                    "name": (
-                        (getattr(self, "_tool_names_by_id", {}) or {}).get(
-                            tool_use_id) or "Subagent"
-                    ),
+                    "name": call.name or "Subagent",
                     "input": {**inp, "run_in_background": True},
                     "background": True,
                 })
@@ -264,7 +261,8 @@ class UpdatesMixin:
     def _emit_tool_use(self, tid, name, tool_input, background=False) -> None:
         inp = dict(tool_input or {})
         if name in ("Edit", "Write"):
-            stored = self._tool_inputs_by_id.get(tid) or {}
+            stored = self._call(tid)
+            stored = stored.input if stored else {}
             inp = self._edit_ui_input({**stored, **inp}, name)
         send_notification("message", {
             "type": "tool_use",
@@ -310,6 +308,20 @@ class UpdatesMixin:
             self._prompt_cancelled and host_prompt_live))
         # After user interrupt: drop *new* tool starts / leftover prose.
         # Still accept tool_call_update completions so already-open rows settle.
+        if (
+            not host_prompt_live
+            and not suppress
+            and kind in ("tool_call", "agent_message_chunk")
+            and getattr(self, "BACKEND_NAME", "") == "grok"
+            and not getattr(self, "_orphan_turn_notified", False)
+        ):
+            self._orphan_turn_notified = True
+            self.file_log(f"grok orphan turn start kind={kind}")
+            send_notification("message", {
+                "type": "system",
+                "subtype": "agent_continue",
+                "data": {"reason": kind},
+            })
         if suppress and kind in (
             "tool_call", "agent_message_chunk", "agent_thought_chunk",
         ):
@@ -343,11 +355,11 @@ class UpdatesMixin:
                     f"name={tool_name!r} id={tid!r}")
                 return
             if tid:
+                call = self._ensure_call(tid)
                 if tool_name and tool_name != "tool":
-                    self._tool_names_by_id[tid] = tool_name
+                    call.name = tool_name
                 if tool_input:
-                    prev = self._tool_inputs_by_id.get(tid) or {}
-                    self._tool_inputs_by_id[tid] = {**prev, **tool_input}
+                    call.merge_input(tool_input)
             # Kimi streams tool_call with empty input before title is useful;
             # still emit when we have a real name so UI is not "☐ tool".
             if tool_name == "tool" and not tool_input:
@@ -366,20 +378,20 @@ class UpdatesMixin:
             if tool_name in (
                 "ExitPlanMode", "EnterPlanMode", "ask_user", "AskUserQuestion",
             ) and tid:
-                for oid, oname in list(self._tool_names_by_id.items()):
-                    if (self._same_modal_tool(oname, tool_name) and oid != tid
-                            and oid in self._tool_ids_emitted):
+                for oid, oc in list((getattr(self, "_calls", None) or {}).items()):
+                    if (self._same_modal_tool(oc.name, tool_name) and oid != tid
+                            and oc.emitted):
                         if not hasattr(self, "_tool_id_alias"):
                             self._tool_id_alias = {}
                         self._tool_id_alias[tid] = oid
-                        self._tool_names_by_id[tid] = tool_name
+                        self._ensure_call(tid).name = tool_name
                         if tool_input:
-                            prev = self._tool_inputs_by_id.get(oid) or {}
-                            self._tool_inputs_by_id[oid] = {**prev, **tool_input}
+                            self._ensure_call(oid).merge_input(tool_input)
                         self.file_log(
                             f"alias {tool_name} {tid} → open {oid} (no 2nd row)")
                         return
-            self._tool_ids_emitted.add(tid)
+            call = self._ensure_call(tid)
+            call.emitted = True
             self._note_shell_execute(tid, tool_name)
             is_spawn = self._is_subagent_spawn(tool_name, upd, tool_input)
             is_bg = is_spawn or self._looks_like_background_tool(
@@ -393,12 +405,9 @@ class UpdatesMixin:
                 is_spawn = False
             if is_bg and tid and isinstance(tool_input, dict):
                 tool_input = {**tool_input, "run_in_background": True}
-                self._tool_inputs_by_id[tid] = {
-                    **(self._tool_inputs_by_id.get(tid) or {}),
-                    **tool_input,
-                }
+                call.merge_input(tool_input)
             if is_bg and tid:
-                self._bg_tool_ids.add(tid)
+                call.background = True
                 if is_spawn:
                     self._last_bg_tool_id = tid
             self._emit_tool_use(
@@ -414,14 +423,16 @@ class UpdatesMixin:
             # Completed updates often strip title/_meta → name becomes "tool".
             # Recover the name we saw on the open tool_call / earlier update.
             if (not tool_name or tool_name == "tool") and tid:
-                tool_name = self._tool_names_by_id.get(tid) or tool_name or "tool"
+                oc = self._call(tid)
+                tool_name = (oc.name if oc and oc.name else None) or tool_name or "tool"
             elif tid and tool_name and tool_name != "tool":
-                self._tool_names_by_id[tid] = tool_name
+                self._ensure_call(tid).name = tool_name
             if status not in ("completed", "failed"):
                 self._note_shell_execute(tid, tool_name)
             # Lifecycle rows that never opened a real tool — drop entirely
+            oc = self._call(tid) if tid else None
             if (self._should_suppress_tool_row(upd, tool_name)
-                    and (not tid or tid not in self._tool_ids_emitted)):
+                    and (not tid or not (oc and oc.emitted))):
                 self.file_log(
                     f"suppress tool_call_update noise: "
                     f"title={upd.get('title')!r} name={tool_name!r} "
@@ -430,7 +441,7 @@ class UpdatesMixin:
             # Ext method already closed this id (ask_user / ExitPlanMode).
             # Re-emitting tool_use after ✔ opens a second ☐ (plugin only
             # upserts PENDING rows).
-            if tid and tid in getattr(self, "_tool_results_sent", set()):
+            if tid and oc and oc.result_sent:
                 return
             # Grok: bare tool_call then richer update. Emit tool_use at most
             # once per id (plugin upserts); re-emitting created a second ☐
@@ -438,7 +449,7 @@ class UpdatesMixin:
             enriched = self._tool_input_from_update(upd, tool_name)
             tool_name, enriched = self._reclassify_read_dir(tool_name, enriched)
             if tid and tool_name and tool_name != "tool":
-                self._tool_names_by_id[tid] = tool_name
+                self._ensure_call(tid).name = tool_name
             # Compare against stored args BEFORE merge — otherwise
             # should_repaint sees old_string already applied and skips
             # (Kimi Edit JSON-drip then rawInput never painted a diff).
@@ -446,10 +457,10 @@ class UpdatesMixin:
                 status in ("completed", "failed")
                 or self._should_repaint_tool(tid, upd, enriched)
             )
-            if tid and enriched:
-                prev = self._tool_inputs_by_id.get(tid) or {}
-                self._tool_inputs_by_id[tid] = {**prev, **enriched}
-            if tid not in self._tool_ids_emitted:
+            call = self._ensure_call(tid) if tid else None
+            if call and enriched:
+                call.merge_input(enriched)
+            if not call or not call.emitted:
                 # Skip anonymous early stream chunks (Kimi JSON drip without title)
                 if tool_name == "tool" and status not in ("completed", "failed"):
                     return
@@ -464,68 +475,65 @@ class UpdatesMixin:
                     # Skip opening rows for lifecycle titles at completed
                     if self._should_suppress_tool_row(upd, tool_name):
                         return
-                    self._tool_ids_emitted.add(tid)
+                    if call:
+                        call.emitted = True
                     bg = bool(
-                        tid in self._bg_tool_ids
+                        (call and call.background)
                         or self._looks_like_background_tool(upd, enriched)
                     )
-                    if bg and tid:
-                        self._bg_tool_ids.add(tid)
+                    if bg and call:
+                        call.background = True
                     self._emit_tool_use(
                         tid, tool_name,
-                        enriched or self._tool_inputs_by_id.get(tid) or {},
+                        enriched or (call.input if call else {}),
                         background=bg)
             elif tool_name != "tool" or (enriched and status not in ("completed", "failed")):
                 # Enrich open row (same id → output.tool upserts). Prefer real name.
                 # kimi-cli streams arg JSON one token at a time as tool_call_update;
                 # only re-paint when title/args became usable (not every drip).
                 enrich_name = tool_name
-                if enrich_name == "tool" and tid:
-                    enrich_name = self._tool_names_by_id.get(tid) or "tool"
+                if enrich_name == "tool" and call and call.name:
+                    enrich_name = call.name
                 if not self._should_suppress_tool_row(upd, enrich_name):
-                    newly_bg = bool(
-                        tid
-                        and tid not in self._bg_tool_ids
-                        and self._looks_like_background_tool(upd, enriched)
-                    )
-                    if newly_bg:
-                        self._bg_tool_ids.add(tid)
-                    bg = bool(tid and tid in self._bg_tool_ids)
-                    if need_paint or newly_bg:
+                    if need_paint:
+                        bg = bool(
+                            call.background
+                            or self._looks_like_background_tool(upd, enriched)
+                        )
+                        if bg:
+                            call.background = True
                         self._emit_tool_use(
                             tid, enrich_name,
-                            enriched or self._tool_inputs_by_id.get(tid) or {},
+                            enriched or call.input,
                             background=bg)
             # Cache run_in_background for create pairing. Do not drop pending
             # here — that left ⚙ unbound when create arrived later (or never).
             is_bg = bool(
-                tid and self._is_shell_tool_name(tool_name) and (
-                    tid in self._bg_tool_ids
+                call and self._is_shell_tool_name(tool_name) and (
+                    call.background
                     or self._looks_like_background_tool(upd, enriched)
                 )
             )
-            if is_bg and tid:
-                cached = dict(self._tool_inputs_by_id.get(tid) or {})
+            if is_bg and call:
                 if isinstance(enriched, dict):
-                    cached.update(enriched)
-                cached["run_in_background"] = True
-                self._tool_inputs_by_id[tid] = cached
+                    call.merge_input(enriched)
+                call.merge_input({"run_in_background": True})
                 for term_id in self._terminal_ids_from_update(upd):
                     slot = self._terminals.get(term_id)
                     if slot is None:
                         continue
-                    if tid not in self._bg_tool_ids:
+                    if not call.background:
                         self._register_bg_tool(
-                            tid, cached, str(upd.get("title") or ""))
+                            tid, call.input, str(upd.get("title") or ""))
                     self._bind_terminal_to_bg_tool(term_id, tid)
                     slot["bg"] = True
                     slot["tool_use_id"] = tid
 
             if status in ("completed", "failed"):
-                if tid and tid in getattr(self, "_tool_results_sent", set()):
+                if call and call.result_sent:
                     return
                 # No open row for this id → nothing to close (noise already dropped)
-                if tid not in self._tool_ids_emitted and not self._tool_update_has_substance(upd):
+                if (not call or not call.emitted) and not self._tool_update_has_substance(upd):
                     # may have been suppressed at open
                     if self._should_suppress_tool_row(upd, tool_name) or tool_name == "tool":
                         return
@@ -536,7 +544,7 @@ class UpdatesMixin:
                 if tool_name in ("Edit", "Write"):
                     # Kimi completed is "Replaced 1 occurrence" text — no
                     # type=diff. Re-emit stored old/new as unified_diff.
-                    stored = dict(self._tool_inputs_by_id.get(tid) or {})
+                    stored = dict(call.input if call else {})
                     payload = {**stored, **(enriched or {})}
                     if diff_input:
                         payload.update(diff_input)
@@ -546,13 +554,13 @@ class UpdatesMixin:
                             or payload.get("new_string")
                             or payload.get("file_path")
                             or payload.get("content")):
-                        if tid not in self._tool_ids_emitted:
-                            self._tool_ids_emitted.add(tid)
+                        if call:
+                            call.emitted = True
                         self._emit_tool_use(
                             tid, tool_name, payload,
-                            background=bool(tid and tid in self._bg_tool_ids))
+                            background=bool(call and call.background))
                 # Bind terminal ids on completed payload (Kimi attaches them here)
-                if tid and tid in self._bg_tool_ids:
+                if call and call.background:
                     for term_id in self._terminal_ids_from_update(upd):
                         self._bind_terminal_to_bg_tool(term_id, tid)
 
@@ -591,8 +599,8 @@ class UpdatesMixin:
                 # ACP-terminal / subagent background: tool_result is only an
                 # ack (host keeps ⚙ until task_notification).
                 if (
-                    tid
-                    and tid in self._bg_tool_ids
+                    call
+                    and call.background
                     and status == "completed"
                     and (
                         self._is_shell_tool_name(tool_name)
@@ -606,14 +614,17 @@ class UpdatesMixin:
                         "content": text or "background",
                         "is_error": False,
                     })
-                    # Keep name/input maps until process / child exit
+                    # Launch ack only — do not leave this id in the create
+                    # FIFO or the next terminal/create binds to the dead ⚙.
+                    self._drop_pending_execute(tid)
+                    # Keep the call until process / child exit
                     return
-                if tid and tid in self._bg_tool_ids and (
+                if call and call.background and (
                         is_task_poll or not (
                             self._is_shell_tool_name(tool_name)
                             or self._is_subagent_tool_name(tool_name))):
                     # Drop mistaken bg mark so normal tool_result can close the row
-                    self._bg_tool_ids.discard(tid)
+                    call.background = False
 
                 send_notification("message", {
                     "type": "tool_result",
@@ -621,9 +632,8 @@ class UpdatesMixin:
                     "content": text,
                     "is_error": is_error,
                 })
-                if tid:
-                    self._tool_results_sent.add(tid)
-                self._tool_ids_emitted.discard(tid)
+                if call:
+                    call.close()
                 # Drop aliases that pointed at this primary
                 for alias, primary in list(
                         getattr(self, "_tool_id_alias", {}).items()):
@@ -634,16 +644,13 @@ class UpdatesMixin:
                     "scheduler_delete", "CronDelete", "SchedulerDelete",
                 ):
                     # completed updates often drop rawInput — use cached input.
-                    cached = self._tool_inputs_by_id.get(tid) or {}
+                    cached = call.input if call else {}
                     merged = {**cached, **(enriched or {})}
                     self.file_log(
                         f"scheduler complete name={tool_name} tid={tid} "
                         f"keys={list(merged.keys())}")
                     self._note_scheduler_tool_result(
                         tool_name, merged, text, tool_call_id=tid or "")
-                self._tool_inputs_by_id.pop(tid, None)
-                self._tool_names_by_id.pop(tid, None)
-                self._bg_tool_ids.discard(tid)
         elif kind == "user_message_chunk":
             # Agents (notably Grok) re-broadcast the user prompt. The plugin
             # already renders ◎ <prompt> — do not double-print as text_delta.
@@ -667,11 +674,9 @@ class UpdatesMixin:
             "scheduled_task_deleted",
         ):
             self._handle_schedule_lifecycle(upd)
-        elif kind == "turn_completed":
-            # After Esc the prompt RPC is already done; Grok may keep
-            # streaming tools then fire turn_completed. That is the closer
-            # for interrupt leftover busy. Do not fire after a normal
-            # finished prompt — that double-closed every Grok turn.
+        elif kind in ("turn_completed", "TurnCompleted"):
+            # Interrupt leftover closer (Esc): leftover_end_pending.
+            # Self-wake closer: _handle_grok_turn_end (synthetic prompt ids).
             pf = getattr(self, "_prompt_fut", None)
             if (
                 getattr(self, "_leftover_end_pending", False)
@@ -690,6 +695,8 @@ class UpdatesMixin:
                     "stop_reason": stop,
                     "leftover_end": True,
                 })
+                return
+            self._handle_grok_turn_end(params, upd)
 
     def _forward_load_replay(self, params: dict) -> None:
         """Paint session/load history. Kimi replays before load settles.
@@ -735,33 +742,35 @@ class UpdatesMixin:
             if tool_name == "tool" and not tool_input:
                 return
             if tid:
+                call = self._ensure_call(tid)
                 if tool_name and tool_name != "tool":
-                    self._tool_names_by_id[tid] = tool_name
+                    call.name = tool_name
                 if tool_input:
-                    prev = self._tool_inputs_by_id.get(tid) or {}
-                    self._tool_inputs_by_id[tid] = {**prev, **tool_input}
-                self._tool_ids_emitted.add(tid)
+                    call.merge_input(tool_input)
+                call.emitted = True
             return
         if kind == "tool_call_update":
             status = upd.get("status")
             tid = self._resolve_tool_id(upd.get("toolCallId"))
             tool_name = self._normalize_tool_name(upd)
             if (not tool_name or tool_name == "tool") and tid:
-                tool_name = self._tool_names_by_id.get(tid) or tool_name or "tool"
+                oc = self._call(tid)
+                tool_name = (oc.name if oc and oc.name else None) or tool_name or "tool"
             elif tid and tool_name and tool_name != "tool":
-                self._tool_names_by_id[tid] = tool_name
+                self._ensure_call(tid).name = tool_name
             enriched = self._tool_input_from_update(upd, tool_name)
             tool_name, enriched = self._reclassify_read_dir(tool_name, enriched)
-            if tid and enriched:
-                prev = self._tool_inputs_by_id.get(tid) or {}
-                self._tool_inputs_by_id[tid] = {**prev, **enriched}
-            if tid not in self._tool_ids_emitted and (
+            call = self._ensure_call(tid) if tid else None
+            if call and enriched:
+                call.merge_input(enriched)
+            if call and not call.emitted and (
                     enriched or upd.get("title")
                     or status in ("completed", "failed")):
                 if not self._should_suppress_tool_row(upd, tool_name):
-                    self._tool_ids_emitted.add(tid)
+                    call.emitted = True
             if status in ("completed", "failed"):
-                self._tool_ids_emitted.discard(tid)
+                if call:
+                    call.emitted = False
 
     def _handle_mode_update(self, upd: dict) -> None:
         mode = upd.get("currentModeId") or upd.get("modeId") or ""
