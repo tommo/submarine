@@ -238,6 +238,147 @@ def mark_child_parent_notified(child_session):
         pass
 
 
+# ─── Parent/child continuity ──────────────────────────────────────────────────
+# A parent sheet can be recreated (resume, restart) and mint a NEW agent_id.
+# Children still stamp the old parent_agent_id, so list_sessions lost them.
+# Keep aliases + noted child ids so the link survives rotation.
+
+_AGENT_ID_RE = re.compile(r"agent-[0-9A-Za-z]{6,}")
+
+
+def _as_id_set(value):
+    # type: (Any) -> set
+    if value is None:
+        return set()
+    if isinstance(value, (list, tuple, set)):
+        return {v for v in value if v is not None and v != ""}
+    return {value}
+
+
+def remember_agent_alias(session, old_aid):
+    # type: (Any, Optional[str]) -> None
+    """Keep a previous agent_id so children stamped with it still match."""
+    if not session or not old_aid:
+        return
+    cur = getattr(session, "agent_id", None)
+    if old_aid == cur:
+        return
+    aliases = getattr(session, "agent_id_aliases", None)
+    if not isinstance(aliases, list):
+        aliases = []
+        session.agent_id_aliases = aliases
+    if old_aid not in aliases:
+        aliases.append(old_aid)
+
+
+def note_child(parent, child_agent_id):
+    # type: (Any, Optional[str]) -> None
+    """Record a spawn child on the parent (survives parent agent_id rotation)."""
+    if not parent or not child_agent_id:
+        return
+    ids = getattr(parent, "child_agent_ids", None)
+    if not isinstance(ids, list):
+        ids = []
+        parent.child_agent_ids = ids
+    if child_agent_id not in ids:
+        ids.append(child_agent_id)
+
+
+def identity_from_saved_entry(entry):
+    # type: (dict) -> dict
+    """Resume fields so a new sheet keeps the same public agent_id."""
+    if not entry:
+        return {}
+    out = {}
+    if entry.get("agent_id"):
+        out["agent_id"] = entry["agent_id"]
+    if entry.get("subsession_id"):
+        out["subsession_id"] = entry["subsession_id"]
+    aliases = entry.get("agent_id_aliases") or []
+    if aliases:
+        out["agent_id_aliases"] = list(aliases)
+    kids = entry.get("child_agent_ids") or []
+    if kids:
+        out["child_agent_ids"] = list(kids)
+    return out
+
+
+def parent_match_keys(parent=None, parent_view_id=None, parent_agent_id=None,
+                      extra_view_ids=None, extra_agent_ids=None):
+    # type: (...) -> tuple
+    """(agent_ids, view_ids, session_ids, child_agent_ids) for list/is_child."""
+    aids = _as_id_set(parent_agent_id) | _as_id_set(extra_agent_ids)
+    vids = _as_id_set(parent_view_id) | _as_id_set(extra_view_ids)
+    sids = set()
+    child_ids = []
+    if parent is not None:
+        aid = getattr(parent, "agent_id", None)
+        if aid:
+            aids.add(aid)
+        aids |= _as_id_set(getattr(parent, "agent_id_aliases", None))
+        sid = getattr(parent, "session_id", None)
+        if sid:
+            sids.add(sid)
+        child_ids = [
+            c for c in (getattr(parent, "child_agent_ids", None) or []) if c
+        ]
+    return aids, vids, sids, child_ids
+
+
+def relink_child_to_parent(child, parent):
+    # type: (Any, Any) -> None
+    """Rewrite stale parent_agent_id after the parent sheet was recreated."""
+    if not child or not parent or child is parent:
+        return
+    aid = getattr(parent, "agent_id", None)
+    if aid:
+        old = getattr(child, "parent_agent_id", None)
+        if old and old != aid:
+            remember_agent_alias(parent, old)
+        child.parent_agent_id = aid
+    psid = getattr(parent, "session_id", None)
+    if psid:
+        child.parent_session_id = psid
+    note_child(parent, getattr(child, "agent_id", None))
+    try:
+        _persist = getattr(child, "_persist_view_identity", None)
+        if callable(_persist):
+            _persist()
+    except Exception:
+        pass
+
+
+def harvest_mentioned_orphans_impl(parent, text, registry=None):
+    # type: (Any, str, Optional[Any]) -> List[Any]
+    """Children named in the parent transcript whose parent is us or dead.
+
+    Recovers spawn_session workers after the parent sheet was recreated with a
+    new agent_id and the child still stamps the old parent id.
+    """
+    if not parent or not text:
+        return []
+    reg = registry or default_registry
+    aids, _vids, _sids, _kids = parent_match_keys(parent)
+    out = []  # type: List[Any]
+    seen = set()
+    for aid in _AGENT_ID_RE.findall(text):
+        key = aid.lower() if isinstance(aid, str) else aid
+        if key in seen:
+            continue
+        seen.add(key)
+        s = reg.by_agent_id(aid)
+        if s is None or s is parent:
+            continue
+        if getattr(s, "agent_id", None) in aids:
+            continue
+        paid = getattr(s, "parent_agent_id", None)
+        if not paid:
+            continue
+        if paid in aids or reg.by_agent_id(paid) is None:
+            out.append(s)
+    return out
+
+
 class SessionRegistry:
     """by_agent + binding + subsession wait entries. Plain class, no sublime."""
 
@@ -293,6 +434,9 @@ class SessionRegistry:
             session.agent_id = aid
         for existing_aid, s in list(self.by_agent.items()):
             if s is session and existing_aid != aid:
+                # Keep the old id as an alias so children stamped with it
+                # still resolve this parent after a rotation.
+                remember_agent_alias(session, existing_aid)
                 self.by_agent.pop(existing_aid, None)
                 for vid, baid in list(self.binding.items()):
                     if baid == existing_aid:
@@ -551,31 +695,95 @@ class SessionRegistry:
             return self.by_agent_id(paid)
         return None
 
-    def is_child_of(self, session, parent_view_id=None, parent_agent_id=None):
-        # type: (Any, Optional[int], Optional[str]) -> bool
-        if parent_agent_id:
-            if getattr(session, "parent_agent_id", None) == parent_agent_id:
-                return True
-        if parent_view_id is not None and parent_agent_id is None:
+    def is_child_of(self, session, parent_view_id=None, parent_agent_id=None,
+                    parent_view_ids=None, parent_agent_ids=None,
+                    parent_session_id=None):
+        # type: (Any, Optional[int], Optional[str], Any, Any, Optional[str]) -> bool
+        """True if session is a subsession of the given parent.
+
+        Identity law: agent_id (plus its aliases) and parent_session_id carry
+        the link. view_id is a runtime display cache only.
+        """
+        paid = getattr(session, "parent_agent_id", None)
+        if parent_agent_id and paid == parent_agent_id:
+            return True
+        if parent_agent_ids and paid in parent_agent_ids:
+            return True
+        pvid = getattr(session, "parent_view_id", None)
+        if parent_view_id is not None and pvid == parent_view_id:
+            return True
+        if parent_view_ids and pvid in parent_view_ids:
+            return True
+        psid = getattr(session, "parent_session_id", None)
+        if parent_session_id and psid == parent_session_id:
+            return True
+        if parent_view_id is not None and parent_agent_id is None and not parent_agent_ids:
             parent = self.for_view_id(parent_view_id)
             if parent:
-                paid = getattr(parent, "agent_id", None)
-                if paid and getattr(session, "parent_agent_id", None) == paid:
+                p_aid = getattr(parent, "agent_id", None)
+                if p_aid and paid == p_aid:
+                    return True
+                aliases = getattr(parent, "agent_id_aliases", None) or []
+                if paid and paid in aliases:
+                    return True
+                sid = getattr(parent, "session_id", None)
+                if sid and psid == sid:
                     return True
         return False
 
-    def list_children_of(self, parent_view_id=None, parent_agent_id=None):
-        # type: (Optional[int], Optional[str]) -> List[Any]
-        if parent_view_id is not None and not parent_agent_id:
-            parent = self.for_view_id(parent_view_id)
-            if parent:
-                parent_agent_id = getattr(parent, "agent_id", None)
+    def list_children_of(self, parent_view_id=None, parent_agent_id=None,
+                         extra_view_ids=None, extra_agent_ids=None,
+                         parent=None):
+        # type: (...) -> List[Any]
+        if parent is None:
+            if parent_agent_id:
+                parent = self.by_agent_id(parent_agent_id)
+            if parent is None and parent_view_id is not None:
+                parent = self.for_view_id(parent_view_id)
+        if parent is not None and not parent_agent_id:
+            parent_agent_id = getattr(parent, "agent_id", None)
+
+        aids, vids, sids, child_ids = parent_match_keys(
+            parent,
+            parent_view_id=parent_view_id,
+            parent_agent_id=parent_agent_id,
+            extra_view_ids=extra_view_ids,
+            extra_agent_ids=extra_agent_ids,
+        )
+        parent_sid = next(iter(sids), None)
+        skip_ids = set(aids)
         out = []
+        seen = set()
+
+        def _add(s):
+            if s is None or id(s) in seen:
+                return
+            said = getattr(s, "agent_id", None)
+            if said and said in skip_ids:
+                return
+            if parent is not None and s is parent:
+                return
+            seen.add(id(s))
+            out.append(s)
+
         for s in self.iter_sessions():
-            if parent_agent_id and getattr(s, "agent_id", None) == parent_agent_id:
+            said = getattr(s, "agent_id", None)
+            if said and said in skip_ids:
                 continue
-            if self.is_child_of(s, parent_view_id=parent_view_id, parent_agent_id=parent_agent_id):
+            if self.is_child_of(
+                s,
+                parent_view_id=parent_view_id,
+                parent_agent_id=parent_agent_id,
+                parent_view_ids=vids,
+                parent_agent_ids=aids,
+                parent_session_id=parent_sid,
+            ):
+                if parent is not None:
+                    relink_child_to_parent(s, parent)
                 out.append(s)
+                seen.add(id(s))
+        for cid in child_ids:
+            _add(self.by_agent_id(cid))
         return out
 
     def runtime_view_id(self, session):
@@ -805,14 +1013,21 @@ def resolve_parent_session(child):
     return default_registry.resolve_parent_session(child)
 
 
-def is_child_of(session, parent_view_id=None, parent_agent_id=None):
-    # type: (Any, Optional[int], Optional[str]) -> bool
-    return default_registry.is_child_of(session, parent_view_id, parent_agent_id)
+def is_child_of(session, parent_view_id=None, parent_agent_id=None, **kwargs):
+    # type: (Any, Optional[int], Optional[str], Any) -> bool
+    return default_registry.is_child_of(
+        session, parent_view_id, parent_agent_id, **kwargs)
 
 
-def list_children_of(parent_view_id=None, parent_agent_id=None):
-    # type: (Optional[int], Optional[str]) -> List[Any]
-    return default_registry.list_children_of(parent_view_id, parent_agent_id)
+def list_children_of(parent_view_id=None, parent_agent_id=None, **kwargs):
+    # type: (Optional[int], Optional[str], Any) -> List[Any]
+    return default_registry.list_children_of(
+        parent_view_id, parent_agent_id, **kwargs)
+
+
+def harvest_mentioned_orphans(parent, text, registry=None):
+    # type: (Any, str, Optional[Any]) -> List[Any]
+    return harvest_mentioned_orphans_impl(parent, text, registry=registry)
 
 
 def runtime_view_id(session):

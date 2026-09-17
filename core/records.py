@@ -44,7 +44,7 @@ except ImportError:
             return False
 
 
-SESSIONS_CAP = 200
+SESSIONS_CAP = 400
 
 # View settings (ST persist these across restart).
 STAMP_SESSION_ID = "submarine_session_id"
@@ -123,6 +123,9 @@ class SessionRecord:
     agent_id: Optional[str] = None
     subsession_id: Optional[str] = None
     parent_agent_id: Optional[str] = None
+    parent_session_id: Optional[str] = None
+    child_agent_ids: List[str] = field(default_factory=list)
+    agent_id_aliases: List[str] = field(default_factory=list)
     query_count: int = 0
     total_cost: float = 0.0
     last_activity: float = 0.0
@@ -154,6 +157,12 @@ class SessionRecord:
             d["subsession_id"] = self.subsession_id
         if self.parent_agent_id:
             d["parent_agent_id"] = self.parent_agent_id
+        if self.parent_session_id:
+            d["parent_session_id"] = self.parent_session_id
+        if self.child_agent_ids:
+            d["child_agent_ids"] = list(self.child_agent_ids)
+        if self.agent_id_aliases:
+            d["agent_id_aliases"] = list(self.agent_id_aliases)
         if self.resume_session_at:
             d["resume_session_at"] = self.resume_session_at
         if self.context_usage:
@@ -183,6 +192,9 @@ class SessionRecord:
             agent_id=raw.get("agent_id"),
             subsession_id=raw.get("subsession_id"),
             parent_agent_id=raw.get("parent_agent_id"),
+            parent_session_id=raw.get("parent_session_id"),
+            child_agent_ids=list(raw.get("child_agent_ids") or []),
+            agent_id_aliases=list(raw.get("agent_id_aliases") or []),
             query_count=int(raw.get("query_count") or 0),
             total_cost=float(raw.get("total_cost") or 0.0),
             last_activity=float(raw.get("last_activity") or 0.0),
@@ -209,7 +221,10 @@ class SessionStore:
         return []
 
     def save(self, sessions: List[Dict[str, Any]]) -> bool:
-        return bool(safe_json_dump(sessions[:SESSIONS_CAP], self.path))
+        projects = [s.get("project") for s in (sessions or []) if isinstance(s, dict)]
+        starred = starred_ids_for_projects(*projects)
+        kept = cap_saved_sessions(sessions, starred, cap=SESSIONS_CAP)
+        return bool(safe_json_dump(kept, self.path))
 
     def find(self, session_id: str) -> Optional[Dict[str, Any]]:
         if not session_id:
@@ -276,30 +291,146 @@ def _bookmarks_path(project_path: Optional[str] = None) -> str:
     return os.path.expanduser("~/.claude/bookmarks.json")
 
 
-def load_bookmarks(project_path: Optional[str] = None) -> set:
+def load_bookmark_state(project_path: Optional[str] = None) -> dict:
+    """Raw bookmarks.json: {starred: [id], records: {id: {name, backend, ...}}}."""
     path = _bookmarks_path(project_path)
     data = safe_json_load(path, default={})
     if isinstance(data, dict):
-        return set(data.get("starred") or [])
-    return set()
+        return data
+    return {"starred": []}
 
 
-def save_bookmarks(starred: set, project_path: Optional[str] = None) -> None:
+def load_bookmarks(project_path: Optional[str] = None) -> set:
+    return set(load_bookmark_state(project_path).get("starred") or [])
+
+
+def load_bookmark_records(project_path: Optional[str] = None) -> dict:
+    """id → snapshot so a starred row can list after sessions.json prune."""
+    rec = load_bookmark_state(project_path).get("records") or {}
+    return rec if isinstance(rec, dict) else {}
+
+
+def save_bookmark_state(state: dict, project_path: Optional[str] = None) -> None:
     path = _bookmarks_path(project_path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    safe_json_dump({"starred": list(starred)}, path)
+    safe_json_dump(state or {"starred": []}, path)
 
 
-def toggle_bookmark(session_id: str, project_path: Optional[str] = None) -> bool:
-    starred = load_bookmarks(project_path)
+def save_bookmarks(
+    starred: set,
+    project_path: Optional[str] = None,
+    records: Optional[dict] = None,
+) -> None:
+    state = load_bookmark_state(project_path)
+    ids = set(starred or ())
+    state["starred"] = list(ids)
+    rec = dict(state.get("records") or {})
+    if records is not None:
+        rec = dict(records)
+    for k in list(rec):
+        if k not in ids:
+            rec.pop(k, None)
+    if rec:
+        state["records"] = rec
+    else:
+        state.pop("records", None)
+    save_bookmark_state(state, project_path)
+
+
+def remember_bookmark_record(
+    session_id: str,
+    record: dict,
+    project_path: Optional[str] = None,
+) -> None:
+    """Keep name/backend for a starred id (survives sessions.json cap)."""
+    if not session_id or not isinstance(record, dict):
+        return
+    state = load_bookmark_state(project_path)
+    starred = set(state.get("starred") or [])
+    if session_id not in starred:
+        return
+    recs = dict(state.get("records") or {})
+    snap = {}
+    for key in ("name", "backend", "project", "model", "query_count",
+                "last_activity", "last_access"):
+        if record.get(key) is not None:
+            snap[key] = record.get(key)
+    if not snap:
+        return
+    recs[session_id] = {**(recs.get(session_id) or {}), **snap}
+    state["records"] = recs
+    save_bookmark_state(state, project_path)
+
+
+def toggle_bookmark(
+    session_id: str,
+    project_path: Optional[str] = None,
+    record: Optional[dict] = None,
+) -> bool:
+    """Toggle star for a session. Returns True if now starred."""
+    if not session_id:
+        return False
+    state = load_bookmark_state(project_path)
+    starred = set(state.get("starred") or ())
+    recs = dict(state.get("records") or {})
     if session_id in starred:
         starred.discard(session_id)
+        recs.pop(session_id, None)
         now_starred = False
     else:
         starred.add(session_id)
         now_starred = True
-    save_bookmarks(starred, project_path)
+        if isinstance(record, dict) and record:
+            recs[session_id] = dict(record)
+    save_bookmarks(starred, project_path, records=recs)
     return now_starred
+
+
+def starred_ids_for_projects(*projects: Optional[str]) -> set:
+    """Union of global + per-project bookmark files."""
+    ids = set(load_bookmarks(None) or ())
+    seen = {""}
+    for p in projects:
+        p = (p or "").rstrip("/")
+        if not p or p in seen:
+            continue
+        seen.add(p)
+        ids |= load_bookmarks(p)
+    return ids
+
+
+def cap_saved_sessions(
+    sessions: List[Dict[str, Any]],
+    starred: Optional[set] = None,
+    cap: int = SESSIONS_CAP,
+) -> List[Dict[str, Any]]:
+    """Newest `cap` resume rows, plus every starred row past that.
+
+    A bare slice deleted old starred entries from `.sessions.json`, so the
+    list could not resurrect them.
+    """
+    try:
+        cap = int(cap)
+    except (TypeError, ValueError):
+        cap = SESSIONS_CAP
+    if cap <= 0:
+        cap = SESSIONS_CAP
+    starred = set(starred or ())
+    kept = []  # type: List[Dict[str, Any]]
+    extra = []  # type: List[Dict[str, Any]]
+    seen = set()
+    for s in sessions or []:
+        if not isinstance(s, dict):
+            continue
+        sid = s.get("session_id")
+        if not sid or sid in seen:
+            continue
+        seen.add(sid)
+        if len(kept) < cap:
+            kept.append(s)
+        elif sid in starred:
+            extra.append(s)
+    return kept + extra
 
 
 # Module-level helpers matching the old session.py surface (used by ui later).

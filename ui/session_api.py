@@ -191,12 +191,20 @@ def rename_saved_session(session_id: str, name: str) -> bool:
         return False
 
 
-def toggle_bookmark(session_id: str, project_path=None) -> bool:
+def toggle_bookmark(session_id: str, project_path=None, record=None) -> bool:
     try:
         from core.records import toggle_bookmark as _fn
-        return bool(_fn(session_id, project_path))
+        return bool(_fn(session_id, project_path, record=record))
     except Exception:
         return False
+
+
+def load_bookmark_records(project_path=None):
+    try:
+        from core.records import load_bookmark_records as _fn
+        return _fn(project_path)
+    except Exception:
+        return {}
 
 
 def remember_active_session(window, view) -> None:

@@ -959,7 +959,12 @@ class TestC13EscLiveShellBgKillsTerminal(unittest.TestCase):
 
 
 class TestC14LeftoverParentStreamStillResumes(unittest.TestCase):
-    def test_leftover_parent_stream_after_esc_still_resumes(self):
+    def test_leftover_parent_stream_after_esc_does_not_reown_busy(self):
+        """Esc wins: Grok MidTurnAbort leftover paints but never re-busies.
+
+        Upstream 2e6e415: after a user cancel, resume_stream must not adopt
+        the leftover turn again (that re-busied an idle sheet).
+        """
         client = FakeClient()
         s = make_session(initialized=True, client=client, backend="grok")
         s.query("hello")
@@ -970,16 +975,31 @@ class TestC14LeftoverParentStreamStillResumes(unittest.TestCase):
         s.interrupt()
         s._on_done({"status": "interrupted"}, _expected_gen=s.turn.gen)
         self.assertEqual(s.turn.kind, "idle")
-        self.assertTrue(s._interrupt_stream)
+        self.assertTrue(s._user_cancelled_turn)
         s.events.dispatch("message", {
             "type": "text_delta",
             "text": "parent kept talking after cancel",
         })
-        self.assertEqual(s.turn.kind, "live")
-        self.assertTrue(s.working)
-        self.assertFalse(s.turn.awaiting_rpc)
+        self.assertEqual(s.turn.kind, "idle")
+        self.assertFalse(s.working)
         self.assertIn("parent kept talking after cancel", "".join(
             t if isinstance(t, str) else str(t) for t in s.output.texts))
+
+    def test_self_wake_without_user_cancel_still_resumes(self):
+        """No Esc: a Grok self-wake still owns busy until its closer."""
+        client = FakeClient()
+        s = make_session(initialized=True, client=client, backend="grok")
+        s.query("hello")
+        s._on_done({"status": "complete"}, _expected_gen=s.turn.gen)
+        self.assertEqual(s.turn.kind, "idle")
+        self.assertFalse(s._user_cancelled_turn)
+        s.events.dispatch("message", {
+            "type": "system",
+            "subtype": "agent_continue",
+            "data": {"reason": "tool_call"},
+        })
+        self.assertEqual(s.turn.kind, "live")
+        self.assertTrue(s.working)
 
 
 # ── D. Lifecycle matrix ───────────────────────────────────────────────

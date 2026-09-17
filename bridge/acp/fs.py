@@ -73,6 +73,10 @@ class FsMixin:
                 f"fs/read_text_file: missing kimi plan file {path!r} → empty")
             return {"content": ""}
 
+        if os.path.isdir(path):
+            return {"content": await asyncio.to_thread(
+                self._fs_read_directory_as_text, path)}
+
         low = path.lower()
         by_ext = any(low.endswith(ext) for ext in self._IMAGE_EXTS)
 
@@ -107,8 +111,34 @@ class FsMixin:
                     f"(max {max_chars}); reduce limit")
             return content
 
-        content = await asyncio.to_thread(_read)
+        try:
+            content = await asyncio.to_thread(_read)
+        except IsADirectoryError:
+            return {"content": await asyncio.to_thread(
+                self._fs_read_directory_as_text, path)}
         return {"content": content}
+
+    def _fs_read_directory_as_text(self, path: str, limit: int = 80) -> str:
+        """read_file on a directory → listing, not Errno 21."""
+        names = []
+        try:
+            entries = sorted(os.listdir(path))
+        except OSError as e:
+            raise ValueError(
+                f"fs/read_text_file: cannot list directory {path!r}: {e}")
+        extra = len(entries) - limit
+        for name in entries[:limit]:
+            p = os.path.join(path, name)
+            names.append(name + "/" if os.path.isdir(p) else name)
+        body = "\n".join(names)
+        if extra > 0:
+            body += f"\n… ({extra} more)"
+        self.file_log(
+            f"fs/read_text_file: directory {path!r} → {len(names)} names")
+        return (
+            f"Directory: {path}\n{body}\n"
+            "(path is a directory; read a file inside)"
+        )
 
     def _fs_read_image_as_text(
             self, path: str, mime_hint: Optional[str] = None) -> str:
@@ -150,7 +180,7 @@ class FsMixin:
         return note
 
     async def _acp_fs_write(self, params: dict) -> dict:
-        if self._cancel_in_flight:
+        if self._cancel_in_flight or getattr(self, "_drop_grok_leftover", False):
             raise ValueError("fs/write_text_file rejected: turn cancelled")
         path = params.get("path") or ""
         if not path or not os.path.isabs(path):

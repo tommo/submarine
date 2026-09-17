@@ -28,11 +28,17 @@ from .records import (
     SessionStore,
     derive_state,
     read_stamp,
+    remember_bookmark_record,
     stamp_identity,
+    starred_ids_for_projects,
 )
 from .registry import SessionRegistry, default_registry, merge_subsession_queue, new_agent_id, resolve_init_model
 from .rewind import RewindService, is_synthetic_turn
-from .turn import TurnController, is_compact_prompt
+from .turn import (
+    _SELF_WAKE_BACKENDS,
+    TurnController,
+    is_compact_prompt,
+)
 
 try:
     from backend.rpc import JsonRpcClient
@@ -237,6 +243,9 @@ class Session:
         self.agent_id = new_agent_id()
         self.subsession_id = None
         self.parent_agent_id = None
+        self.parent_session_id = None  # type: Optional[str]
+        self.child_agent_ids = []  # type: List[str]
+        self.agent_id_aliases = []  # type: List[str]
         if initial_context:
             self.agent_id = (
                 initial_context.get("agent_id")
@@ -247,6 +256,11 @@ class Session:
                 initial_context.get("subsession_id") or self.agent_id
             )
             self.parent_agent_id = initial_context.get("parent_agent_id")
+            self.parent_session_id = initial_context.get("parent_session_id")
+            self.child_agent_ids = list(
+                initial_context.get("child_agent_ids") or [])
+            self.agent_id_aliases = list(
+                initial_context.get("agent_id_aliases") or [])
         elif resume_id and not fork:
             try:
                 saved = self.store.find(resume_id)
@@ -259,6 +273,13 @@ class Session:
                     self.subsession_id = saved.get("subsession_id")
                 if saved.get("parent_agent_id"):
                     self.parent_agent_id = saved.get("parent_agent_id")
+                if saved.get("parent_session_id"):
+                    self.parent_session_id = saved.get("parent_session_id")
+                self.agent_id_aliases = list(
+                    saved.get("agent_id_aliases") or [])
+                kids = list(saved.get("child_agent_ids") or [])
+                # Children spawned by the previous incarnation of this sheet.
+                self.child_agent_ids = [c for c in kids if c]
 
         self.last_activity = time.time()
         self.last_access = self.last_activity
@@ -280,10 +301,15 @@ class Session:
         self._queued_prompts = []  # type: List[str]
         self._inject_pending = False
         self._interrupt_stream = False
+        self._interrupting = False
         self._send_now_pending = False
         self._firing_queue = False
         self._compacting = False
         self._query_start = None  # type: Optional[float]
+        # Grok self-wake: leftover_end can arrive before agent_continue.
+        self._pending_leftover_end = False
+        self._self_wake_idle_gen = 0
+        self._user_cancelled_turn = False
         self._auto_retry_count = 0
         self._auto_retry_pending = False
         self._pending_images = []  # type: list
@@ -339,6 +365,8 @@ class Session:
             is_asking_tool=self._is_asking_tool,
             resume_drop_asking=lambda: bool(self._resume_drop_asking),
             on_artifact_write=self._on_artifact_write,
+            user_cancelled=lambda: bool(self._user_cancelled_turn),
+            on_leftover_pending=self._mark_leftover_pending,
         )
         self.rewind = RewindService(
             send=self._send,
@@ -348,6 +376,11 @@ class Session:
             scheduler=scheduler,
             jsonl_finder=self._find_jsonl_path,
         )
+
+    def _mark_leftover_pending(self):
+        # type: () -> None
+        """A self-wake closer arrived while idle — do not adopt a dead turn."""
+        self._pending_leftover_end = True
 
     def _on_artifact_write(self, path):
         # type: (str) -> None
@@ -727,6 +760,8 @@ class Session:
             self._compacting = True
 
         self._interrupt_stream = False
+        self._interrupting = False
+        self._user_cancelled_turn = False
         self.touch_access()
         query_gen = self.turn.begin_query()
         self.query_count += 1
@@ -956,6 +991,7 @@ class Session:
         if self.turn.kind == "interrupting":
             # Second Esc: force idle (hung cancel).
             self._interrupt_stream = False
+            self._interrupting = False
             self.turn.settle_interrupt()
             self._set_turn_phase("idle")
             self._note_activity(idle=True)
@@ -974,6 +1010,8 @@ class Session:
                 self._send("interrupt", {})
             return
         self._interrupt_stream = True
+        self._interrupting = True
+        self._user_cancelled_turn = True
         self._note_activity()
         self.turn.begin_interrupt()
         if self._compacting:
@@ -1327,6 +1365,14 @@ class Session:
             entry["subsession_id"] = self.subsession_id
         if self.parent_agent_id:
             entry["parent_agent_id"] = self.parent_agent_id
+        if self.parent_session_id:
+            entry["parent_session_id"] = self.parent_session_id
+        kids = list(getattr(self, "child_agent_ids", None) or [])
+        if kids:
+            entry["child_agent_ids"] = kids
+        aliases = list(getattr(self, "agent_id_aliases", None) or [])
+        if aliases:
+            entry["agent_id_aliases"] = aliases
         if self.model:
             entry["model"] = self.model
         if self._pending_resume_at:
@@ -1351,6 +1397,20 @@ class Session:
             except Exception:
                 pass
         self.store.upsert(entry)
+        try:
+            if self.session_id and self.session_id in starred_ids_for_projects(
+                    self.cwd or self._default_cwd(), entry.get("project")):
+                remember_bookmark_record(self.session_id, {
+                    "name": entry.get("name"),
+                    "backend": entry.get("backend"),
+                    "project": entry.get("project"),
+                    "model": entry.get("model"),
+                    "query_count": entry.get("query_count"),
+                    "last_activity": entry.get("last_activity"),
+                    "last_access": entry.get("last_access"),
+                }, self.cwd or None)
+        except Exception:
+            pass
         for cb in list(self.on_saved):
             try:
                 cb(self)
@@ -1443,19 +1503,61 @@ class Session:
         # type: (int) -> None
         if self.turn._interrupt_gen != gen:
             return
+        # Before the busy check: a stuck "interrupting" turn is busy, and that
+        # is exactly the state this unstick exists for.
+        self._unstick_stale_interrupt()
         if self.working:
             return
         if self._fire_next_queued():
             return
         self._enter_input_if_idle()
 
+    def _unstick_stale_interrupt(self) -> bool:
+        """If cancel ACK never arrived, stop queueing follow-ups into a hole.
+
+        Esc leaves working=True / turn=interrupting until the bridge ACK.
+        Missing ACK meant every later Enter was queue_prompt'd and never
+        flushed. Returns True if a queued prompt was started.
+        """
+        self._interrupting = False
+        kind = ""
+        try:
+            kind = getattr(self.turn, "kind", "") or ""
+        except Exception:
+            kind = ""
+        if kind == "interrupting":
+            try:
+                self.turn.settle_interrupt()
+            except Exception:
+                pass
+            self._set_turn_phase("idle")
+            self._interrupt_stream = False
+            try:
+                if self.output and self.output.current:
+                    self.output.current.working = False
+            except Exception:
+                pass
+        if self.working:
+            return False
+        before = list(getattr(self, "_queued_prompts", None) or [])
+        self._fire_next_queued()
+        self._enter_input_if_idle()
+        return bool(before) and not getattr(self, "_queued_prompts", None)
+
     def _resume_interrupt_stream(self):
         # type: () -> None
         """Own busy for leftover stream / Grok bg self-wake (no session/prompt)."""
         if self.working:
+            self._arm_self_wake_idle()
+            return
+        if getattr(self, "_pending_leftover_end", False):
+            # Closer already arrived — do not adopt a turn that is done.
+            self._pending_leftover_end = False
+            log_plugin("skip self-wake; leftover_end already arrived")
             return
         self.turn.resume_stream()
         self._set_turn_phase("responding")
+        self._arm_self_wake_idle()
         try:
             if self.output:
                 # Must go through prompt() / begin_continued — swapping
@@ -1466,9 +1568,46 @@ class Session:
             pass
         self.chrome.refresh_tab_title()
 
+    def _arm_self_wake_idle(self) -> None:
+        """Idle a Grok self-wake if leftover_end never arrives.
+
+        bg terminal exited → Grok self-woke (task-completed-term_*), host
+        resume_stream()'d, and turn_completed never closed the sheet.
+        Quiet timeout is the backup closer.
+        """
+        if self.turn.awaiting_rpc:
+            return
+        if (self.backend or "") not in _SELF_WAKE_BACKENDS:
+            return
+        if not self.working:
+            return
+        gen = int(getattr(self, "_self_wake_idle_gen", 0) or 0) + 1
+        self._self_wake_idle_gen = gen
+
+        def _fire(g=gen):
+            self._maybe_idle_self_wake(g)
+
+        self.scheduler.call_later(6000, _fire)
+
+    def _maybe_idle_self_wake(self, gen: int) -> None:
+        if gen != getattr(self, "_self_wake_idle_gen", 0):
+            return
+        if not self.working or self.turn.awaiting_rpc:
+            return
+        log_plugin("self-wake idle (no leftover_end)")
+        self.events.result({
+            "leftover_end": True,
+            "stop_reason": "end_turn",
+            "is_error": False,
+        })
+
     def _result_idle(self):
         # type: () -> None
         self._interrupt_stream = False
+        self._interrupting = False
+        self._pending_leftover_end = False
+        self._self_wake_idle_gen = int(
+            getattr(self, "_self_wake_idle_gen", 0) or 0) + 1
         self._set_turn_phase("idle")
         self._stamp_idle_clock()
         self.touch_access()

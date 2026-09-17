@@ -125,6 +125,10 @@ class AcpBridge(TransportMixin, SessionMixin, UpdatesMixin,
         # True from first cancel notify until query fully settles — blocks
         # spam session/cancel (Grok ChatStateActor dies on cancel-after-done).
         self._cancel_in_flight: bool = False
+        # Grok MidTurnAbort keeps sending tool_call / terminal/create after
+        # the host query RPC is already cancelled. Hold this until the next
+        # session/prompt is on the wire so leftover does not re-busy the sheet.
+        self._drop_grok_leftover: bool = False
         # AskUser Q1+/Other: inject after the elicitation/permission RPC
         # reply is on the wire (kimi 0.37.2 drops non-enum answers).
         self._pending_ask_followup: Optional[str] = None
@@ -184,6 +188,20 @@ class AcpBridge(TransportMixin, SessionMixin, UpdatesMixin,
 
     def spawn_env(self) -> Optional[Dict[str, str]]:
         """Optional env overrides for the agent process (None → inherit)."""
+        return None
+
+    def format_query_error(self, e: BaseException) -> str:
+        """Host-visible session/prompt failure. Subclasses may rewrite."""
+        return f"{self.BACKEND_NAME} query failed: {e}"
+
+    async def recover_prompt_error(
+        self, e: BaseException, prompt_blocks: list
+    ) -> Optional[Any]:
+        """Optional one-shot recovery after session/prompt raises.
+
+        Return a prompt result dict to continue the success path, or None
+        to surface `e` via format_query_error.
+        """
         return None
 
     def normalize_model(self, model: Optional[str]) -> str:

@@ -8,7 +8,12 @@ import sublime
 import sublime_plugin
 
 from backend import specs as backend_specs
-from core.records import load_bookmarks, load_saved_sessions, toggle_bookmark
+from core.records import (
+    load_bookmark_records,
+    load_bookmarks,
+    load_saved_sessions,
+    toggle_bookmark,
+)
 from core.registry import unregister_view
 from main import (
     SETTINGS_FILE,
@@ -461,11 +466,32 @@ class SubmarineToggleAutoSleepCommand(sublime_plugin.WindowCommand):
 class SubmarineResumeCommand(sublime_plugin.WindowCommand):
     def run(self):
         cwd = self.window.folders()[0] if self.window.folders() else ""
-        sessions = [s for s in load_saved_sessions() if s.get("project", "") == cwd]
+        starred = load_bookmarks(cwd or None)
+        saved = load_saved_sessions()
+        sessions = [s for s in saved if s.get("project", "") == cwd]
+        have = {s.get("session_id") for s in sessions}
+        # Starred ids pruned from the disk cap or saved under a different
+        # project path still belong on this resume list.
+        saved_by = {s.get("session_id"): s for s in saved if s.get("session_id")}
+        try:
+            records = load_bookmark_records(cwd or None) or {}
+        except Exception:
+            records = {}
+        for sid in starred:
+            if not sid or sid in have:
+                continue
+            s = saved_by.get(sid) or records.get(sid) or {
+                "session_id": sid, "name": sid}
+            if not isinstance(s, dict):
+                s = {"session_id": sid, "name": sid}
+            s = dict(s)
+            s.setdefault("session_id", sid)
+            s.setdefault("name", sid)
+            sessions.append(s)
+            have.add(sid)
         if not sessions:
             sublime.status_message("No saved sessions to resume")
             return
-        starred = load_bookmarks(cwd or None)
         sessions = sorted(sessions, key=lambda s: s.get("session_id") not in starred)
         items = []
         for s in sessions:
@@ -679,7 +705,15 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
                 sublime.set_timeout(lambda: self.run(backend=backend, model=data), 0)
                 return
             if action == "toggle_star" and data and data.session_id:
-                now_starred = toggle_bookmark(data.session_id, project_path)
+                now_starred = toggle_bookmark(
+                    data.session_id, project_path,
+                    record={
+                        "name": getattr(data, "name", None),
+                        "backend": getattr(data, "backend", None),
+                        "project": project_path,
+                        "model": getattr(data, "model", None),
+                        "query_count": getattr(data, "query_count", None),
+                    })
                 msg = ("★ Starred: %s" % (data.name or data.session_id)
                        if now_starred else "☆ Unstarred: %s" % (data.name or data.session_id))
                 sublime.status_message(msg)

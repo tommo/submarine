@@ -146,6 +146,18 @@ class KimiBridge(KimiBgMixin, AcpBridge):
         # Official: `kimi acp` — never Claude SDK claude_main.py
         return list(_kimi_agent_argv(self.model))
 
+    @classmethod
+    def _is_subagent_spawn(cls, tool_name: str, upd=None, tool_input=None) -> bool:
+        title = str((upd or {}).get("title") or "").strip().lower()
+        # Native Kimi Agent is a blocking same-process loop
+        # (agents/agent-N/wire.jsonl). Result is agent_id + status.
+        # Grok spawn_subagent is the async ⚙ path.
+        if title == "agent" or title.startswith("agent:"):
+            return False
+        if "launching" in title and "agent" in title:
+            return False
+        return super()._is_subagent_spawn(tool_name, upd, tool_input)
+
     def _collect_mcp_servers(self) -> list:
         """ACP session/new mcpServers. Docs: http/stdio/sse.
 

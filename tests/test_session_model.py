@@ -219,7 +219,14 @@ class TestGrokVisionCatalog(unittest.TestCase):
         self.assertIn("deepseek-v4-flash-vision-exp", ids)
         self.assertTrue(model_supports_vision("deepseek-v4-flash-vision-exp"))
         self.assertTrue(model_supports_vision("ds-vision"))
-        self.assertFalse(model_supports_vision("deepseek-v4-flash"))
+        # DeepSeek V4 / V4.1 BYOK advertise read_image (ACP read_file still
+        # rejects binary). Pre-v4 DeepSeek stays off — the tool call can
+        # hard-fail the turn.
+        self.assertTrue(model_supports_vision("deepseek-v4-flash"))
+        self.assertTrue(model_supports_vision("deepseek-v4-pro"))
+        self.assertTrue(model_supports_vision("ds-flash"))
+        self.assertFalse(model_supports_vision("deepseek-chat"))
+        self.assertFalse(model_supports_vision("deepseek-reasoner"))
         self.assertEqual(
             normalize_grok_model("ds-flash-vision"),
             "deepseek-v4-flash-vision-exp",

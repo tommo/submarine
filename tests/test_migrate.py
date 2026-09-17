@@ -120,18 +120,18 @@ def test_merge_mru_order_by_last_activity(tmp_path):
     assert ids == ["new", "mid", "old", "older"]
 
 
-def test_merge_cap_200_on_210_entries(tmp_path):
+def test_merge_cap_on_entries_past_it(tmp_path):
     store = SessionStore(str(tmp_path / ".sessions.json"))
     legacy = [
         {"session_id": "s%03d" % i, "last_activity": float(i), "state": "closed"}
-        for i in range(210)
+        for i in range(SESSIONS_CAP + 10)
     ]
     report = migrate_sessions(store, legacy)
     rows = store.load()
     assert len(rows) == SESSIONS_CAP
     assert report["imported"] == SESSIONS_CAP
     ids = [r["session_id"] for r in rows]
-    assert ids[0] == "s209"
+    assert ids[0] == "s%d" % (SESSIONS_CAP + 9)
     assert ids[-1] == "s010"
     assert "s000" not in ids
     assert "s009" not in ids

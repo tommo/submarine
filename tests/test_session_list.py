@@ -509,7 +509,8 @@ class TestRenderSessionList(unittest.TestCase):
         self.assertEqual([r["session_id"] for r in here], ["b", "a"])
         self.assertEqual(other, [])
         self.assertEqual(sl.history_cap(), sl.HISTORY_CAP)
-        self.assertEqual(sl.HISTORY_CAP, 200)
+        # Upstream 2e6e415 raised the resume/list cap to 400.
+        self.assertEqual(sl.HISTORY_CAP, 400)
 
     def test_live_filters_to_window_project(self):
         from tests.stubs import install

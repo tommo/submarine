@@ -325,7 +325,9 @@ class SessionMixin:
 
             can_load = bool(self.agent_capabilities.get("loadSession"))
             loaded = False
-            if resume_id and not fork_session and can_load:
+            if resume_id and fork_session:
+                loaded = await self._try_fork_session(resume_id, mcp_servers)
+            elif resume_id and can_load:
                 loaded = await self._try_load_session(resume_id, mcp_servers)
 
             if not loaded:
@@ -338,8 +340,19 @@ class SessionMixin:
                 if resume_id and not fork_session:
                     self._resume_fallback = True
                 if fork_session and resume_id:
-                    self.log(f"fork from {resume_id}: ACP has no fork; "
-                             f"opened new session {self.session_id}")
+                    self.log(
+                        f"fork from {resume_id} failed; "
+                        f"opened empty session {self.session_id}")
+                    send_notification("message", {
+                        "type": "system",
+                        "subtype": "init",
+                        "data": {
+                            "message": (
+                                f"Could not fork ACP session {resume_id}; "
+                                "started empty. Agent has no prior turns."
+                            ),
+                        },
+                    })
 
             await self.apply_mode()
             if self.model:
@@ -379,6 +392,77 @@ class SessionMixin:
         except Exception as e:
             send_error(req_id, -32000,
                        f"{self.BACKEND_NAME} initialize failed: {e}")
+
+    @staticmethod
+    def _parse_fork_session_id(result: dict, source_id: str) -> Optional[str]:
+        """New session id from session/fork. Reject reuse of the source id."""
+        if not isinstance(result, dict):
+            return None
+        keys = (
+            "sessionId", "session_id", "newSessionId", "new_session_id",
+        )
+        cands = []
+        for k in keys:
+            v = result.get(k)
+            if isinstance(v, str) and v.strip():
+                cands.append(v.strip())
+        sess = result.get("session")
+        if isinstance(sess, dict):
+            for k in ("sessionId", "session_id", "id"):
+                v = sess.get(k)
+                if isinstance(v, str) and v.strip():
+                    cands.append(v.strip())
+        src = (source_id or "").strip()
+        for sid in cands:
+            if sid and sid != src:
+                return sid
+        return None
+
+    def _fork_params_for_method(
+        self, method: str, source_id: str, mcp_servers: list
+    ) -> dict:
+        if method == "session/fork":
+            p: Dict[str, Any] = {
+                "sessionId": source_id,
+                "cwd": self.cwd,
+                "mcpServers": list(mcp_servers or []),
+            }
+            if self._additional_dirs:
+                p["additionalDirectories"] = list(self._additional_dirs)
+            return p
+        return {
+            "sourceSessionId": source_id,
+            "sourceCwd": self.cwd,
+            "newCwd": self.cwd,
+        }
+
+    async def _try_fork_session(self, source_id: str,
+                                 mcp_servers: list) -> bool:
+        """ACP session/fork, then Grok `_x.ai/session/fork`. Never session/load.
+
+        Load would reuse the source id. Empty session/new is last resort.
+        """
+        if not source_id:
+            return False
+        methods = ("session/fork", "_x.ai/session/fork", "x.ai/session/fork")
+        for method in methods:
+            params = self._fork_params_for_method(method, source_id, mcp_servers)
+            try:
+                result = await self._send_acp(method, params) or {}
+            except Exception as e:
+                self.file_log(f"{method} failed: {e}")
+                continue
+            sid = self._parse_fork_session_id(result, source_id)
+            if not sid:
+                self.file_log(
+                    f"{method} no new sessionId: {str(result)[:300]}")
+                continue
+            self.session_id = sid
+            self._ingest_session_result(result)
+            self._resumed = False
+            self.log(f"{method} ok: {source_id} → {sid}")
+            return True
+        return False
 
     async def _try_load_session(self, resume_id: str,
                                  mcp_servers: list) -> bool:

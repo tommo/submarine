@@ -29,6 +29,7 @@ from .session_api import (
     get_session_by_agent_id,
     iter_sessions,
     load_bookmarks,
+    load_bookmark_records,
     load_saved_sessions,
     place_in_last_session_split,
     register_session,
@@ -45,7 +46,7 @@ SETTING = keys.SESSION_LIST
 ROWS_KEY = keys.SESSION_LIST_ROWS
 WRITING_KEY = "submarine_slist_writing"
 FOLLOW_GEN_KEY = "submarine_slist_follow_gen"
-HISTORY_CAP = 200  # default; override with session_list_history_limit
+HISTORY_CAP = 400  # default; override with session_list_history_limit
 # Full row needs ~backend(8) + title(16+) + status/time. Below this, abbrev.
 COMPACT_COLS = 56
 BACKEND_COL = 8  # pad/clip so deepseek (8) and grok (4) share a column
@@ -724,34 +725,52 @@ def build_for_window(window, cols: int = 0) -> Tuple[str, List[dict]]:
 
 def _include_starred_saved(here: List[dict], live_ids: set, cwd: str,
                            starred: set) -> List[dict]:
-    """History cap can drop a starred saved row — put it back, pinned in HISTORY."""
+    """History cap / sessions.json prune can drop a starred row — put it back.
+
+    Starred ids belong to this window's bookmarks, so they list even when the
+    saved `project` path differs (symlink cwd) or the disk cap already deleted
+    the resume row. Missing metadata becomes a stub so the star still shows.
+    """
     if not starred:
         return here
     have = {r.get("session_id") for r in here}
-    extra = []
-    cwd = (cwd or "").rstrip("/")
+    saved_by = {}
     for s in load_saved_sessions():
-        sid = s.get("session_id")
-        if not sid or sid in live_ids or sid in have or sid not in starred:
+        sid = (s or {}).get("session_id")
+        if sid:
+            saved_by[sid] = s
+    records = {}
+    try:
+        records = load_bookmark_records(cwd or None) or {}
+    except Exception:
+        records = {}
+    extra = []
+    for sid in starred:
+        if not sid or sid in live_ids or sid in have:
             continue
-        proj = (s.get("project") or "").rstrip("/")
-        if cwd and proj and proj != cwd:
-            continue
+        s = saved_by.get(sid) or records.get(sid) or {}
+        if not isinstance(s, dict):
+            s = {}
+        try:
+            q = int(s.get("query_count") or 0)
+        except (TypeError, ValueError):
+            q = 0
         extra.append({
             "kind": "saved",
             "session_id": sid,
             "agent_id": s.get("agent_id"),
             "parent_agent_id": s.get("parent_agent_id"),
             "view_id": None,
-            "name": saved_title(s),
+            "name": saved_title(s) if saved_by.get(sid) else (s.get("name") or sid),
             "backend": s.get("backend") or "claude",
             "model": s.get("model"),
             "status": s.get("state") or "closed",
-            "query_count": int(s.get("query_count") or 0),
-            "project": s.get("project") or "",
+            "query_count": q,
+            "project": s.get("project") or cwd or "",
             "last_activity": s.get("last_activity"),
             "last_access": access_ts(s),
         })
+        have.add(sid)
     return here + extra if extra else here
 
 
@@ -1765,7 +1784,15 @@ class SubmarineSessionListStarCommand(sublime_plugin.TextCommand):
                 cwd = folders[0]
         except Exception:
             cwd = ""
-        now = toggle_bookmark(sid, cwd or None)
+        now = toggle_bookmark(sid, cwd or None, record={
+            "name": row.get("name"),
+            "backend": row.get("backend"),
+            "project": row.get("project") or cwd,
+            "model": row.get("model"),
+            "query_count": row.get("query_count"),
+            "last_activity": row.get("last_activity"),
+            "last_access": row.get("last_access"),
+        })
         name = (row.get("name") or "").strip() or sid
         refresh_session_list(win)
         sublime.status_message(

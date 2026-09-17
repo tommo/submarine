@@ -134,7 +134,7 @@ class TerminalMixin:
         # work while the prompt is winding down — only while host prompt lives.
         host_prompt_live = (
             self._prompt_fut is not None and not self._prompt_fut.done())
-        if self._cancel_in_flight or (
+        if self._cancel_in_flight or getattr(self, "_drop_grok_leftover", False) or (
                 self._prompt_cancelled and host_prompt_live):
             raise ValueError("terminal/create rejected: turn cancelled")
         cmd = params.get("command")

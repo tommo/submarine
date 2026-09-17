@@ -62,6 +62,8 @@ class BridgeEventRouter:
         is_asking_tool=None,  # type: Optional[Callable]
         resume_drop_asking=None,  # type: Optional[Callable[[], bool]]
         on_artifact_write=None,  # type: Optional[Callable[[str], None]]
+        user_cancelled=None,  # type: Optional[Callable[[], bool]]
+        on_leftover_pending=None,  # type: Optional[Callable[[], None]]
     ):
         self.output = output
         self.chrome = chrome
@@ -92,6 +94,8 @@ class BridgeEventRouter:
         self.is_asking_tool = is_asking_tool
         self.resume_drop_asking = resume_drop_asking
         self.on_artifact_write = on_artifact_write
+        self.user_cancelled = user_cancelled
+        self.on_leftover_pending = on_leftover_pending
         self.current_tool = None  # type: Optional[str]
         self._api_retry_hint = None  # type: Optional[str]
 
@@ -605,8 +609,17 @@ class BridgeEventRouter:
         # Duplicate closer: Grok prompt_complete after the RPC already idled.
         # Host query owns the turn via session/prompt — leftover_end must
         # not @done that sheet (self-wake closer can arrive late).
-        if leftover_end and (
-                not self.turn.busy or self.turn.awaiting_rpc):
+        if leftover_end and self.turn.awaiting_rpc:
+            return
+        # Self-wake closer can beat agent_continue by a tick (same timestamp:
+        # agent_message_chunk + turn_completed). Remember it so resume_stream
+        # does not adopt a turn that has no closer left to come.
+        if leftover_end and not self.turn.busy:
+            if self.on_leftover_pending is not None:
+                try:
+                    self.on_leftover_pending()
+                except Exception:
+                    pass
             return
         if (
             not leftover_end
@@ -715,6 +728,13 @@ class BridgeEventRouter:
 
     def _maybe_resume_stream(self):
         # type: () -> None
+        # After Esc, Grok leftover must not re-own busy via resume_stream.
+        if self.user_cancelled is not None:
+            try:
+                if self.user_cancelled():
+                    return
+            except Exception:
+                pass
         if self.on_resume_stream is not None:
             self.on_resume_stream()
         else:

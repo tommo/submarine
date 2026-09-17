@@ -22,6 +22,26 @@ from rpc_helpers import send_error, send_notification, send_result  # noqa: E402
 
 
 class QueryMixin:
+    def _should_precancel_before_prompt(self) -> bool:
+        """Whether the next session/prompt needs session/cancel first.
+
+        After Esc we leave `_cancel_in_flight` so Kimi can settle
+        `turn.agent_busy`. Re-sending cancel when nothing is live postpones
+        or drops the user's follow-up on Grok (orphan cancel).
+        """
+        if not self._cancel_in_flight:
+            return False
+        fut = self._prompt_fut
+        if fut is not None and not fut.done():
+            return True
+        if self._query_req_id is not None:
+            return True
+        if getattr(self, "BACKEND_NAME", "") == "kimi":
+            return True
+        if getattr(self, "_orphan_turn_notified", False):
+            return True
+        return False
+
     def _is_agent_busy_error(self, e: BaseException) -> bool:
         msg = str(e).lower()
         return (
@@ -59,6 +79,8 @@ class QueryMixin:
             return
         self._prompt_cancelled = True
         self._cancel_in_flight = True
+        if getattr(self, "BACKEND_NAME", "") == "grok":
+            self._drop_grok_leftover = True
         if self.session_id is not None:
             try:
                 await self._notify_acp(
@@ -101,10 +123,18 @@ class QueryMixin:
         # A new query must not overlap an agent turn (Kimi: turn.agent_busy).
         # Tool ✔ is not end_turn — wait the live prompt out. Cancel only after
         # user Esc (cancel_in_flight) or when the live prompt is stuck.
-        if self._cancel_in_flight:
+        # Stale _cancel_in_flight with no live prompt: do NOT orphan-cancel
+        # (Grok ChatStateActor dies / new prompt is postponed). Kimi still
+        # needs a settle cancel when the local fut was forced done early.
+        if self._should_precancel_before_prompt():
             await self._cancel_agent_turn(
                 reason="post_interrupt", wait_s=2.0, settle_s=0.8,
                 force_local=True, orphan_ok=True)
+        elif self._cancel_in_flight:
+            self.file_log(
+                "query: skip stale orphan session/cancel "
+                f"(backend={self.BACKEND_NAME})")
+            self._cancel_in_flight = False
         elif self._prompt_fut is not None and not self._prompt_fut.done():
             self.file_log("query: waiting for in-flight session/prompt")
             try:
@@ -132,6 +162,7 @@ class QueryMixin:
         self._prompt_cancelled = False
         self._leftover_end_pending = False
         self._cancel_in_flight = False
+        self._overflow_compact_retried = False
         turn_t0 = time.time()
         try:
             result = None
@@ -147,18 +178,33 @@ class QueryMixin:
                     break
                 except Exception as e:
                     last_err = e
-                    if (not self._is_agent_busy_error(e)
-                            or self._prompt_cancelled):
-                        raise
-                    attempt += 1
-                    settle = min(10.0, 0.7 * (2 ** min(attempt, 5)))
-                    self.file_log(
-                        f"query: agent_busy attempt {attempt} "
-                        f"settle={settle:.1f}s (no cancel): {e}")
-                    try:
-                        await asyncio.sleep(settle)
-                    except Exception:
-                        pass
+                    if (self._is_agent_busy_error(e)
+                            and not self._prompt_cancelled):
+                        attempt += 1
+                        settle = min(10.0, 0.7 * (2 ** min(attempt, 5)))
+                        self.file_log(
+                            f"query: agent_busy attempt {attempt} "
+                            f"settle={settle:.1f}s (no cancel): {e}")
+                        try:
+                            await asyncio.sleep(settle)
+                        except Exception:
+                            pass
+                        continue
+                    # Context-window 400 (Grok/DeepSeek): compact once, retry.
+                    recovered = None
+                    if not self._prompt_cancelled:
+                        try:
+                            recovered = await self.recover_prompt_error(
+                                e, prompt_blocks)
+                        except Exception as rec_err:
+                            self.file_log(
+                                f"recover_prompt_error: {rec_err}")
+                            recovered = None
+                    if recovered is not None:
+                        result = recovered or {}
+                        last_err = None
+                        break
+                    raise
             if last_err is not None and result is None:
                 raise last_err
             result = result or {}
@@ -236,8 +282,7 @@ class QueryMixin:
                 })
                 send_result(req_id, {"status": "interrupted"})
             else:
-                send_error(req_id, -32000,
-                           f"{self.BACKEND_NAME} query failed: {e}")
+                send_error(req_id, -32000, self.format_query_error(e))
         finally:
             if self._query_req_id == req_id:
                 self._query_req_id = None
@@ -348,6 +393,8 @@ class QueryMixin:
         self._prompt_fut = fut
         self._prompt_acp_id = rid
         self._orphan_turn_notified = False
+        # A new prompt owns the turn again — leftover lid comes off here.
+        self._drop_grok_leftover = False
         params = {"sessionId": self.session_id, "prompt": prompt_blocks}
         # Log without dumping multi-MB base64 image payloads
         def _summarize_block(b: dict) -> dict:
@@ -459,10 +506,18 @@ class QueryMixin:
         fut = self._prompt_fut
         active = fut is not None and not fut.done()
         has_query = self._query_req_id is not None
+        grok_leftover = (
+            getattr(self, "BACKEND_NAME", "") == "grok"
+            and (
+                getattr(self, "_drop_grok_leftover", False)
+                or getattr(self, "_orphan_turn_notified", False)
+            )
+        )
         # Idle / already cancelled: do not re-send session/cancel (Grok
-        # ChatStateActor dies). Still kill leftover shells Grok keeps using.
-        if (not active and not has_query) or (
-                self._cancel_in_flight and not active):
+        # ChatStateActor dies) UNLESS leftover MidTurnAbort is still
+        # spawning tools — then one more cancel, not four idle no-ops.
+        if ((not active and not has_query) or (
+                self._cancel_in_flight and not active)) and not grok_leftover:
             n = 0
             for tid in list(self._terminals):
                 try:

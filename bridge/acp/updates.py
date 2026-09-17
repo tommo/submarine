@@ -304,10 +304,16 @@ class UpdatesMixin:
             # without firing after every successful Grok end_turn.
             self._prompt_cancelled = False
             self._leftover_end_pending = True
-        suppress = bool(cancel_in_flight or (
+        drop_leftover = bool(getattr(self, "_drop_grok_leftover", False))
+        suppress = bool(cancel_in_flight or drop_leftover or (
             self._prompt_cancelled and host_prompt_live))
         # After user interrupt: drop *new* tool starts / leftover prose.
-        # Still accept tool_call_update completions so already-open rows settle.
+        # Still accept tool_call_update for already-open rows so ⚙ can close.
+        # Do NOT open a brand-new failed row from a post-cancel update —
+        # Grok/DeepSeek keeps run_terminal_command after MidTurnAbort and the
+        # failed "turn cancelled" paint is what the user still sees.
+        # Never agent_continue leftover after Esc — that re-busied the sheet
+        # while idle Esc did nothing.
         if (
             not host_prompt_live
             and not suppress
@@ -322,6 +328,15 @@ class UpdatesMixin:
                 "subtype": "agent_continue",
                 "data": {"reason": kind},
             })
+        if suppress and kind == "tool_call_update":
+            tid = self._resolve_tool_id(upd.get("toolCallId"))
+            oc = self._call(tid) if tid else None
+            if not oc or not oc.emitted:
+                self.file_log(
+                    f"drop tool_call_update after cancel: "
+                    f"{(upd.get('title') or tid or '')!r} "
+                    f"status={upd.get('status')!r}")
+                return
         if suppress and kind in (
             "tool_call", "agent_message_chunk", "agent_thought_chunk",
         ):
@@ -598,6 +613,16 @@ class UpdatesMixin:
 
                 # ACP-terminal / subagent background: tool_result is only an
                 # ack (host keeps ⚙ until task_notification).
+                # Kimi native Agent returns agent_id + status in the same
+                # completed update — that IS the closer, not a launch ack.
+                if (
+                    call
+                    and call.background
+                    and status == "completed"
+                    and "agent_id:" in (text or "")
+                    and "status:" in (text or "").lower()
+                ):
+                    call.background = False
                 if (
                     call
                     and call.background

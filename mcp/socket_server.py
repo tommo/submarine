@@ -1131,13 +1131,16 @@ class MCPSocketServer:
         if not parent_session:
             parent_session, _ = self._get_session_for_tool()
         parent_agent_id = None
+        parent_session_id = None
         if parent_session:
             parent_agent_id = getattr(parent_session, "agent_id", None)
+            parent_session_id = getattr(parent_session, "session_id", None)
 
         initial_context = {
             "agent_id": agent_id,
             "subsession_id": subsession_id,
             "parent_agent_id": parent_agent_id,
+            "parent_session_id": parent_session_id,
         }
         resolve_spawn_model = _try_import("core.registry.resolve_spawn_model")
         spawn_model = None
@@ -1175,6 +1178,21 @@ class MCPSocketServer:
             register = _try_import("core.registry.register_session")
             if register is not None:
                 register(session)
+            # Note the child on the parent so list_sessions survives a parent
+            # sheet recreate that mints a new agent_id.
+            if parent_session is not None:
+                note_child = _try_import("core.registry.note_child")
+                if note_child is not None:
+                    note_child(parent_session, agent_id)
+                try:
+                    ppersist = getattr(parent_session, "_persist_view_identity", None)
+                    if ppersist:
+                        ppersist()
+                    psave = getattr(parent_session, "_save_session", None)
+                    if psave:
+                        psave()
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -1189,6 +1207,7 @@ class MCPSocketServer:
             "agent_id": agent_id,
             "subsession_id": subsession_id,
             "parent_agent_id": parent_agent_id,
+            "parent_session_id": parent_session_id,
             "backend": backend,
             "model": spawn_model or getattr(session, "model", None),
             "fork": fork,
@@ -1206,10 +1225,13 @@ class MCPSocketServer:
             return body
         return (
             body
-            + "\n\nWhen fully done, call MCP signal_complete(result_summary=…) "
-            "as its own step after your final message — not in parallel with "
-            "other tools. That call IS the parent notification; do not also "
-            "send_to_session the parent with the same summary. "
+            + "\n\nUse this project's knowledge first (list_profile_docs / irr / "
+            "existing code) — do not invent APIs or layout. "
+            "When fully done, call the Sublime MCP tool signal_complete"
+            "(result_summary=…) as its own last step after your final message "
+            "— not in parallel with other tools. That call IS the parent "
+            "notification; do not also send_to_session the parent with the "
+            "same summary, and do not use a CLI/fake complete. "
             "Parent is notified only after this turn idles; "
             "host attaches context_budget for strategy."
         )
@@ -1312,7 +1334,8 @@ class MCPSocketServer:
         parent_agent_id = getattr(caller, "agent_id", None) if caller else None
         list_children = _try_import("core.registry.list_children_of")
         if list_children is not None:
-            children = list_children(parent_agent_id=parent_agent_id)
+            children = list_children(
+                parent_agent_id=parent_agent_id, parent=caller)
         else:
             children = []
             iter_fn = _try_import("core.registry.iter_sessions")
@@ -1320,6 +1343,40 @@ class MCPSocketServer:
             for session in live:
                 if parent_agent_id and getattr(session, "parent_agent_id", None) == parent_agent_id:
                     children.append(session)
+        # A parent sheet recreate mints a new agent_id; children stamped with
+        # the old one are recovered from the ids named in this transcript.
+        if caller is not None:
+            text = ""
+            try:
+                view = caller.output.view if caller.output else None
+                if view and view.is_valid():
+                    text = view.substr(sublime.Region(0, view.size()))
+            except Exception:
+                text = ""
+            harvest = _try_import("core.registry.harvest_mentioned_orphans")
+            if text and harvest is not None:
+                relink = _try_import("core.registry.relink_child_to_parent")
+                seen = {id(s) for s in children}
+                try:
+                    found = harvest(caller, text) or []
+                except Exception:
+                    found = []
+                for s in found:
+                    if id(s) in seen:
+                        continue
+                    if relink is not None:
+                        try:
+                            relink(s, caller)
+                        except Exception:
+                            pass
+                    children.append(s)
+                    seen.add(id(s))
+            if children:
+                try:
+                    caller._persist_view_identity()
+                    caller._save_session()
+                except Exception:
+                    pass
         sessions = []  # type: List[dict]
         lines = []  # type: List[str]
         for session in children:
@@ -1356,10 +1413,20 @@ class MCPSocketServer:
                 "headroom": budget.get("headroom"),
             })
         if not lines:
+            if caller is None and not parent_agent_id:
+                return {
+                    "summary": "No caller session for list_sessions "
+                               "(agent_id not bound to a live session). "
+                               "Spawned children are still listed by the "
+                               "agent_id from spawn_session.",
+                    "sessions": [],
+                    "count": 0,
+                }
             return {
                 "summary": "No subsessions (use agent_id from spawn)",
                 "sessions": [],
                 "count": 0,
+                "caller_agent_id": parent_agent_id,
             }
         return {"summary": "\n".join(lines), "sessions": sessions, "count": len(sessions)}
 

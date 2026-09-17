@@ -21,8 +21,9 @@
     // Options: "default", "acceptEdits", "plan", "bypassPermissions"
     "permission_mode": "acceptEdits",
 
-    // Session list HISTORY rows (this project). Default 200.
-    "session_list_history_limit": 200,
+    // Session list HISTORY rows (this project). Default 400. Starred rows
+    // are kept past this cap (and past the .sessions.json prune).
+    "session_list_history_limit": 400,
 
     // Auto-open artifacts in the last session split.
     // "first" (default): open the first artifact a session creates.

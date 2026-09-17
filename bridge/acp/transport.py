@@ -235,6 +235,12 @@ class TransportMixin:
                 self._note_foreign_session_drop(method, params)
             # Other parent notifications (_x.ai/*, etc.) are intentionally ignored.
 
+    @staticmethod
+    def _is_synthetic_grok_prompt_id(pid: str) -> bool:
+        """Grok bg self-wake ids: task-completed-term_<terminalId>."""
+        p = (pid or "").strip().lower()
+        return p.startswith("task-completed")
+
     def _handle_grok_turn_end(self, params: dict, upd: dict = None) -> None:
         """Closer for Grok turns that have no host session/prompt RPC.
 
@@ -251,12 +257,21 @@ class TransportMixin:
             or params.get("prompt_id")
             or ""
         )
+        synthetic = self._is_synthetic_grok_prompt_id(pid)
         pf = getattr(self, "_prompt_fut", None)
-        if pf is not None and not pf.done():
+        host_live = pf is not None and not pf.done()
+        # Never bind a self-wake id onto the host RPC — that swallowed
+        # leftover_end for task-completed-term_* while the sheet stayed busy.
+        if host_live and not synthetic:
             if pid:
                 self._host_prompt_id = pid
+            self.file_log(f"grok turn_end skip host-live pid={pid or '-'}")
             return
-        if pid and pid == getattr(self, "_host_prompt_id", None):
+        if (
+            pid
+            and pid == getattr(self, "_host_prompt_id", None)
+            and not synthetic
+        ):
             self.file_log(f"grok turn_end skip host pid={pid}")
             return
         self._orphan_turn_notified = False
