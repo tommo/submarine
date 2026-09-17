@@ -17,6 +17,63 @@ from features.resume import (
 )
 
 
+class TestRestoreIdentity(unittest.TestCase):
+    """A saved session_id is only resumable by the backend that made it.
+
+    Regression: the view's backend stamp won, so a Grok session id was sent to
+    the Claude bridge with the Grok model and died with
+    "No conversation found with session ID: …".
+    """
+
+    def setUp(self):
+        from tests.stubs import install_sublime
+
+        install_sublime()
+        from ui.listeners import resolve_restore_identity
+
+        self.resolve = resolve_restore_identity
+
+    def test_id_backend_wins_over_the_view_stamp(self):
+        backend, rid, model, overrode = self.resolve(
+            "claude", "grok-4.6",
+            {"session_id": "01a09bd4", "backend": "grok", "model": "grok-4.6"})
+        self.assertEqual(backend, "grok")
+        self.assertEqual(rid, "01a09bd4")
+        self.assertEqual(model, "grok-4.6")
+        self.assertTrue(overrode)
+
+    def test_foreign_model_is_not_applied_on_override(self):
+        backend, rid, model, overrode = self.resolve(
+            "claude", "grok-4.6",
+            {"session_id": "z", "backend": "grok"})
+        self.assertEqual(backend, "grok")
+        self.assertIsNone(model, "the other backend's model leaked through")
+        self.assertTrue(overrode)
+
+    def test_matching_backend_is_untouched(self):
+        backend, rid, model, overrode = self.resolve(
+            "grok", "grok-4.6",
+            {"session_id": "x", "backend": "grok", "model": "grok-4.6"})
+        self.assertEqual((backend, rid, model, overrode),
+                         ("grok", "x", "grok-4.6", False))
+
+    def test_no_saved_row_means_no_resume(self):
+        backend, rid, model, overrode = self.resolve("kimi", "k3", None)
+        self.assertEqual(rid, None)
+        self.assertEqual(backend, "kimi")
+        self.assertEqual(model, "k3")
+        self.assertFalse(overrode)
+
+    def test_view_stamp_supplies_backend_when_row_has_none(self):
+        backend, rid, model, overrode = self.resolve(
+            None, None, {"session_id": "y", "backend": "kimi", "model": "k3"})
+        self.assertEqual((backend, rid, model, overrode),
+                         ("kimi", "y", "k3", False))
+
+    def test_defaults_to_claude_with_nothing_known(self):
+        self.assertEqual(self.resolve(None, None, {})[0], "claude")
+
+
 class TestResumePreview(unittest.TestCase):
     def test_display_prompt_unwraps_user_query(self):
         raw = "<user_query>\npush\n</user_query>"

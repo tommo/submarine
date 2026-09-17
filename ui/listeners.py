@@ -4,6 +4,13 @@ from __future__ import annotations
 import os
 import re
 import time
+from typing import Optional
+
+try:
+    from plat.log import log_plugin
+except ImportError:  # pragma: no cover
+    def log_plugin(message):  # type: ignore
+        print("[Submarine] %s" % message)
 
 try:
     import sublime
@@ -133,6 +140,31 @@ def _find_saved_session_for_view(view, saved_sessions):
     except Exception:
         pass
     return None
+
+
+def resolve_restore_identity(view_backend, view_model, matched):
+    # type: (Optional[str], Optional[str], Optional[dict]) -> tuple
+    """(backend, resume_id, model, overrode) for a restored output sheet.
+
+    A saved session_id lives in the store of the backend that created it, so
+    resuming it anywhere else fails with "No conversation found" and leaves a
+    dead sheet. The id's backend therefore wins over the view stamp, and the
+    model must come from the same row — never the other backend's stamp (that
+    is how a Claude bridge ended up handed model 'grok-4.6').
+    """
+    matched = matched or {}
+    resume_id = matched.get("session_id") or None
+    matched_backend = matched.get("backend") or None
+    backend = view_backend or matched_backend or "claude"
+    overrode = False
+    if resume_id and matched_backend and backend != matched_backend:
+        backend = matched_backend
+        overrode = True
+    if overrode:
+        model = matched.get("model") or None
+    else:
+        model = matched.get("model") or view_model or None
+    return backend, resume_id, model, overrode
 
 
 def settle_active_output_view(window) -> None:
@@ -489,11 +521,17 @@ class SubmarineOutputEventListener(sublime_plugin.ViewEventListener):
             resume_id = (matched or {}).get("session_id") if matched else None
             session_name = (matched or {}).get("name") if matched else None
             resume_session_at = (matched or {}).get("resume_session_at") if matched else None
-            saved_backend = (
-                keys.read_setting(view.settings(), keys.BACKEND)
-                or (matched or {}).get("backend")
-                or "claude"
+            saved_backend, resume_id, restore_model, overrode = (
+                resolve_restore_identity(
+                    keys.read_setting(view.settings(), keys.BACKEND),
+                    keys.read_setting(view.settings(), keys.MODEL),
+                    matched,
+                )
             )
+            if overrode:
+                log_plugin(
+                    "restore: backend taken from saved row for resume %s"
+                    % resume_id)
             if not session_name:
                 raw = view.name() or ""
                 if raw.endswith("…"):
@@ -507,13 +545,14 @@ class SubmarineOutputEventListener(sublime_plugin.ViewEventListener):
                 Composer.strip_composer_tail(view)
                 return
             session.name = session_name
-            saved_model = (
-                (matched or {}).get("model")
-                or keys.read_setting(view.settings(), keys.MODEL)
-            )
+            saved_model = restore_model
             if saved_model:
                 session.model = saved_model
                 keys.write_setting(view.settings(), keys.MODEL, saved_model)
+            elif overrode:
+                # The stamp named the other backend's model; drop it so the
+                # view does not re-inject it on the next restore.
+                keys.erase_setting(view.settings(), keys.MODEL)
             if matched:
                 try:
                     session.last_activity = float(
