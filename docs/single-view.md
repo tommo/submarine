@@ -110,6 +110,16 @@ reuse `attach_view=` (`main.py:186-188`).
 New session (`/new`, provider switch) in single mode: create + attach,
 detaching the current one. No new sheet is ever created in this mode.
 
+Restore is the one path that must not claim a host per sheet. Sublime reopens
+a sheet per previously-open session, and `_restore_session` runs once for each
+(`ui/listeners.py`). Only the first may adopt the host
+(`ui.host.claim_host_for_restore`); the rest leave their session detached and
+`ui.host.settle_single_view` closes those duplicate sheets right after
+`settle_startup_output_views()` (`main.py:_startup_settle_views`). Claiming the
+host per sheet stamped `submarine_host` on every restored sheet, so a new
+session attached to a second "host" instead of the window's host. Torn-off and
+quick sheets are exempt.
+
 ## Per-session state moves off the view
 
 Anything currently read from view settings that is per-session must become

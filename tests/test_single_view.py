@@ -268,6 +268,104 @@ class _SingleViewCase(unittest.TestCase):
         HostView.reset()
 
 
+class TestRestoreClaimsOneHost(_SingleViewCase):
+    """Startup restore must not leave one "host" per reopened sheet.
+
+    Regression: _restore_session claimed the host and stamped HOST on every
+    restored output sheet, so N restored sheets produced N host views and a
+    new session landed on a second sheet instead of the host.
+    """
+
+    def _restore_sheets(self, win, n=4):
+        from ui.host import claim_host_for_restore
+
+        sheets = []
+        sessions = []
+        for i in range(n):
+            v = win.new_file()
+            v.settings().set("claude_output", True)  # legacy restored sheet
+            s = _session(win, "S%d" % i)
+            s.output.view = v
+            s.output.window = win
+            default_registry.register_session(s)
+            claim_host_for_restore(win, s, v)
+            sheets.append(v)
+            sessions.append(s)
+        return sheets, sessions
+
+    def _hosts(self, win):
+        return [
+            v for v in win.views()
+            if v.is_valid() and keys.read_setting(v.settings(), keys.HOST, False)
+        ]
+
+    def test_only_the_first_restored_sheet_becomes_host(self):
+        win = RecordingWindow()
+        sheets, sessions = self._restore_sheets(win, 4)
+        hosts = self._hosts(win)
+        self.assertEqual(len(hosts), 1)
+        self.assertIs(hosts[0], sheets[0])
+        for s in sessions[1:]:
+            self.assertIsNone(s.output.view)
+
+    def test_settle_closes_the_duplicate_sheets(self):
+        from ui.host import settle_single_view
+
+        win = RecordingWindow()
+        sheets, _sessions = self._restore_sheets(win, 4)
+        closed = settle_single_view(win)
+        self.assertEqual(closed, 3)
+        live = [v for v in win.views() if v.is_valid()]
+        self.assertEqual(len(live), 1)
+        self.assertIs(live[0], sheets[0])
+        for v in sheets[1:]:
+            self.assertTrue(v.closed)
+
+    def test_new_session_after_settle_reuses_the_host(self):
+        from ui.host import settle_single_view
+
+        win = RecordingWindow()
+        sheets, _sessions = self._restore_sheets(win, 4)
+        settle_single_view(win)
+        win.new_file_calls = 0
+        fresh = _session(win, "fresh")
+        HostView.for_window(win).attach(win, fresh)
+        self.assertEqual(win.new_file_calls, 0, "new session opened a new view")
+        self.assertIs(fresh.output.view, sheets[0])
+        self.assertEqual(len([v for v in win.views() if v.is_valid()]), 1)
+
+    def test_settle_keeps_a_torn_off_sheet(self):
+        from ui.host import settle_single_view
+
+        win = RecordingWindow()
+        sheets, _sessions = self._restore_sheets(win, 3)
+        settle_single_view(win)
+        hv = HostView.for_window(win)
+        bound = hv.bound_session(win)
+        self.assertIsNotNone(bound)
+        self.assertTrue(hv.tear_off(win, bound))
+        torn = bound.output.view
+        self.assertIsNotNone(torn)
+        self.assertTrue(getattr(bound, "torn_off", False))
+        # The startup settle must not collapse a torn-off sheet.
+        settle_single_view(win)
+        self.assertFalse(torn.closed)
+        self.assertTrue(torn.is_valid())
+        self.assertTrue(sheets[0].is_valid())
+
+    def test_restore_does_not_claim_host_in_tabs_mode(self):
+        from ui.host import claim_host_for_restore
+
+        set_ui_mode_override("tabs")
+        win = RecordingWindow()
+        v = win.new_file()
+        s = _session(win, "T")
+        s.output.view = v
+        self.assertIsNone(claim_host_for_restore(win, s, v))
+        self.assertEqual(self._hosts(win), [])
+        self.assertIs(s.output.view, v)
+
+
 class TestHostSwap(_SingleViewCase):
     def test_attach_b_unbinds_a_without_stopping_bridge(self):
         win = RecordingWindow()

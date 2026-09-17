@@ -579,6 +579,22 @@ def _startup_settle_views():
         _startup_strip_composers()
         from ui.listeners import settle_startup_output_views
         settle_startup_output_views()
+        # Restoring reopens one sheet per previously-open session. In single
+        # mode only the host may stay, so collapse the duplicates before the
+        # user creates anything — otherwise a new session lands on a second
+        # "host" sheet.
+        try:
+            from ui.host import settle_single_view
+            for w in sublime.windows():
+                try:
+                    n = settle_single_view(w)
+                    if n:
+                        log_plugin(
+                            "startup settle: collapsed %d output sheet(s)" % n)
+                except Exception as e:
+                    log_plugin("startup settle (window): %s" % e)
+        except Exception as e:
+            log_plugin("startup settle (single view): %s" % e)
     except Exception as e:
         log_plugin("startup settle: %s" % e)
 

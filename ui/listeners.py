@@ -568,11 +568,8 @@ class SubmarineOutputEventListener(sublime_plugin.ViewEventListener):
                 pass
             register_session(session)
             try:
-                from ui.host import HostView, is_single_mode
-                if is_single_mode():
-                    hv = HostView.for_window(window)
-                    hv._view = view
-                    keys.write_setting(view.settings(), keys.HOST, True)
+                from ui.host import claim_host_for_restore
+                claim_host_for_restore(window, session, view)
             except Exception:
                 pass
             if keys.read_setting(view.settings(), keys.QUICK):

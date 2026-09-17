@@ -650,6 +650,72 @@ class HostView(object):
             except Exception:
                 pass
 
+    def settle_single_view(self, window):
+        # type: (Any) -> int
+        """Keep one host per window; close the other restored output sheets.
+
+        Same shape as switch_to_single, except a torn-off sheet keeps its own
+        sheet (single mode is "host view + tear-off") and nothing is retitled
+        or repainted beyond the host attach.
+        """
+        from core.registry import sessions_for_window
+
+        window = window or self.window
+        if window is None:
+            return 0
+        live = [
+            s for s in sessions_for_window(window)
+            if not getattr(s, "quick_mode", False)
+        ]
+        if not live:
+            return 0
+        bound = self._pick_bound(window, live)
+        host = self.host_view(
+            window, create_via=getattr(bound, "output", None))
+        if host is None:
+            return 0
+        host_id = None
+        try:
+            host_id = host.id()
+        except Exception:
+            host_id = None
+        before = self._live_output_views(window)
+        for s in live:
+            if s is bound or getattr(s, "torn_off", False):
+                continue
+            view = None
+            try:
+                view = s.output.view if s.output else None
+            except Exception:
+                view = None
+            if view is None:
+                continue
+            try:
+                if not view.is_valid() or view.id() == host_id:
+                    continue
+            except Exception:
+                continue
+            self._detach_session(s)
+            try:
+                keys.write_setting(view.settings(), keys.SOFT_CLOSE, True)
+                view.close()
+            except Exception:
+                pass
+        if bound is not None:
+            self.attach(window, bound, focus=True)
+        self._close_orphan_output_views(window)
+        return max(0, before - self._live_output_views(window))
+
+    def _live_output_views(self, window):
+        # type: (Any) -> int
+        try:
+            return len([
+                v for v in window.views()
+                if v.is_valid() and keys.is_output_view(v)
+            ])
+        except Exception:
+            return 0
+
     def _close_orphan_output_views(self, window):
         # type: (Any) -> None
         """Single-mode invariant: only the host output sheet stays."""
@@ -750,6 +816,47 @@ def dock_session(window, session=None, focus=True):
     if session is None:
         return False
     return HostView.for_window(window).dock(window, session, focus=focus)
+
+
+def claim_host_for_restore(window, session, view):
+    # type: (Any, Any, Any) -> Any
+    """single mode: the first restored sheet becomes the window's host.
+
+    Every later restored output sheet is a duplicate. It must NOT claim the
+    host (that left one "host" per restored sheet, so a new session landed on
+    a second sheet). Its session stays detached — the session list is how it
+    is reached — and the sheet is closed by settle_single_view().
+    A torn-off session keeps its own sheet. Returns the host view, or None in
+    tabs mode.
+    """
+    if not is_single_mode() or window is None or view is None:
+        return None
+    if getattr(session, "torn_off", False):
+        return None
+    output = getattr(session, "output", None)
+    hv = HostView.for_window(window)
+    host = hv.host_view(window, create_via=output)
+    if host is None:
+        return None
+    try:
+        if host.id() != view.id() and output is not None:
+            output.view = None
+    except Exception:
+        pass
+    return host
+
+
+def settle_single_view(window):
+    # type: (Any) -> int
+    """Collapse duplicate output sheets onto the window's one host view.
+
+    Startup restore reopens a sheet per previously-open session; in single
+    mode only the host may stay. Torn-off and quick sheets are left alone.
+    Returns the number of sheets closed.
+    """
+    if not is_single_mode() or window is None:
+        return 0
+    return HostView.for_window(window).settle_single_view(window)
 
 
 def apply_ui_mode(window, mode=None):
