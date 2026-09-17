@@ -366,6 +366,81 @@ class TestRestoreClaimsOneHost(_SingleViewCase):
         self.assertIs(s.output.view, v)
 
 
+class TestHostLookupSelfHeals(_SingleViewCase):
+    """A window with an output sheet never gets a second one.
+
+    Regression: host lookup depended only on the submarine_host stamp, and the
+    orphan sweep closed every output sheet when no host resolved. Either way
+    each new session then created a fresh sheet.
+    """
+
+    def _plain_output_sheet(self, win):
+        v = win.new_file()
+        keys.write_setting(v.settings(), keys.OUTPUT, True)  # no HOST stamp
+        return v
+
+    def test_unstamped_output_sheet_is_adopted_not_duplicated(self):
+        win = RecordingWindow()
+        v = self._plain_output_sheet(win)
+        win.new_file_calls = 0
+        host = HostView.for_window(win).host_view(win)
+        self.assertIs(host, v)
+        self.assertEqual(win.new_file_calls, 0)
+        self.assertTrue(keys.read_setting(v.settings(), keys.HOST, False))
+
+    def test_torn_off_sheet_is_never_adopted_as_host(self):
+        win = RecordingWindow()
+        torn = self._plain_output_sheet(win)
+        s = _session(win, "T")
+        s.output.view = torn
+        s.torn_off = True
+        default_registry.register_session(s)
+        win.new_file_calls = 0
+        host = HostView.for_window(win).host_view(win)
+        self.assertIsNot(host, torn)
+        self.assertEqual(win.new_file_calls, 1, "no host sheet was created")
+
+    def test_orphan_sweep_never_closes_every_sheet(self):
+        win = RecordingWindow()
+        self._plain_output_sheet(win)
+        self._plain_output_sheet(win)
+        hv = HostView.for_window(win)
+        hv._view = None  # lost cache is exactly the dangerous state
+        hv._close_orphan_output_views(win)
+        live = [v for v in win.views() if v.is_valid()]
+        self.assertEqual(len(live), 1, "sweep closed the last output sheet")
+
+    def test_two_sessions_share_one_sheet_with_stale_state(self):
+        win = RecordingWindow()
+        self._plain_output_sheet(win)
+        win.new_file_calls = 0
+        hv = HostView.for_window(win)
+        for name in ("A", "B", "C"):
+            hv.attach(win, _session(win, name))
+        self.assertEqual(win.new_file_calls, 0)
+        live = [v for v in win.views() if v.is_valid()]
+        self.assertEqual(len(live), 1)
+
+    def test_create_session_twice_opens_one_sheet(self):
+        from tests.stubs import install_sublime
+
+        install_sublime()
+        import main
+
+        win = RecordingWindow()
+        win._folders = ["/tmp"]
+        self._plain_output_sheet(win)
+        win.new_file_calls = 0
+        first = main.create_session(win, backend="grok", start=False)
+        second = main.create_session(win, backend="grok", start=False)
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertEqual(win.new_file_calls, 0,
+                         "a new session opened its own view")
+        live = [v for v in win.views() if v.is_valid()]
+        self.assertEqual(len(live), 1)
+
+
 class TestHostSwap(_SingleViewCase):
     def test_attach_b_unbinds_a_without_stopping_bridge(self):
         win = RecordingWindow()

@@ -174,6 +174,15 @@ class HostView(object):
             self._view = found
             self._stamp_host(found)
             return found
+        # Self-healing: a window that already has an output sheet never gets a
+        # second one. The stamp can be lost (plugin reload, an older build, a
+        # sheet adopted before the host existed), and depending on it alone
+        # meant host_view() created a fresh sheet per session.
+        stray = self._find_any_output(window)
+        if stray is not None:
+            self._stamp_host(stray)
+            self._view = stray
+            return stray
         via_view = getattr(create_via, "view", None)
         if via_view is not None:
             try:
@@ -217,6 +226,38 @@ class HostView(object):
                     continue
                 if keys.read_setting(v.settings(), keys.HOST, False):
                     return v
+            except Exception:
+                continue
+        return None
+
+    def _find_any_output(self, window):
+        # type: (Any) -> Any
+        """First adoptable output view, host stamp or not.
+
+        A torn-off session owns its own sheet and must never be adopted as the
+        host, or the host would show a sheet the user detached.
+        """
+        if not window:
+            return None
+        try:
+            views = list(window.views())
+        except Exception:
+            return None
+        from core.registry import for_view
+        for v in views:
+            try:
+                if not v.is_valid():
+                    continue
+                if not keys.is_output_view(v):
+                    continue
+                if keys.read_setting(v.settings(), keys.QUICK):
+                    continue
+                if keys.read_setting(v.settings(), keys.SESSION_LIST):
+                    continue
+                owner = for_view(v)
+                if owner is not None and getattr(owner, "torn_off", False):
+                    continue
+                return v
             except Exception:
                 continue
         return None
@@ -728,6 +769,16 @@ class HostView(object):
                 host_id = host.id()
         except Exception:
             host_id = None
+        if host_id is None:
+            # Never sweep with no host resolved: the guard below is the only
+            # thing keeping the host, so an unresolvable host closed every
+            # output sheet and each new session then made a fresh one.
+            try:
+                resolved = self.host_view(window)
+                if resolved is not None and resolved.is_valid():
+                    host_id = resolved.id()
+            except Exception:
+                host_id = None
         try:
             views = list(window.views())
         except Exception:
