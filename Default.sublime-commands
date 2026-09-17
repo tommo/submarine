@@ -113,6 +113,10 @@
         "command": "submarine_artifacts"
     },
     {
+        "caption": "Submarine: Open Terminal",
+        "command": "submarine_terminal_open"
+    },
+    {
         "caption": "Submarine: Session List Reveal (keep focus)",
         "command": "submarine_session_list_reveal"
     },

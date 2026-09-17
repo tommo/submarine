@@ -304,6 +304,24 @@ class TestInitializeParams(unittest.TestCase):
         self.assertEqual(s.query_count, 4)
         self.assertAlmostEqual(s.last_activity, old, places=2)
 
+    def test_resumed_grok_session_runs_in_the_transcripts_directory(self):
+        """Grok's session/load is cwd-scoped, so the window's project cannot
+        load a session the CLI filed under another one."""
+        proj = tempfile.mkdtemp(prefix="proj-")
+        elsewhere = tempfile.mkdtemp(prefix="other-")
+        client = FakeClient()
+        s = make_session(client=client, backend="grok", resume_id="sid-9",
+                         cwd=proj)
+        s.store.upsert({"session_id": "sid-9", "backend": "grok",
+                        "project": proj, "query_count": 1})
+        s._transcript_cwd = (
+            lambda backend, sid, cwd="", agent_id="": elsewhere)
+        s.start()
+        params = [t[1] for t in client.sent if t[0] == "initialize"][0]
+        self.assertEqual(params["cwd"], elsewhere)
+        self.assertEqual(s.cwd, elsewhere)
+        self.assertEqual(client.started_cwd, elsewhere)
+
     def test_new_session_ignores_view_model_stamp(self):
         client = FakeClient()
         persist = DictPersist({"submarine_model": "deepseek-v4-pro"})

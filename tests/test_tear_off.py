@@ -175,7 +175,9 @@ class TestSessionList(_TearOffCase):
         self.assertEqual(len(bound_rows), 1)
         self.assertEqual(bound_rows[0]["session_id"], a.session_id)
         mark = _fmt_row(torn_rows[0], set(), False, 80)
-        self.assertTrue(mark.startswith("⊡"))
+        # Current-session column first (`▸ ` bound, else `  `), then the mark.
+        self.assertEqual(mark[:2], "  ")
+        self.assertEqual(mark[2], "⊡")
         self.assertTrue(open_row(win, torn_rows[0]))
         self.assertIs(b.output.view, torn)
         self.assertIsNot(b.output.view, host)

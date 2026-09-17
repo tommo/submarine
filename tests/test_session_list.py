@@ -1,10 +1,15 @@
 """Session list scratch: render + line index (no Sublime runtime)."""
 from __future__ import annotations
 
+import os
+import tempfile
+import time
 import types
 import unittest
 
 from ui import session_list as sl
+
+MARK_CHARS = ("○", "●", "?", "!", "⏸", "⊡", "·")
 
 
 def _live(sid, name, **kw):
@@ -36,9 +41,573 @@ def _saved(sid, name, **kw):
     return row
 
 
+def _row_cells(line):
+    """(prefix, state mark) of a rendered row, or ("", "") for headers.
+
+    A live row opens with the current-session column (`▸ ` or `  `), a saved row
+    with its mark; the nesting glyph sits after the mark, and a pinned row's
+    sparkle sits past the backend column, in front of the title.
+    """
+    text = line or ""
+    lead = ""
+    if text[:1] == sl.CUR_MARK and text[1:2] in MARK_CHARS:
+        lead, text = text[:1], text[1:]  # the live row's current-session column
+    for i, ch in enumerate(text[:8]):
+        if ch in MARK_CHARS:
+            return lead + text[:i], ch
+    return "", ""
+
+
+def _row_mark(line):
+    return _row_cells(line)[1]
+
+
+def _row_lead(line):
+    return _row_cells(line)[0]
+
+
 def _session_lines(text):
-    marks = ("○", "●", "?", "!", "⏸", "▸", "⊡", "·", "⚙")
-    return [ln for ln in text.splitlines() if ln[:1] in marks]
+    return [ln for ln in text.splitlines() if _row_mark(ln)]
+
+
+class TestIdlePoll(unittest.TestCase):
+    """A poll with nothing to show must not rebuild the Sessions view.
+
+    A tick compares a fingerprint (registry + two store stats) and only renders
+    when that or the elapsed-time column changed, then backs off while idle.
+    """
+
+    def setUp(self):
+        self._orig = (dict(sl._fingerprints), dict(sl._stamps), sl._poll_delay,
+                      sl._poll_armed, sl._poll_stopped, sl._poll_gen)
+        self._paths = (sl._sessions_store_path, sl.load_bookmarks,
+                       sl.load_bookmark_records)
+        self._list_cls = sl.SessionListView
+        self._td = tempfile.TemporaryDirectory(prefix="submarine-poll-")
+        sl._sessions_store_path = lambda: os.path.join(self._td.name, "sessions.json")
+        self._py = None
+        self._gen = None
+        self._sublime = None
+        self._bound_sublime = False
+
+    def tearDown(self):
+        sl._fingerprints.clear()
+        sl._fingerprints.update(self._orig[0])
+        sl._stamps.clear()
+        sl._stamps.update(self._orig[1])
+        (sl._poll_delay, sl._poll_armed,
+         sl._poll_stopped, sl._poll_gen) = self._orig[2:]
+        (sl._sessions_store_path, sl.load_bookmarks,
+         sl.load_bookmark_records) = self._paths
+        sl.SessionListView = self._list_cls
+        if self._sublime is not None and self._py is not None:
+            (self._sublime.windows, self._sublime.set_timeout,
+             self._sublime._claude_sessions) = self._py
+        if self._gen is not None:
+            mod, val = self._gen
+            if val is None:
+                try:
+                    delattr(mod, "_submarine_poll_gen")
+                except AttributeError:
+                    pass
+            else:
+                mod._submarine_poll_gen = val
+        if self._bound_sublime:
+            sl.sublime = None
+        self._td.cleanup()
+        import sys
+        sm = sys.modules.get("sublime")
+        if sm is not None and getattr(sm, "_submarine_stub", False):
+            sys.modules.pop("sublime", None)
+            sys.modules.pop("sublime_plugin", None)
+
+    def test_stamp_boundary_matches_format_when(self):
+        now = 1800000000.0
+        for secs in (0, 4, 5, 6, 59, 60, 61, 3599, 3600, 86399, 86400,
+                     86400 * 14 - 1, 86400 * 14, 86400 * 30):
+            ts = now - secs
+            label = sl.format_when(ts, now=now)
+            step = sl._stamp_change_in(ts, now)
+            self.assertIsNotNone(step, secs)
+            self.assertGreater(step, 0, secs)
+            self.assertEqual(sl.format_when(ts, now=now + step - 1), label, secs)
+            self.assertNotEqual(sl.format_when(ts, now=now + step), label, secs)
+        self.assertIsNone(sl._stamp_change_in(0, now))
+        self.assertIsNone(sl._stamp_change_in(None, now))
+
+    def test_next_stamp_change_uses_the_soonest_clock_row(self):
+        now = 1800000000.0
+        # A live row shows a state word, not a clock: it schedules no tick.
+        state = {"kind": "live", "status": "ready", "last_access": now - 99999}
+        self.assertEqual(sl._next_stamp_change([state], now=now), 0.0)
+        hist = {"kind": "saved", "status": "closed", "last_access": now - 10}
+        self.assertEqual(sl._next_stamp_change([state, hist], now=now), now + 50)
+        self.assertEqual(sl._next_stamp_change([], now=now), 0.0)
+
+    def test_poll_delay_backs_off_but_wakes_for_a_stamp(self):
+        _win, view = self._fake_list_window()
+        sl._stamps.clear()
+        sl._poll_delay = sl._POLL_MIN_MS
+        self.assertEqual(sl._next_poll_delay(), sl._POLL_MIN_MS)
+        sl._poll_delay = sl._POLL_MAX_MS
+        self.assertEqual(sl._next_poll_delay(), sl._POLL_MAX_MS)
+        sl._stamps[view.id()] = time.time() + 2
+        self.assertLessEqual(sl._next_poll_delay(), 2100)
+        sl._stamps[view.id()] = time.time() - 5  # already due: poll now
+        self.assertEqual(sl._next_poll_delay(), sl._POLL_MIN_MS)
+
+    def test_state_key_covers_sessions_cols_stores_and_stars(self):
+        sublime = self._stub()
+        win = _win_for(["proj/here"])
+        session = _live_session(win, "s1")
+        sublime._claude_sessions = {1: session}
+        sess = sl._sessions_store_path()
+        key = sl.list_state_key(win, 80)
+        self.assertEqual(key, sl.list_state_key(win, 80))
+        self.assertNotEqual(key, sl.list_state_key(win, 60))
+        session.working = True
+        self.assertNotEqual(key, sl.list_state_key(win, 80))
+        key = sl.list_state_key(win, 80)
+        with open(sess, "w", encoding="utf-8") as f:
+            f.write("[]")
+        self.assertNotEqual(key, sl.list_state_key(win, 80))
+        key = sl.list_state_key(win, 80)
+        sl.load_bookmarks = lambda project_path=None: {"s1"}
+        self.assertNotEqual(key, sl.list_state_key(win, 80))
+        key = sl.list_state_key(win, 80)
+        sl.load_bookmark_records = lambda project_path=None: {"s1": {"name": "n"}}
+        self.assertNotEqual(key, sl.list_state_key(win, 80))
+
+    def test_idle_tick_rebuilds_nothing_and_backs_off(self):
+        _win, view = self._fake_list_window()
+        sl._stamps.clear()
+        sl._poll_delay = sl._POLL_MIN_MS
+        sl._poll_armed = True
+        sl._session_list_poll()
+        self.assertEqual(self._timeouts, [sl._POLL_MIN_MS * 2])
+        self.assertEqual(self._renders, [])
+        self.assertEqual(sl._poll_delay, sl._POLL_MIN_MS * 2)
+        # A due elapsed-time column is the one thing a quiet list polls for.
+        self._timeouts[:] = []
+        sl._stamps[view.id()] = time.time() - 1
+        sl._session_list_poll()
+        self.assertEqual(len(self._renders), 1)
+        self.assertEqual(sl._poll_delay, sl._POLL_MIN_MS)
+
+    def test_one_list_does_not_starve_anothers_clock(self):
+        """Each list owns its own deadline: a list with old rows re-arming a
+        far-off one used to freeze the other list's clock for good."""
+        wins, views = self._fake_list_windows(2)
+        now = time.time()
+        sl._stamps.clear()
+        sl._stamps[views[0].id()] = now + 3600   # fresh rows: nothing due
+        sl._stamps[views[1].id()] = now - 1      # this one wants a repaint
+        sl._poll_delay = sl._POLL_MAX_MS
+        sl._poll_armed = True
+        sl._session_list_poll()
+        self.assertEqual(self._renders, [views[1].id()])
+        # And the soonest deadline, not the newest, is what the poll wakes for.
+        self.assertEqual(sl._soonest_stamp(), now - 1)
+
+    def test_closed_list_view_stops_the_chain(self):
+        win, _view = self._fake_list_window()
+        win._views = []
+        sl._poll_armed = True
+        sl._session_list_poll()
+        self.assertEqual(self._timeouts, [])
+        self.assertFalse(sl._poll_armed)
+
+    def test_unload_stops_this_incarnations_chain(self):
+        self._fake_list_window()
+        sl._poll_armed = True
+        sl._poll_stopped = False
+        sl.stop_session_list_poll()
+        sl._session_list_poll()
+        self.assertEqual(self._timeouts, [])
+        self.assertFalse(sl._poll_armed)
+        self.assertTrue(sl._poll_stopped)
+
+    def test_a_reload_also_stops_the_other_copies(self):
+        """Unload runs in whichever copy is current; the shared counter is how
+        a chain left behind by an earlier copy learns to stop."""
+        sublime = self._stub()
+        self._fake_list_window()
+        sl._poll_armed = True
+        sl._poll_gen = sl._poll_generation()
+        sublime._submarine_poll_gen = sl._poll_generation() + 1
+        sl._session_list_poll()
+        self.assertEqual(self._timeouts, [])
+        self.assertFalse(sl._poll_armed)
+
+    # -- fixtures ----------------------------------------------------------
+    def _stub(self, sublime=None):
+        if sublime is None:
+            from tests.stubs import install
+            sublime = install()
+        self._sublime = sublime
+        if self._py is None:
+            self._py = (sublime.windows, sublime.set_timeout,
+                        sublime._claude_sessions)
+            self._gen = (sublime, getattr(sublime, "_submarine_poll_gen", None))
+        if getattr(sl, "sublime", None) is None:
+            # `ui.session_list` binds sublime at import, which pytest has not
+            # installed yet; the poll path needs it.
+            sl.sublime = sublime
+            self._bound_sublime = True
+        return sublime
+
+    def _fake_list_window(self):
+        """A window holding one Sessions view, with timeouts and renders taped."""
+        win, view = self._fake_list_windows(1)
+        return win[0], view[0]
+
+    def _fake_list_windows(self, count):
+        """`count` windows, each with its own Sessions view, all taped."""
+        from tests.stubs import FakeView, FakeWindow
+        sublime = self._stub()
+        wins, views = [], []
+        for i in range(count):
+            view = FakeView(7 + i)
+            view.settings().set(sl.SETTING, True)
+            win = FakeWindow()
+            win._views.append(view)
+            wins.append(win)
+            views.append(view)
+        self._timeouts = []
+        self._renders = []
+        sublime.windows = lambda: list(wins)
+        sublime.set_timeout = lambda f, t=0: self._timeouts.append(t)
+        sublime._claude_sessions = {}
+        for win, view in zip(wins, views):
+            sl._fingerprints[view.id()] = sl.list_state_key(win, sl.view_cols(view))
+
+        class _RecordingList(object):
+            _renders = self._renders
+
+            def refresh(self, follow=False):
+                self._renders.append(self.view.id())
+        # The list builds a view-bound instance with `__new__`, then sets it up.
+        sl.SessionListView = _RecordingList
+        return wins, views
+
+
+def _win_for(folders):
+    """A window stand-in for `collect_live` (only `folders()` is read)."""
+    class _Win:
+        def folders(self):
+            return list(folders)
+    return _Win()
+
+
+def _live_session(win, sid, **kw):
+    return types.SimpleNamespace(
+        session_id=sid, name=kw.pop("name", sid), backend=kw.pop("backend", "grok"),
+        working=kw.pop("working", False), is_sleeping=False,
+        query_count=kw.pop("queries", 1), last_activity=1, last_access=1,
+        output=types.SimpleNamespace(view=None), window=win, quick_mode=False,
+    )
+
+
+class TestCloseRefreshesTheList(unittest.TestCase):
+    """Closing a session sheet repaints the Sessions list itself.
+
+    Regression: the close commands stopped the session and closed the sheet
+    without telling the list, so a closed session sat in CURRENT until the poll
+    happened to notice — up to the 8s backoff, never while another list's clock
+    took over the next wake.
+    """
+
+    def setUp(self):
+        from tests.stubs import install
+        self._prev_sublime = getattr(sl, "sublime", None)
+        self.sublime = install()
+        sl.sublime = self.sublime
+        self._pending = sl._refresh_pending
+        self._armed = sl._poll_armed
+        self._timeouts = []
+        self.sublime.windows = lambda: []
+        self.sublime.set_timeout = lambda f, t=0: self._timeouts.append(t)
+
+    def tearDown(self):
+        sl.sublime = self._prev_sublime
+        sl._refresh_pending = self._pending
+        sl._poll_armed = self._armed
+
+    def _list_window(self):
+        from tests.stubs import FakeView, FakeWindow
+        view = FakeView(5)
+        view.settings().set(sl.SETTING, True)
+        win = FakeWindow()
+        win._views.append(view)
+        view.window = lambda: win
+        self.sublime.windows = lambda: [win]
+        return win, view
+
+    def test_closing_a_sheet_schedules_a_list_refresh(self):
+        from tests.stubs import FakeView
+        from ui.listeners import SubmarineEventListener
+        self._list_window()
+        sl._refresh_pending = False
+        sl._poll_armed = False
+        SubmarineEventListener().on_close(FakeView(9))
+        self.assertTrue(sl._refresh_pending)
+        self.assertIn(250, self._timeouts)
+        self.assertTrue(sl._poll_armed, "the refresh must keep the poll armed")
+
+    def test_focusing_a_list_arms_the_poll_and_renders(self):
+        """A list restored with the window never armed a poll; opening it must
+        bring it current and keep its clock going."""
+        sl._refresh_pending = False
+        sl._poll_armed = False
+        win, view = self._list_window()
+        renders = []
+        real = sl.SessionListView
+
+        class _Recording(object):
+            def refresh(self, follow=False):
+                renders.append(self.view.id())
+        sl.SessionListView = _Recording
+        try:
+            sl.SessionListClickListener().on_activated(view)
+        finally:
+            sl.SessionListView = real
+        self.assertEqual(renders, [view.id()])
+        self.assertTrue(sl._poll_armed)
+
+    def test_a_close_without_a_list_open_costs_nothing(self):
+        from tests.stubs import FakeView
+        from ui.listeners import SubmarineEventListener
+        sl._refresh_pending = False
+        sl._poll_armed = False
+        SubmarineEventListener().on_close(FakeView(9))
+        self.assertFalse(sl._refresh_pending)
+        self.assertEqual(self._timeouts, [])
+
+
+class TestStarredConfirm(unittest.TestCase):
+    """Closing a pinned row asks first; anything else goes without a question."""
+
+    def setUp(self):
+        from tests.stubs import install
+        self._prev_sublime = getattr(sl, "sublime", None)
+        self._prev_bookmarks = sl.load_bookmarks
+        self.sublime = install()
+        sl.sublime = self.sublime
+        self.sublime._submarine_dialog = None
+        self.sublime._submarine_dialogs = []
+
+    def tearDown(self):
+        sl.sublime = self._prev_sublime
+        sl.load_bookmarks = self._prev_bookmarks
+        self.sublime._submarine_dialog = None
+        self.sublime._submarine_dialogs = []
+        import sys
+        sm = sys.modules.get("sublime")
+        if sm is not None and getattr(sm, "_submarine_stub", False):
+            sys.modules.pop("sublime", None)
+            sys.modules.pop("sublime_plugin", None)
+
+    def _row(self, **kw):
+        row = {"kind": "saved", "session_id": "s1", "name": "kept around",
+               "section": "HISTORY"}
+        row.update(kw)
+        return row
+
+    def test_unstarred_row_is_not_questioned(self):
+        self.sublime._submarine_dialog = False
+        sl.load_bookmarks = lambda path=None: set()
+        self.assertTrue(sl.starred_confirm(None, self._row()))
+        self.assertEqual(self.sublime._submarine_dialogs, [])
+
+    def test_starred_row_follows_the_answer(self):
+        sl.load_bookmarks = lambda path=None: {"s1"}
+        self.sublime._submarine_dialog = False
+        self.assertFalse(sl.starred_confirm(None, self._row()))
+        self.sublime._submarine_dialog = True
+        self.assertTrue(sl.starred_confirm(None, self._row()))
+        self.assertEqual(len(self.sublime._submarine_dialogs), 2)
+        self.assertIn("Delete", self.sublime._submarine_dialogs[0])
+        self.assertIn("kept around", self.sublime._submarine_dialogs[0])
+
+    def test_live_starred_row_is_closed_not_deleted(self):
+        sl.load_bookmarks = lambda path=None: {"s1"}
+        self.sublime._submarine_dialog = True
+        row = self._row(kind="live", section="CURRENT")
+        self.assertTrue(sl.starred_confirm(None, row))
+        self.assertIn("Close", self.sublime._submarine_dialogs[0])
+
+    def test_headless_without_sublime_never_blocks(self):
+        sl.sublime = None
+        sl.load_bookmarks = lambda path=None: {"s1"}
+        self.assertTrue(sl.starred_confirm(None, self._row()))
+
+
+class TestSessionChains(unittest.TestCase):
+    """One row per session, not one per resume.
+
+    Every resume mints a new session id and a backend switch keeps the
+    agent_id, so the store held one record per incarnation and HISTORY listed
+    the same session over and over, sometimes under another backend's tag.
+    """
+
+    def _rec(self, sid, agent, **kw):
+        row = {"session_id": sid, "agent_id": agent, "kind": "saved",
+               "name": kw.pop("name", "GUEST"), "backend": kw.pop("backend", "grok"),
+               "status": "closed", "view_id": None, "project": kw.pop("project", "/p"),
+               "query_count": kw.pop("queries", 3),
+               "last_activity": kw.pop("activity", 1),
+               "last_access": kw.pop("access", 1)}
+        row.update(kw)
+        return row
+
+    def test_a_chain_collapses_to_its_newest_incarnation(self):
+        rows = [self._rec("old", "a1", activity=1),
+                self._rec("mid", "a1", activity=2),
+                self._rec("new", "a1", activity=3, backend="kimi")]
+        out = sl.collapse_chains(rows)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["session_id"], "new")
+        self.assertEqual(out[0]["backend"], "kimi")
+        self.assertEqual(sorted(out[0]["chain_ids"]), ["mid", "new", "old"])
+        # Four sessions stay four rows.
+        many = [self._rec("s%d" % i, "a%d" % i, activity=i) for i in range(4)]
+        self.assertEqual(len(sl.collapse_chains(many)), 4)
+        # A record with no agent_id belongs to no chain and is left alone.
+        self.assertEqual(len(sl.collapse_chains([self._rec("x", None)])), 1)
+
+    def test_a_pin_survives_the_collapse(self):
+        rows = [self._rec("old", "a1", activity=1),
+                self._rec("new", "a1", activity=2)]
+        out = sl.collapse_chains(rows, starred={"old"})
+        self.assertEqual(out[0]["session_id"], "new")
+        self.assertTrue(sl._pinned(out[0], {"old"}), "the pin must ride along")
+        self.assertNotIn("pinned", sl.collapse_chains(rows, starred=set())[0])
+
+    def test_a_live_incarnation_hides_the_whole_chain(self):
+        rows = [self._rec("old", "a1", activity=1),
+                self._rec("new", "a1", activity=2)]
+        self.assertEqual(sl.collapse_chains(rows, live_agents={"a1"}), [])
+
+    def test_history_drops_the_older_incarnations_of_a_live_session(self):
+        prev = sl.load_saved_sessions
+        sl.load_saved_sessions = lambda: [
+            {"session_id": "old", "agent_id": "a1", "name": "GUEST",
+             "backend": "grok", "project": "/p", "state": "closed",
+             "query_count": 43, "last_activity": 1, "last_access": 1},
+            {"session_id": "live", "agent_id": "b1", "name": "RUNNING",
+             "backend": "grok", "project": "/p", "state": "open",
+             "query_count": 9, "last_activity": 2, "last_access": 2},
+        ]
+        try:
+            here, _other = sl.collect_history(
+                {"live"}, "/p", live_agents={"a1", "b1"})
+        finally:
+            sl.load_saved_sessions = prev
+        self.assertEqual(here, [], "a live session is CURRENT, not HISTORY")
+
+    def test_the_window_render_lists_a_resumed_session_once(self):
+        from tests.stubs import install
+        sublime = install()
+        prev = (sl.sublime, sl.load_saved_sessions, sl.load_bookmarks)
+        sl.sublime = sublime
+        sl.load_saved_sessions = lambda: [
+            {"session_id": "old", "agent_id": "a1", "name": "GUEST",
+             "backend": "grok", "project": "/p", "state": "closed",
+             "query_count": 43, "last_activity": 1, "last_access": 1},
+            {"session_id": "mid", "agent_id": "a1", "name": "GUEST",
+             "backend": "kimi", "project": "/p", "state": "closed",
+             "query_count": 43, "last_activity": 2, "last_access": 2},
+            {"session_id": "new", "agent_id": "a1", "name": "GUEST",
+             "backend": "kimi", "project": "/p", "state": "open",
+             "query_count": 43, "last_activity": 3, "last_access": 3},
+            {"session_id": "solo", "agent_id": "b1", "name": "solo run",
+             "backend": "grok", "project": "/p", "state": "closed",
+             "query_count": 2, "last_activity": 4, "last_access": 4},
+        ]
+        sl.load_bookmarks = lambda project=None: set()
+        try:
+            text, index = sl.build_for_window(_win_for(["/p"]), cols=80)
+        finally:
+            (sl.sublime, sl.load_saved_sessions, sl.load_bookmarks) = prev
+        self.assertEqual(sorted(r["session_id"] for r in index), ["new", "solo"])
+        self.assertEqual(text.count("GUEST"), 1)
+        self.assertIn("HISTORY (2)", text)
+
+    def test_a_live_row_stands_for_its_whole_chain(self):
+        """Grok mints a new id per resume: the registry knows only the current
+        one, so a star left on an earlier incarnation must still show."""
+        live = [{"kind": "live", "session_id": "new", "agent_id": "a1",
+                 "name": "GUEST", "backend": "grok", "status": "ready",
+                 "query_count": 43, "same_window": True, "view_id": 1,
+                 "last_access": 9, "last_activity": 9}]
+        saved = [{"session_id": "old", "agent_id": "a1"},
+                 {"session_id": "new", "agent_id": "a1"}]
+        sl.tag_live_chains(live, saved)
+        self.assertEqual(sorted(sl.row_ids(live[0])), ["new", "old"])
+        text, index = sl.render_list(live, [], [], starred={"old"}, cols=80)
+        self.assertIn(sl.STAR_MARK + " GUEST", text)
+        self.assertTrue(sl._pinned(index[0], {"old"}))
+        # A lone session gets no chain to carry.
+        solo = [{"kind": "live", "session_id": "s", "agent_id": "b1"}]
+        sl.tag_live_chains(solo, saved)
+        self.assertNotIn("chain_ids", solo[0])
+
+    def test_pinning_a_collapsed_row_pins_every_incarnation(self):
+        import json
+        from tests.stubs import FakeView, install
+        sublime = install()
+        prev = (sl.sublime, sl.load_bookmarks, sl.load_bookmark_records,
+                sl.save_bookmarks, sl.refresh_session_list)
+        row = self._rec("new", "a1", section="HISTORY")
+        row["chain_ids"] = ["old", "new"]
+        row["line"] = 3
+        saved = []
+
+        class _Win:
+            def folders(self):
+                return ["/p"]
+
+        view = FakeView(3)
+        view.settings().set(sl.SETTING, True)
+        view.settings().set(sl.ROWS_KEY, json.dumps([row]))
+        view._sel = [types.SimpleNamespace(begin=lambda: 0)]
+        view.sel = lambda: view._sel
+        view.rowcol = lambda pt: (2, 0)
+        win = _Win()
+        view.window = lambda: win
+        sl.sublime = sublime
+        sl.load_bookmarks = lambda project=None: set()
+        sl.load_bookmark_records = lambda project=None: {}
+        sl.save_bookmarks = lambda starred, project=None, records=None: (
+            saved.append(set(starred)) or True)
+        sl.refresh_session_list = lambda w: None
+        try:
+            cmd = sl.SubmarineSessionListStarCommand()
+            cmd.view = view
+            cmd.run(None)
+            self.assertEqual(saved[-1], {"old", "new"})
+            # Pinned now: the same key unstars the whole session again.
+            sl.load_bookmarks = lambda project=None: {"new"}
+            cmd.run(None)
+            self.assertEqual(saved[-1], set())
+        finally:
+            (sl.sublime, sl.load_bookmarks, sl.load_bookmark_records,
+             sl.save_bookmarks, sl.refresh_session_list) = prev
+
+    def test_deleting_a_collapsed_row_drops_every_incarnation(self):
+        dropped = []
+        prev_remove = sl.remove_saved_session
+        prev_bookmarks = sl.load_bookmarks
+        sl.remove_saved_session = lambda sid: dropped.append(sid) or True
+        sl.load_bookmarks = lambda project=None: set()
+        row = self._rec("new", "a1", section="HISTORY")
+        row["chain_ids"] = ["old", "mid", "new"]
+        try:
+            self.assertTrue(sl.close_row(None, row))
+        finally:
+            sl.remove_saved_session = prev_remove
+            sl.load_bookmarks = prev_bookmarks
+        self.assertEqual(sorted(dropped), ["mid", "new", "old"])
 
 
 class TestRenderSessionList(unittest.TestCase):
@@ -65,7 +634,7 @@ class TestRenderSessionList(unittest.TestCase):
         self.assertIn("CURRENT (1)", text)
         self.assertIn("HISTORY (1)", text)
         self.assertIn("Skin editor", text)
-        self.assertIn("△ old plan", text)
+        self.assertIn(sl.STAR_MARK + " old plan", text)
         self.assertNotIn("★", text)
         self.assertIn("r rename", text)
         self.assertNotIn("refresh", text)
@@ -159,11 +728,15 @@ class TestRenderSessionList(unittest.TestCase):
         }]
         text, _ = sl.render_list(live, [], [], cols=80)
         rows = [ln for ln in text.splitlines()
-                if ln[:1] in ("○", "●") and "CURRENT" not in ln]
+                if _row_mark(ln) in ("○", "●")]
         self.assertEqual(len(rows), 2)
         self.assertEqual(len(rows[0].rstrip()), len(rows[1].rstrip()))
-        self.assertTrue(rows[0].startswith("○ deepseek "))
-        self.assertTrue(rows[1].startswith("○ grok     "))
+        # No nesting, no star, no current session: no lead field at all.
+        # Live rows carry the current-session column; on an unbound one it is
+        # blank, and the backend cell is untouched.
+        self.assertTrue(rows[0].startswith("  ○ deepseek "))
+        self.assertTrue(rows[1].startswith("  ○ grok     "))
+        self.assertEqual(rows[0].index("fitler"), rows[1].index("hello"))
         self.assertEqual(rows[0].index("fitler"), rows[1].index("hello"))
 
     def test_one_line_title_escapes_newline(self):
@@ -209,8 +782,7 @@ class TestRenderSessionList(unittest.TestCase):
             "query_count": 1, "same_window": True,
         }]
         text, _ = sl.render_list(live, [], [], cols=80)
-        row = [ln for ln in text.splitlines()
-               if ln.startswith("○") and "CURRENT" not in ln][0]
+        row = [ln for ln in text.splitlines() if _row_mark(ln) == "○"][0]
         self.assertIn("Library", row)
         self.assertNotIn("…", row)
         self.assertIn(" 1q", row)
@@ -226,8 +798,7 @@ class TestRenderSessionList(unittest.TestCase):
             "query_count": 10, "same_window": True,
         }]
         text, _ = sl.render_list(live, [], [], cols=80)
-        row = [ln for ln in text.splitlines()
-               if ln.startswith("○") and "CURRENT" not in ln][0]
+        row = [ln for ln in text.splitlines() if _row_mark(ln) == "○"][0]
         i_q = row.rfind("10q")
         i_st = row.rfind("idle")
         self.assertGreater(i_q, 0)
@@ -236,7 +807,7 @@ class TestRenderSessionList(unittest.TestCase):
         self.assertGreater(i_st - (i_q + 3), 1)
 
     def test_title_uses_full_leftover(self):
-        pre = "○ grok     "
+        pre = "  ○ grok     "
         extra = sl._right_meta({
             "kind": "live", "status": "ready", "query_count": 1,
         })
@@ -249,8 +820,7 @@ class TestRenderSessionList(unittest.TestCase):
             "query_count": 0, "same_window": True,
         }]
         text, _ = sl.render_list(live, [], [], cols=80)
-        row = [ln for ln in text.splitlines()
-               if ln.startswith("○") and "CURRENT" not in ln][0]
+        row = [ln for ln in text.splitlines() if _row_mark(ln) == "○"][0]
         self.assertEqual(len(row.rstrip()), 80)
         self.assertTrue(row.rstrip().endswith("idle"))
 
@@ -291,14 +861,14 @@ class TestRenderSessionList(unittest.TestCase):
         }]
         narrow, _ = sl.render_list(live, [], [], cols=24)
         nrow = [ln for ln in narrow.splitlines()
-                if ln.startswith("○") and "CURRENT" not in ln][0]
+                if _row_mark(ln) == "○"][0]
         self.assertEqual(len(nrow), 24)
         self.assertIn("GR", nrow)
         self.assertNotIn("ready", nrow)
         self.assertTrue(nrow.rstrip().endswith("…"))
         wide, _ = sl.render_list(live, [], [], cols=80)
         wrow = [ln for ln in wide.splitlines()
-                if ln.startswith("○") and "CURRENT" not in ln][0]
+                if _row_mark(ln) == "○"][0]
         self.assertGreater(len(wrow), len(nrow))
         self.assertIn("grok", wrow)
         self.assertIn("idle", wrow)
@@ -311,7 +881,7 @@ class TestRenderSessionList(unittest.TestCase):
             "query_count": 0, "same_window": True,
         }]
         sleep_txt, _ = sl.render_list(asleep, [], [], cols=80)
-        srow = [ln for ln in sleep_txt.splitlines() if ln.startswith("⏸")][0]
+        srow = [ln for ln in sleep_txt.splitlines() if _row_mark(ln) == "⏸"][0]
         self.assertNotIn("sleeping", srow)
 
     def test_right_cols_align(self):
@@ -328,7 +898,7 @@ class TestRenderSessionList(unittest.TestCase):
         ]
         text, _ = sl.render_list(live, [], [], cols=80)
         rows = [ln for ln in text.splitlines()
-                if ln[:1] in ("○", "●", "⏸") and "CURRENT" not in ln]
+                if _row_mark(ln) in ("○", "●", "⏸")]
         self.assertEqual(len(rows), 2)
         self.assertTrue(rows[0].rstrip().endswith("idle"))
         self.assertTrue(rows[1].rstrip().endswith("idle"))
@@ -342,7 +912,7 @@ class TestRenderSessionList(unittest.TestCase):
             "last_access": 1, "last_activity": 1,
         }
         mixed, _ = sl.render_list(live + [asleep], [], [], cols=80)
-        srow = [ln for ln in mixed.splitlines() if ln.startswith("⏸")][0]
+        srow = [ln for ln in mixed.splitlines() if _row_mark(ln) == "⏸"][0]
         self.assertRegex(srow, r"\b(\d+[smhdw]|now)\b")
         self.assertNotIn("idle", srow)
         self.assertEqual(len(srow.rstrip()), len(rows[0].rstrip()))
@@ -361,9 +931,8 @@ class TestRenderSessionList(unittest.TestCase):
             "last_access": 1, "last_activity": 1,
         }]
         text, _ = sl.render_list(live, here, [], cols=80)
-        run = [ln for ln in text.splitlines() if ln.startswith("⏸")][0]
-        hist = [ln for ln in text.splitlines()
-                if ln.startswith("·") and "HISTORY" not in ln][0]
+        run = [ln for ln in text.splitlines() if _row_mark(ln) == "⏸"][0]
+        hist = [ln for ln in text.splitlines() if _row_mark(ln) == "·"][0]
         self.assertNotIn("pil", hist)
         self.assertEqual(len(run.rstrip()), len(hist.rstrip()))
 
@@ -460,10 +1029,15 @@ class TestRenderSessionList(unittest.TestCase):
         bound_row = dict(urow)
         bound_row["bound"] = True
         bound_row["status"] = "ready"
-        btext, _ = sl.render_list([bound_row], [], [], cols=80)
-        self.assertIn("▸ ", btext)
-        self.assertTrue(any(ln.startswith("▸") for ln in btext.splitlines()))
-        self.assertFalse(any(ln.startswith("▸") for ln in utext.splitlines()))
+        btext, _ = sl.render_list([bound_row, urow], [], [], cols=80)
+        lines = _session_lines(btext)
+        bound_line = [ln for ln in lines if _row_lead(ln)[:1] == sl.CUR_MARK][0]
+        plain_line = [ln for ln in lines if _row_lead(ln)[:1] != sl.CUR_MARK][0]
+        self.assertNotIn(sl.CUR_MARK, utext)
+        # One lead field width for the list, so the pointer's row lands its
+        # title in the same column as the row without it.
+        self.assertEqual(bound_line.index("done in background"),
+                         plain_line.index("done in background"))
         from tests.stubs import install
         sublime = install()
         ask = types.SimpleNamespace(
@@ -493,6 +1067,68 @@ class TestRenderSessionList(unittest.TestCase):
             sublime._claude_sessions = {}
         self.assertEqual([r["session_id"] for r in rows], ["ask", "work"])
         self.assertEqual(rows[0]["status"], "input")
+
+    def test_current_pointer_keeps_the_state_mark(self):
+        """The `▸` current pointer has its own leftmost column; it must not
+        displace the row's state icon."""
+        for status, mark in (("working", "●"), ("ready", "○"),
+                             ("sleeping", "⏸"), ("unread", "!"),
+                             ("input", "?")):
+            row = {
+                "kind": "live", "session_id": "s-%s" % status, "view_id": 3,
+                "name": "row for %s" % status, "backend": "claude",
+                "status": status, "query_count": 1, "same_window": True,
+                "bound": True, "last_access": 1, "last_activity": 1,
+            }
+            text, _ = sl.render_list([row], [], [], cols=80)
+            line = _session_lines(text)[0]
+            self.assertEqual(_row_lead(line)[:1], sl.CUR_MARK, status)
+            self.assertEqual(_row_mark(line), mark,
+                             "%s lost its state icon to the pointer" % status)
+
+    def test_unbound_rows_blank_the_pointer_column(self):
+        row = {
+            "kind": "live", "session_id": "s1", "view_id": 4,
+            "name": "not shown", "backend": "claude", "status": "working",
+            "query_count": 1, "same_window": True,
+            "last_access": 1, "last_activity": 1,
+        }
+        bound = dict(row)
+        bound.update(session_id="s2", view_id=5, name="shown", bound=True)
+        text, _ = sl.render_list([bound, row], [], [], cols=80)
+        lines = _session_lines(text)
+        bline = [ln for ln in lines if "shown" in ln][0]
+        line = [ln for ln in lines if "not shown" in ln][0]
+        self.assertEqual(_row_lead(bline)[:1], sl.CUR_MARK)
+        self.assertNotIn(sl.CUR_MARK, _row_lead(line))
+        self.assertEqual(_row_mark(line), "●")
+        self.assertEqual(_row_mark(bline), "●")
+        # The lead field is one width for the list, so titles stay aligned.
+        self.assertEqual(line.index("not shown"), bline.index("shown"))
+
+    def test_wide_pin_is_counted_in_the_columns(self):
+        """✨ renders two cells: the row is still exactly `cols` cells wide and
+        the meta after it lands where every other row's does."""
+        rows_in = [
+            _saved("a", "sparkled", access=2, queries=3),
+            _saved("b", "plain-row", access=1, queries=4),
+        ]
+        text, index = sl.render_list([], rows_in, [], {"a"}, cols=60)
+        lines = text.splitlines()
+        starred = [ln for ln in lines if "sparkled" in ln][0]
+        plain = [ln for ln in lines if "plain-row" in ln][0]
+        self.assertEqual(sl.cell_width(starred), 60)
+        self.assertEqual(sl.cell_width(plain), 60)
+        # The pad before the meta is what keeps the right edge aligned.
+        self.assertEqual(sl.cell_width(starred.split("3q")[0]),
+                         sl.cell_width(plain.split("4q")[0]))
+        del index
+
+    def test_wide_title_pads_to_the_column(self):
+        text, _ = sl.render_list([_live("c", "宽标题会话", access=1)],
+                                 [], [], cols=50)
+        line = [ln for ln in text.splitlines() if "宽标题" in ln][0]
+        self.assertEqual(sl.cell_width(line), 50)
 
     def test_history_sorts_by_access_time(self):
         prev = sl.load_saved_sessions
@@ -592,10 +1228,12 @@ class TestRenderSessionList(unittest.TestCase):
         self.assertIn("HISTORY (2)", text)
         ids = [r["session_id"] for r in index]
         self.assertEqual(ids, ["pin", "run", "oldpin", "old"])
-        self.assertIn("△ pinned live", text)
-        self.assertIn("△ pinned hist", text)
-        self.assertNotIn("△ plain live", text)
-        self.assertNotIn("△ plain hist", text)
+        rows = {r["session_id"]: ln for r, ln in
+                zip(index, _session_lines(text))}
+        self.assertIn(sl.STAR_MARK + " pinned live", text)
+        self.assertIn(sl.STAR_MARK + " pinned hist", text)
+        self.assertNotIn(sl.STAR_MARK + " plain live", text)
+        self.assertNotIn(sl.STAR_MARK + " plain hist", text)
         cur = text.split("CURRENT")[1].split("HISTORY")[0]
         self.assertLess(cur.find("pinned live"), cur.find("plain live"))
         hist = text.split("HISTORY")[1]
@@ -749,6 +1387,8 @@ class TestRenderSessionList(unittest.TestCase):
         self.assertIn(sl.CHILD_MARK, by_name["child-a"])
         self.assertIn(sl.CHILD_MARK, by_name["grand"])
         self.assertIn(sl.CHILD_MARK, by_name["child-b"])
+        # Flat cue, not an indent: a grandchild's title sits in the same column
+        # as its parent's and its siblings'.
         self.assertLess(by_name["child-a"].index(sl.CHILD_MARK),
                         by_name["grand"].index(sl.CHILD_MARK))
         self.assertEqual(
@@ -814,7 +1454,7 @@ class TestRenderSessionList(unittest.TestCase):
         child = [ln for ln in lines if "star-child" in ln][0]
         grand = [ln for ln in lines if "grand" in ln][0]
         parent = [ln for ln in lines if ln.endswith("parent") or " parent" in ln][0]
-        self.assertIn("△", child)
+        self.assertIn(sl.STAR_MARK, child)
         self.assertNotIn(sl.CHILD_MARK, child)
         self.assertIn(sl.CHILD_MARK, grand)
         self.assertNotIn(sl.CHILD_MARK, parent)
@@ -831,8 +1471,8 @@ class TestRenderSessionList(unittest.TestCase):
         self.assertEqual(
             [r["session_id"] for r in index], ["p", "c", "g", "o"])
         self.assertEqual([r.get("depth") for r in index], [0, 1, 2, 0])
-        self.assertIn("△ star-root", text)
-        self.assertNotIn("△ kid", text)
+        self.assertIn(sl.STAR_MARK + " star-root", text)
+        self.assertNotIn(sl.STAR_MARK + " kid", text)
         kid = [ln for ln in _session_lines(text) if "kid" in ln][0]
         self.assertIn(sl.CHILD_MARK, kid)
 
@@ -848,7 +1488,7 @@ class TestRenderSessionList(unittest.TestCase):
         self.assertEqual([r.get("depth") for r in index], [0, 1, 0])
         kid = [ln for ln in _session_lines(text) if "star-kid" in ln][0]
         self.assertIn(sl.CHILD_MARK, kid)
-        self.assertIn("△", kid)
+        self.assertIn(sl.STAR_MARK, kid)
 
     def test_tree_row_index_opens_grandchild(self):
         live = [
@@ -951,7 +1591,8 @@ class TestRenderSessionList(unittest.TestCase):
         self.assertEqual([r["session_id"] for r in index], ["p", "c"])
         self.assertEqual([r.get("depth") for r in index], [0, 1])
         child = [ln for ln in _session_lines(text) if "hist-child" in ln][0]
-        self.assertTrue(child.startswith("·"))
+        self.assertEqual(child[0], "·")   # history rows carry no current column
+        self.assertIn(sl.CHILD_MARK, child)
         self.assertIn(sl.CHILD_MARK, child)
 
     def test_collect_live_copies_parent_agent_id(self):

@@ -1,6 +1,12 @@
-"""Load a short tail of a saved transcript to paint when reopening history."""
+"""Load a short tail of a saved transcript to paint when reopening history.
+
+Grok needs one extra step: its CLI mints a new session id per resume, so the
+turns of a resumed session sit in the directory of an earlier id. The saved
+records that share an `agent_id` are that chain (see `grok_chat_paths`).
+"""
 from __future__ import annotations
 
+import glob
 import json
 import os
 import re
@@ -248,10 +254,64 @@ def find_kimi_wire(session_id: str, cwd: str = "") -> Optional[str]:
     return None
 
 
-def find_grok_chat(session_id: str, cwd: str = "") -> Optional[str]:
+def grok_sessions_root() -> str:
+    return os.path.expanduser("~/.grok/sessions")
+
+
+def _saved_session_rows() -> List[dict]:
+    try:
+        from core.records import load_saved_sessions
+        return load_saved_sessions() or []
+    except Exception:
+        return []
+
+
+def _grok_chain_ids(session_id: str, agent_id: str) -> List[str]:
+    """This session's id and the ids it was resumed under, oldest first.
+
+    The grok CLI mints a NEW session id on every resume, so a resumed session's
+    own `chat_history.jsonl` starts empty and the earlier turns stay in an
+    earlier id's directory. Saved records sharing an `agent_id` are that chain;
+    when there is none (a fork carries a fresh agent_id, a session reopened
+    without one carries none) the resumed id's own record still names the agent
+    it belongs to.
+    """
+    if not session_id:
+        return []
+    rows = _saved_session_rows()
+
+    def chain(aid: str) -> List[dict]:
+        if not aid:
+            return []
+        return [r for r in rows
+                if (r.get("agent_id") or "") == aid and r.get("session_id")]
+
+    members = chain(agent_id)
+    if not members:
+        for r in rows:
+            if r.get("session_id") == session_id:
+                members = chain(r.get("agent_id") or "")
+                break
+    if not members:
+        return [session_id]
+    try:
+        members.sort(key=lambda r: float(r.get("last_activity") or 0))
+    except (TypeError, ValueError):
+        pass
+    ids = []
+    for r in members:
+        sid = r.get("session_id")
+        if sid and sid not in ids:
+            ids.append(sid)
+    if session_id not in ids:
+        ids.append(session_id)
+    return ids
+
+
+def _grok_chat_for_id(session_id: str, cwd: str = "") -> Optional[str]:
     if not session_id:
         return None
-    root = os.path.expanduser("~/.grok/sessions")
+    root = grok_sessions_root()
     if cwd:
         enc = cwd.replace("/", "%2F")
         cand = os.path.join(root, enc, session_id, "chat_history.jsonl")
@@ -267,6 +327,73 @@ def find_grok_chat(session_id: str, cwd: str = "") -> Optional[str]:
     except OSError:
         return None
     return None
+
+
+def find_grok_chat(session_id: str, cwd: str = "") -> Optional[str]:
+    """`chat_history.jsonl` for one session id."""
+    return _grok_chat_for_id(session_id, cwd)
+
+
+def grok_chat_paths(session_id: str, cwd: str = "",
+                    agent_id: str = "") -> List[str]:
+    """`chat_history.jsonl` for the resumed id and its chain, oldest first."""
+    paths: List[str] = []
+    for sid in _grok_chain_ids(session_id, agent_id):
+        path = find_grok_chat(sid, cwd)
+        if path and path not in paths:
+            paths.append(path)
+    return paths
+
+
+def find_grok_history(session_id: str, cwd: str = "",
+                      agent_id: str = "") -> Optional[str]:
+    """The chain file that holds the turns — the old one for a fresh resume."""
+    paths = grok_chat_paths(session_id, cwd, agent_id)
+    if not paths:
+        return None
+    for path in reversed(paths):
+        if parse_grok_chat(path):
+            return path
+    return paths[-1]
+
+
+def _cwd_of_chat(path: str) -> str:
+    """The project directory a grok session directory is filed under."""
+    if not path:
+        return ""
+    enc = os.path.basename(os.path.dirname(os.path.dirname(path)))
+    try:
+        from urllib.parse import unquote
+        out = unquote(enc)
+    except Exception:
+        out = enc
+    return out if os.path.isabs(out) else ""
+
+
+def grok_session_cwd(session_id: str, cwd: str = "",
+                     agent_id: str = "") -> str:
+    """Directory the grok CLI filed `session_id` under, "" when unknown.
+
+    An id the CLI never filed (a fork's fresh id) falls back to the directory of
+    the chain member that does hold the conversation.
+    """
+    path = find_grok_chat(session_id, cwd) or find_grok_history(
+        session_id, cwd, agent_id)
+    return _cwd_of_chat(path)
+
+
+def transcript_cwd(backend: str, session_id: str, cwd: str = "",
+                   agent_id: str = "") -> str:
+    """The directory a backend filed this session's transcript under.
+
+    Grok scopes `session/load` to the cwd: resuming a session from another
+    project fails with FS_NOT_FOUND and the CLI silently opens a fresh one with
+    no prior turns. The session's own directory is then the one to send, not the
+    window's project.
+    """
+    if (backend or "").lower() != "grok":
+        return ""
+    return grok_session_cwd(session_id, cwd, agent_id)
 
 
 def find_claude_jsonl(session_id: str, cwd: str = "") -> Optional[str]:
@@ -291,26 +418,208 @@ def find_claude_jsonl(session_id: str, cwd: str = "") -> Optional[str]:
     return None
 
 
+# Codex keeps one rollout per thread:
+#   <CODEX_HOME>/sessions/YYYY/MM/DD/rollout-<ts>-<threadId>.jsonl
+# Records are {type, payload, timestamp}. The real prompt is
+# event_msg/user_message; response_item messages with role user/developer are
+# AGENTS.md and <environment_context> injections, not turns.
+_CODEX_INJECTIONS = (
+    "# AGENTS.md",
+    "<environment_context>",
+    "<user_instructions>",
+    "<permissions instructions>",
+    "<INSTRUCTIONS>",
+)
+
+
+def codex_sessions_root() -> str:
+    home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+    return os.path.join(home, "sessions")
+
+
+def _codex_skip_prompt(text: str) -> bool:
+    t = (text or "").lstrip()
+    if not t:
+        return True
+    if t.startswith(_CODEX_INJECTIONS):
+        return True
+    if "<environment_context>" in t[:400]:
+        return True
+    return _skip_synthetic_prompt(t)
+
+
+def _codex_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return _flatten(content)
+    parts = []
+    for b in content:
+        if isinstance(b, dict):
+            parts.append(b.get("text") or "")
+        elif isinstance(b, str):
+            parts.append(b)
+    return "\n".join(p for p in parts if p)
+
+
+def parse_codex_rollout(path: str) -> List[dict]:
+    """Codex rollout jsonl → turns (user prompt + assistant text + tools).
+
+    Two on-disk generations: older rollouts carry event_msg/user_message plus
+    response_item messages, newer ones (cli 0.15x) carry event_msg/
+    item_completed items. Exactly one shape is present per file; the newer
+    one wins when both appear.
+    """
+    old_turns: List[dict] = []
+    new_turns: List[dict] = []
+    cur_old = None
+    cur_new = None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                payload = rec.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                rtype = rec.get("type")
+                ptype = payload.get("type")
+                if rtype == "event_msg":
+                    if ptype == "user_message":
+                        text = payload.get("message") or ""
+                        if _codex_skip_prompt(text):
+                            continue
+                        cur_old = _new_turn(text)
+                        old_turns.append(cur_old)
+                    elif ptype == "item_completed":
+                        cur_new = _codex_item_turn(
+                            payload.get("item"), cur_new, new_turns)
+                    elif ptype == "task_complete":
+                        # Rollouts without assistant response items — the
+                        # closer carries the turn's final text.
+                        last = payload.get("last_agent_message")
+                        for cur in (cur_old, cur_new):
+                            if cur is not None and last and not cur["reply"]:
+                                cur["reply"] = str(last)
+                    continue
+                if rtype != "response_item":
+                    continue
+                if ptype == "message":
+                    if payload.get("role") != "assistant" or cur_old is None:
+                        continue
+                    text = _codex_text(payload.get("content"))
+                    if text:
+                        cur_old["reply"] += text
+                elif ptype in ("function_call", "custom_tool_call"):
+                    name = payload.get("name")
+                    if name and cur_old is not None:
+                        cur_old["tools"].append(str(name))
+    except OSError:
+        return []
+    return new_turns or old_turns
+
+
+def _codex_item_turn(item, cur, turns: List[dict]):
+    """Fold one newer-format item_completed into `cur`. Returns the new cur."""
+    if not isinstance(item, dict):
+        return cur
+    itype = item.get("type")
+    if itype == "UserMessage":
+        text = _codex_text(item.get("content"))
+        if _codex_skip_prompt(text):
+            return cur
+        cur = _new_turn(text)
+        turns.append(cur)
+        return cur
+    if cur is None:
+        return cur
+    if itype == "AgentMessage":
+        text = _codex_text(item.get("content"))
+        if text:
+            cur["reply"] += text
+    elif itype == "CommandExecution":
+        cur["tools"].append("exec_command")
+    elif itype == "McpToolCall":
+        server = item.get("server")
+        tool = item.get("tool")
+        name = ("%s.%s" % (server, tool)) if server and tool else (tool or "")
+        if name:
+            cur["tools"].append(str(name))
+    return cur
+
+
+def _codex_rollout_cwd(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            rec = json.loads(f.readline().strip())
+        payload = rec.get("payload") or {}
+        return str(payload.get("cwd") or "").rstrip("/")
+    except Exception:
+        return ""
+
+
+def find_codex_rollout(session_id: str, cwd: str = "") -> Optional[str]:
+    """Newest rollout for a thread id, preferring one recorded in `cwd`."""
+    if not session_id:
+        return None
+    root = codex_sessions_root()
+    if not os.path.isdir(root):
+        return None
+    try:
+        pattern = os.path.join(root, "**", "rollout-*%s.jsonl" % session_id)
+        matches = [p for p in glob.glob(pattern, recursive=True)
+                   if os.path.isfile(p)]
+    except Exception:
+        return None
+    if not matches:
+        return None
+    try:
+        matches.sort(key=lambda p: os.path.getmtime(p) or 0, reverse=True)
+    except OSError:
+        pass
+    if cwd:
+        want = (cwd or "").rstrip("/")
+        for p in matches:
+            if _codex_rollout_cwd(p) == want:
+                return p
+    return matches[0]
+
+
 def find_session_jsonl(session_id: str, backend: str = "",
-                       cwd: str = "") -> Optional[str]:
-    """Backend transcript: grok chat_history, kimi wire, claude projects jsonl."""
+                       cwd: str = "", agent_id: str = "") -> Optional[str]:
+    """Backend transcript: grok chat_history, kimi wire, codex rollout,
+    claude projects jsonl."""
     backend = (backend or "claude").lower()
     if backend == "grok":
-        return find_grok_chat(session_id, cwd)
+        return find_grok_history(session_id, cwd, agent_id)
     if backend == "kimi":
         return find_kimi_wire(session_id, cwd)
+    if backend == "codex":
+        return find_codex_rollout(session_id, cwd)
     return find_claude_jsonl(session_id, cwd)
 
 
 def load_turns(session_id: str, backend: str, cwd: str = "",
-               claude_jsonl: str = "") -> List[dict]:
+               claude_jsonl: str = "", agent_id: str = "") -> List[dict]:
+    """Turns for a session. A grok session is read across its whole resume chain,
+    so a reopened session shows the turns it had before it was resumed."""
     backend = (backend or "claude").lower()
     if backend == "grok":
-        path = find_grok_chat(session_id, cwd)
-        return parse_grok_chat(path) if path else []
+        turns: List[dict] = []
+        for path in grok_chat_paths(session_id, cwd, agent_id):
+            turns.extend(parse_grok_chat(path))
+        return turns
     if backend == "kimi":
         path = find_kimi_wire(session_id, cwd)
         return parse_kimi_wire(path) if path else []
+    if backend == "codex":
+        path = find_codex_rollout(session_id, cwd)
+        return parse_codex_rollout(path) if path else []
     path = claude_jsonl if claude_jsonl and os.path.isfile(claude_jsonl) else find_claude_jsonl(session_id, cwd)
     return parse_claude_jsonl(path) if path else []
 
@@ -358,8 +667,14 @@ def paint_resume_preview(session) -> bool:
     if cur is not None and (getattr(cur, "prompt", None) or getattr(cur, "events", None)):
         return False
     fork = bool(getattr(session, "fork", False))
-    sid = session.resume_id if fork else (
-        getattr(session, "session_id", None) or session.resume_id or "")
+    resume_id = getattr(session, "resume_id", None)
+    live_id = getattr(session, "session_id", None)
+    # On-disk history belongs to the RESUMED session, not to whatever id the
+    # backend just handed back. _on_init has already overwritten session_id,
+    # and on the resume-fallback path that is a brand-new session with no
+    # transcript of its own — keying on it painted nothing for a reopened
+    # closed session even though resume_id's transcript was on disk.
+    sid = resume_id or live_id or ""
     backend = getattr(session, "backend", None) or "claude"
     cwd = ""
     try:
@@ -367,14 +682,17 @@ def paint_resume_preview(session) -> bool:
     except Exception:
         cwd = getattr(session, "cwd", None) or ""
     jsonl = ""
-    if not fork:
+    # Only hand load_turns a path resolved from the live id when that id IS
+    # the transcript owner; otherwise let it resolve from `sid`.
+    if not fork and sid and sid == live_id:
         try:
             finder = getattr(session, "_find_jsonl_path", None)
             if callable(finder):
                 jsonl = finder() or ""
         except Exception:
             jsonl = ""
-    turns = load_turns(sid, backend, cwd, jsonl)
+    turns = load_turns(sid, backend, cwd, jsonl,
+                       agent_id=getattr(session, "agent_id", None) or "")
     chosen = select_preview(turns)
     if not chosen:
         return False

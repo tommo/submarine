@@ -99,8 +99,17 @@ otherwise it calls `HostView.attach(window, target)`:
    `conversations`), re-stamp identity/backend/theme on the view
    (`_persist_view_identity`), re-render pending modals from B's serialized
    modal state, restore B's surface (draft, scroll, input mode if idle).
-5. Session list row for B gets the "bound" marker (e.g. `▸`); A's row shows
-   its live status (`●` working / `!` unread / `?` input).
+5. Session list row for B gets the "bound" marker in its own leftmost column
+   (`▸ `, blank `  ` otherwise); the state mark keeps the column right after it,
+   so a bound row still shows its live status (`●` working / `!` unread /
+   `?` input). That column is carried by live rows only — the CURRENT section,
+   the only place a current session can be — so a history row starts with its
+   mark and nothing else (`· kimi     name…`). Every other part of a row is
+   unchanged: the state mark, the nesting indent (` ↳`, `  ↳`) before the
+   backend column, the `✨ ` pin before the title, the `12q   3h` meta
+   (`ui/session_list.py:_fmt_row`). The highlighter matches the column at
+   `^▸ ` / `^  ` in the `row_lead` context, and the mark at column 0 directly,
+   in `SessionList.sublime-syntax`.
 
 First attach when no host view exists: create it via the existing
 `OutputSheet.show()` path. Resume of a *saved* (not live) session:
@@ -170,7 +179,10 @@ ST restores the scratch host view with its settings. On activation,
 `_restore_session` (`ui/listeners.py:433-538`) matches
 `submarine_session_id` = last bound session → restore bound as today.
 Other previously-live sessions are *not* auto-restored (same as background
-sessions today); they appear in HISTORY and resume on demand.
+sessions today); they appear in HISTORY and resume on demand. A session
+occupies one HISTORY row however many times it was resumed: incarnations
+sharing an `agent_id` collapse to the newest one
+(`ui/session_list.py:collapse_chains`), which is what a resume targets.
 
 Guards: `on_activated`'s restore must not fire while a session is mapped
 for the view (already the case) and must not fire mid-swap — swap runs
@@ -194,6 +206,35 @@ Detached sessions are unaffected.
 - `ui_mode = "tabs"`: tear-off/dock are hidden no-ops.
 - Closing a torn-off sheet follows the normal close intercept; the
   session stays torn-off and the next open recreates its sheet.
+
+## Tab position per window
+
+Both tracked sheets remember their slot (split + tab index) **per window**, so
+a sheet that is closed and reopened — or created fresh after a restart —
+returns to the split the user keeps it in instead of landing at the end of the
+active group. The session sheet and the session list are tracked
+**independently**, because they usually live in different splits.
+
+- `core/placement.py`: `remember_view_tab`, `apply_view_tab`, `view_tab_kind`,
+  `window_tab_key`, plus the `window_tabs.json` store. Kinds are `session`
+  (the agent output sheet) and `list` (the Sessions scratch view); the older
+  `remember_session_tab` / `apply_session_tab` are session-kind wrappers.
+- Wired where each view is created: `ui/sheet.py` after `new_file()` for the
+  session sheet, `ui/session_list.py:SessionListView._create` for the list.
+- Saved in `ui/listeners.py` on activation, on `on_pre_close` of a tracked
+  view, and on `on_pre_close_window` (Sublime raises no event for a tab drag,
+  but a drag focuses the view).
+- Identity: `workspace_file_name()` → `project_file_name()` → sorted folders →
+  runtime window id, so an entry survives a restart whenever the window has a
+  workspace or project file. The in-memory copy in `window.settings()`
+  (`submarine_tabs`, per kind) is checked first.
+- Store shape: `{"<window key>": {"session": {group, index, ts},
+  "list": {…}, "ts": …}}`. A legacy flat entry (`{group, index, ts}`) is read
+  as the session slot and rewritten nested on the next save; the pre-kind
+  window setting `submarine_session_tab` is still honoured.
+- A remembered group that no longer exists falls back to the active group, and
+  the index is clamped to the group's current tab count. Moving into an empty
+  group is allowed — a tracked sheet is often alone in its own split.
 
 ## Mode switching at runtime
 

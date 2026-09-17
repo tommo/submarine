@@ -10,6 +10,7 @@ onto the sublime module so they survive soft package reloads.
 from __future__ import annotations
 
 import os
+import signal
 import sys
 import time
 from typing import Any, Callable, Dict, Optional
@@ -649,6 +650,7 @@ def plugin_loaded():
         pass
 
     _drop_stale_sessions()
+    _reap_orphan_bridges()
     _bind_registry()
     _install_create_session_compat()
     _run_legacy_migration()
@@ -720,7 +722,129 @@ def _on_ui_mode_change():
         log_plugin("ui_mode change: %s" % e)
 
 
+def _shutdown_live_bridges():
+    # type: () -> int
+    """Ask every live session's bridge to exit before the modules unload.
+
+    A soft reload replaces the plugin's Python while the bridge subprocesses
+    keep running — the host process still holds their pipes, so they never see
+    EOF and nothing shuts them down.
+    """
+    n = 0
+    try:
+        live = list(iter_sessions())
+    except Exception:
+        live = list((getattr(sublime, "_submarine_sessions", None) or {}).values())
+    for s in live:
+        client = getattr(s, "client", None)
+        if client is None:
+            continue
+        try:
+            client.send("shutdown", {})
+            n += 1
+        except Exception:
+            pass
+    return n
+
+
+def _orphan_bridge_pids(ps_text, self_pid):
+    # type: (str, int) -> list
+    """PIDs of this host's leftover bridge processes, deepest first.
+
+    Descendants of this plugin_host only, so another Sublime instance running
+    the same plugin dir is never touched. Codex is the backend where a leak is
+    not merely wasted memory: an abandoned app-server keeps the thread writer,
+    and the next resume of that thread fails with -32600 "already has an active
+    writer". Bridges are matched too — killing the codex child first lets the
+    bridge see EOF instead of respawning it.
+    """
+    rows = {}  # type: dict
+    for line in (ps_text or "").splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            pid = int(parts[0])
+            ppid = int(parts[1])
+        except ValueError:
+            continue
+        rows[pid] = (ppid, parts[2])
+
+    def _ours(pid):
+        depth = 0
+        seen = set()
+        while pid in rows and pid not in seen:
+            seen.add(pid)
+            ppid = rows[pid][0]
+            depth += 1
+            if ppid == self_pid:
+                return depth
+            pid = ppid
+        return 0
+
+    found = []  # type: list
+    for pid, (_ppid, cmd) in rows.items():
+        ours = _ours(pid)
+        if not ours:
+            continue
+        if "app-server" in cmd and "--agent-id=agent-" in cmd:
+            found.append((ours, pid))
+        elif "/bridge/" in cmd and "_main.py" in cmd:
+            found.append((ours, pid))
+    # Deepest first: the codex child dies before its bridge can respawn it.
+    found.sort(reverse=True)
+    return [pid for _depth, pid in found]
+
+
+def _reap_orphan_bridges():
+    # type: () -> int
+    """Kill bridge children left behind by an earlier plugin load."""
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["ps", "-Ao", "pid=,ppid=,command="],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=5,
+        ).stdout.decode("utf-8", "replace")
+    except Exception:
+        return 0
+    pids = _orphan_bridge_pids(out, os.getpid())
+    if not pids:
+        return 0
+    killed = 0
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            killed += 1
+        except OSError:
+            pass
+    # Escalate for anything that ignored SIGTERM.
+    try:
+        time.sleep(0.3)
+        for pid in pids:
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                continue
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+    except Exception:
+        pass
+    if killed:
+        log_plugin("plugin_loaded: reaped %d orphan bridge process(es): %s"
+                   % (killed, pids))
+    return killed
+
+
 def plugin_unloaded():
+    try:
+        n = _shutdown_live_bridges()
+        if n:
+            log_plugin("plugin_unloaded: asked %d bridge(s) to stop" % n)
+    except Exception as e:
+        log_plugin("plugin_unloaded bridges: %s" % e)
     try:
         sublime.load_settings(SETTINGS_FILE).clear_on_change("submarine_ui_mode")
     except Exception:
@@ -730,6 +854,12 @@ def plugin_unloaded():
             for v in w.views():
                 if keys.is_output_view(v):
                     _clear_view_phantoms(v)
+    except Exception:
+        pass
+
+    try:
+        from ui.session_list import stop_session_list_poll
+        stop_session_list_poll()
     except Exception:
         pass
 

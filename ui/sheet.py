@@ -94,6 +94,13 @@ class OutputSheet:
         st = self.view.settings()
         keys.write_setting(st, keys.OUTPUT, True)
         st.set("auto_indent", False)
+        # A new sheet lands at the end of the active group; put it back where
+        # this window last had its session sheet.
+        try:
+            from core.placement import apply_session_tab
+            apply_session_tab(self.window, self.view)
+        except Exception as e:
+            print("[Submarine] session tab: %s" % e)
         self.apply_output_settings()
         if sublime is not None:
             sublime.load_settings(keys.OUTPUT_SETTINGS).add_on_change(

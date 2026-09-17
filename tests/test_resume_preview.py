@@ -13,8 +13,140 @@ from features.resume import (
     display_prompt, select_preview, parse_claude_jsonl, parse_grok_chat,
     parse_kimi_wire, load_turns, format_turn_body,
     find_session_jsonl, find_claude_jsonl, paint_resume_preview,
-    attach_resume_preview,
+    attach_resume_preview, grok_session_cwd, transcript_cwd,
 )
+
+
+class TestGrokResumeChain(unittest.TestCase):
+    """A resumed grok session keeps its history.
+
+    The CLI mints a new session id per resume, so the resumed id's own
+    chat_history starts empty; the earlier turns live under the id it was
+    resumed from. Records sharing an agent_id are that chain.
+    """
+
+    def setUp(self):
+        import core.records as records
+        from features import resume
+        self.resume = resume
+        self._root = resume.grok_sessions_root
+        self._rows = records.load_saved_sessions
+        self._td = tempfile.TemporaryDirectory(prefix="grok-chain-")
+        resume.grok_sessions_root = lambda: self._td.name
+
+    def tearDown(self):
+        import core.records as records
+        self.resume.grok_sessions_root = self._root
+        records.load_saved_sessions = self._rows
+        self._td.cleanup()
+
+    def _session_dir(self, sid, turns):
+        path = os.path.join(self._td.name, "%2Fproj", sid)
+        os.makedirs(path, exist_ok=True)
+        with open(os.path.join(path, "chat_history.jsonl"), "w",
+                  encoding="utf-8") as f:
+            f.write(json.dumps({"type": "system", "content": "prompt"}) + "\n")
+            for i in range(turns):
+                f.write(json.dumps({
+                    "type": "user",
+                    "content": [{"type": "text", "text": "question %d" % i}],
+                }) + "\n")
+                f.write(json.dumps({
+                    "type": "assistant",
+                    "content": [{"type": "text", "text": "answer %d" % i}],
+                }) + "\n")
+        return path
+
+    def _store(self, rows):
+        import core.records as records
+        records.load_saved_sessions = lambda plugin_dir=None: rows
+
+    def test_resumed_id_reads_the_earlier_transcript(self):
+        self._session_dir("old-sid", 3)
+        self._session_dir("new-sid", 0)
+        self._store([
+            {"session_id": "old-sid", "agent_id": "agent-1", "last_activity": 1},
+            {"session_id": "new-sid", "agent_id": "agent-1", "last_activity": 2},
+        ])
+        # The stored record names the agent, so even a caller that passes no
+        # agent_id (the history quick panel) reaches the earlier transcript.
+        self.assertEqual(len(load_turns("new-sid", "grok", "/proj")), 3)
+        turns = load_turns("new-sid", "grok", "/proj", agent_id="agent-1")
+        self.assertEqual(len(turns), 3)
+        self.assertEqual(display_prompt(turns[0]["prompt"]), "question 0")
+        # reveal/open the transcript: the file that actually holds the turns
+        found = find_session_jsonl("new-sid", "grok", "/proj", "agent-1")
+        self.assertTrue(found.endswith(os.path.join("old-sid", "chat_history.jsonl")))
+
+    def test_chain_concatenates_in_order(self):
+        self._session_dir("old-sid", 2)
+        self._session_dir("new-sid", 1)
+        self._store([
+            {"session_id": "old-sid", "agent_id": "agent-1", "last_activity": 1},
+            {"session_id": "new-sid", "agent_id": "agent-1", "last_activity": 2},
+        ])
+        turns = load_turns("new-sid", "grok", "/proj", agent_id="agent-1")
+        self.assertEqual([display_prompt(t["prompt"]) for t in turns],
+                         ["question 0", "question 1", "question 0"])
+
+    def test_a_fork_finds_the_chain_through_the_resumed_id(self):
+        """A fork carries a fresh agent_id; the resume target's record links it
+        to the agent whose ids hold the transcript."""
+        self._session_dir("old-sid", 2)
+        self._session_dir("new-sid", 0)
+        self._store([
+            {"session_id": "old-sid", "agent_id": "agent-1", "last_activity": 1},
+            {"session_id": "new-sid", "agent_id": "agent-1", "last_activity": 2},
+        ])
+        turns = load_turns("old-sid", "grok", "/proj", agent_id="agent-fork")
+        self.assertEqual(len(turns), 2)
+
+    def test_the_session_cwd_is_the_directory_the_cli_filed_it_under(self):
+        """Resume sends the transcript's directory, not the window's project.
+
+        Grok refuses `session/load` for a cwd the session is not filed under.
+        """
+        self._session_dir("old-sid", 2)
+        self._store([
+            {"session_id": "old-sid", "agent_id": "agent-1",
+             "project": "/elsewhere", "last_activity": 1},
+        ])
+        self.assertEqual(grok_session_cwd("old-sid", "/elsewhere", "agent-1"),
+                         "/proj")
+        # An id the CLI never filed falls back to the id holding the turns.
+        self.assertEqual(grok_session_cwd("fresh-sid", "/elsewhere", "agent-1"),
+                         "/proj")
+        # Other backends resolve their own way; resume cwd is left alone.
+        self.assertEqual(transcript_cwd("claude", "old-sid", "/elsewhere"), "")
+
+    def test_the_resumed_session_takes_the_transcript_directory(self):
+        """A resume asks the features hook; a fork leaves the cwd alone."""
+        from core.session import Session
+        seen = {}
+
+        def resolver(backend, session_id, cwd="", agent_id=""):
+            seen.update(backend=backend, sid=session_id, cwd=cwd, agent=agent_id)
+            return "/proj"
+
+        class _S(object):
+            resume_id = "old-sid"
+            fork = False
+            backend = "grok"
+            cwd = "/elsewhere"
+            agent_id = "agent-1"
+            _transcript_cwd = staticmethod(resolver)
+
+        self.assertEqual(Session._resume_cwd(_S(), {"project": "/elsewhere"}),
+                         "/proj")
+        self.assertEqual(seen, {"backend": "grok", "sid": "old-sid",
+                                "cwd": "/elsewhere", "agent": "agent-1"})
+        _S.fork = True
+        self.assertEqual(Session._resume_cwd(_S(), {}), "")
+
+    def test_a_session_without_agent_id_is_unchanged(self):
+        self._session_dir("solo-sid", 2)
+        self._store([])
+        self.assertEqual(len(load_turns("solo-sid", "grok", "/proj")), 2)
 
 
 class TestRestoreIdentity(unittest.TestCase):
@@ -289,6 +421,181 @@ class TestResumePreview(unittest.TestCase):
         self.assertIn("hi back", s.output.calls[1][1])
         self.assertFalse(paint_resume_preview(s))  # already has conversations
 
+    def test_paint_uses_the_resumed_id_not_the_reopened_one(self):
+        """Closed session reopened fresh: history lives under resume_id.
+
+        Regression: _on_init overwrites session_id with the backend's new id
+        (resume-fallback), and the preview then looked for a transcript of a
+        session that had none — so a reopened closed session painted nothing.
+        """
+        seen = {}
+
+        class _Out(object):
+            def __init__(self):
+                self.calls = []
+                self.conversations = []
+                self.current = None
+
+            def prompt(self, text, context_names=None, context_refs=None):
+                self.calls.append(("prompt", text))
+
+            def text(self, content):
+                self.calls.append(("text", content))
+
+            def meta(self, duration, cost=None, usage=None):
+                self.calls.append(("meta", duration))
+
+        class _S(object):
+            resume_id = "closed-sid"
+            session_id = "brand-new-sid"
+            fork = False
+            quick_mode = False
+            backend = "grok"
+            cwd = "/proj"
+            output = None
+            on_init = []
+
+            def _cwd(self):
+                return "/proj"
+
+            def _find_jsonl_path(self):
+                raise AssertionError(
+                    "must not resolve a transcript from the reopened id")
+
+        s = _S()
+        s.output = _Out()
+        import features.resume as resume
+
+        orig = resume.load_turns
+
+        def _fake(sid, backend, cwd="", claude_jsonl="", **kw):
+            seen["sid"] = sid
+            seen["claude_jsonl"] = claude_jsonl
+            return [{"prompt": "the closed session's last ask",
+                     "reply": "and its answer", "tools": []}]
+
+        resume.load_turns = _fake
+        try:
+            self.assertTrue(paint_resume_preview(s))
+        finally:
+            resume.load_turns = orig
+        self.assertEqual(seen["sid"], "closed-sid")
+        self.assertEqual(seen["claude_jsonl"], "")
+        self.assertEqual(s.output.calls[0], ("prompt", "the closed session's last ask"))
+
+    def test_paint_without_resume_id_uses_the_live_id(self):
+        seen = {}
+
+        class _Out(object):
+            def __init__(self):
+                self.conversations = []
+                self.current = None
+
+            def prompt(self, text, context_names=None, context_refs=None):
+                pass
+
+            def text(self, content):
+                pass
+
+            def meta(self, duration, cost=None, usage=None):
+                pass
+
+        class _S(object):
+            resume_id = None
+            session_id = "live-sid"
+            fork = False
+            quick_mode = False
+            backend = "grok"
+            cwd = ""
+            output = None
+            on_init = []
+
+            def _cwd(self):
+                return ""
+
+            def _find_jsonl_path(self):
+                return "/tmp/live.jsonl"
+
+        import features.resume as resume
+        # A non-resumed session has no history to paint.
+        s = _S()
+        s.output = _Out()
+        self.assertFalse(paint_resume_preview(s))
+
+        s.resume_id = "resumed"
+        s.session_id = "live-sid"
+        orig = resume.load_turns
+        resume.load_turns = lambda sid, be, cwd="", j="", **kw: seen.update(
+            sid=sid, j=j) or []
+        try:
+            paint_resume_preview(s)
+        finally:
+            resume.load_turns = orig
+        self.assertEqual(seen["sid"], "resumed")
+
+    def test_on_init_paints_after_a_fallback_reopen(self):
+        """End to end through the real output view and the real parser.
+
+        The reopened id has no transcript; only the resumed id does.
+        """
+        from core.registry import default_registry
+        from tests.fakes import make_session
+        from tests.test_single_view import RecordingWindow
+        from ui.host import HostView, set_ui_mode_override
+        from ui.view import SubmarineOutputView
+        import features.resume as resume
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "chat_history.jsonl")
+            with open(path, "w", encoding="utf-8") as f:
+                for rec in (
+                    {"type": "system", "content": "sys"},
+                    {"type": "user", "content": "finished question"},
+                    {"type": "assistant", "content": "final answer",
+                     "tool_calls": [{"name": "Bash"}]},
+                ):
+                    f.write(json.dumps(rec) + "\n")
+
+            def _find(sid, cwd="", agent_id=""):
+                return path if sid == "closed-sid" else None
+
+            default_registry.clear()
+            HostView.reset()
+            set_ui_mode_override("single")
+            try:
+                win = RecordingWindow()
+                out = SubmarineOutputView(win)
+                s = make_session(output=out, chrome=out, window=win,
+                                 registry=default_registry)
+                s.resume_id = "closed-sid"
+                s.session_id = "closed-sid"
+                s.backend = "grok"
+                s.cwd = "/proj"
+                s.client = object()
+                attach_resume_preview(s)
+
+                orig = resume.find_grok_chat
+                resume.find_grok_chat = _find
+                try:
+                    s._on_init({
+                        "session_id": "brand-new-sid",
+                        "resume_fallback": True,
+                        "model": "grok-4.6",
+                    })
+                finally:
+                    resume.find_grok_chat = orig
+
+                self.assertEqual(s.session_id, "brand-new-sid")
+                cur = out.current
+                painted = (cur.prompt or "") if cur is not None else ""
+                self.assertEqual(painted, "finished question")
+                body = "\n".join(
+                    str(e) for e in (getattr(cur, "events", None) or []))
+                self.assertIn("final answer", body)
+            finally:
+                default_registry.clear()
+                HostView.reset()
+
     def test_paint_fork_uses_parent_resume_id(self):
         class _Out(object):
             def __init__(self):
@@ -329,7 +636,7 @@ class TestResumePreview(unittest.TestCase):
         seen = []
         orig = resume.load_turns
 
-        def _load(sid, backend, cwd="", claude_jsonl=""):
+        def _load(sid, backend, cwd="", claude_jsonl="", **kw):
             seen.append(sid)
             return [{"prompt": "hello", "reply": "hi", "tools": []}]
 

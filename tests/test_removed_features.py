@@ -109,30 +109,50 @@ class TestRemovedFeatureTokens(unittest.TestCase):
                         hits.append("%s:%d %r → %s" % (_rel(path), i, tok, line.strip()))
         self.assertEqual(hits, [], "removed-feature tokens still in shipping source:\n" + "\n".join(hits))
 
-    def test_no_terminal_package_import(self):
-        hits = []
-        for path in _shipping_files():
-            if not path.endswith(".py"):
+    def test_terminal_package_is_the_renamed_vendored_copy(self):
+        """terminal/ is ported — the removal-map verdict flipped.
+
+        The emulator ships as the vendored Terminus-derived package with the
+        naming map applied (SubmarineTerminal.*), and its commands surface from
+        a ROOT shim so Sublime discovers them. claude-term-mode (the TUI glue),
+        cc_pty/cc_launch/cc_transcript and the MCP terminal_* tools stay out.
+        """
+        pkg = os.path.join(ROOT, "terminal")
+        self.assertTrue(os.path.isdir(pkg), "terminal/ missing")
+        for name in ("LICENSE_TERMINUS", "terminal.py", "ptty.py",
+                     "render.py", "commands.py", "event.py",
+                     "theme_generator.py"):
+            self.assertTrue(os.path.isfile(os.path.join(pkg, name)), name)
+        self.assertTrue(os.path.isfile(
+            os.path.join(ROOT, "SubmarineTerminal.sublime-settings")))
+        shim_path = os.path.join(ROOT, "submarine_terminal_plugin.py")
+        self.assertTrue(os.path.isfile(shim_path))
+        shim = open(shim_path, encoding="utf-8").read()
+        self.assertIn("SubmarineTerminalOpenCommand", shim)
+        for banned in ("claude_terminal", "ClaudeTerminal", "claude_terminal_mode"):
+            self.assertNotIn(banned, shim)
+
+        classes = []
+        for f in sorted(os.listdir(pkg)):
+            if not f.endswith(".py"):
                 continue
-            try:
-                src = open(path, encoding="utf-8").read()
-            except (OSError, UnicodeDecodeError):
-                continue
-            try:
-                tree = ast.parse(src, filename=path)
-            except SyntaxError:
-                continue
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    for alias in node.names:
-                        top = (alias.name or "").split(".")[0]
-                        if top == "terminal":
-                            hits.append("%s:%d import %s" % (_rel(path), node.lineno, alias.name))
-                elif isinstance(node, ast.ImportFrom):
-                    mod = node.module or ""
-                    if mod == "terminal" or mod.startswith("terminal."):
-                        hits.append("%s:%d from %s" % (_rel(path), node.lineno, mod))
-        self.assertEqual(hits, [], "terminal package import:\n" + "\n".join(hits))
+            src = open(os.path.join(pkg, f), encoding="utf-8").read()
+            classes += re.findall(r"class (\w+Command)\b", src)
+        self.assertTrue(classes)
+        for cls in classes:
+            self.assertTrue(
+                cls.startswith(("SubmarineTerminal", "Noop")),
+                "un-renamed terminal command: %s" % cls)
+
+        keymap = open(os.path.join(ROOT, "Default.sublime-keymap"),
+                      encoding="utf-8").read()
+        # Keymap carries the renamed terminal commands; the ROOT keymap is the
+        # only one ST loads, so the bindings live there, not in terminal/.
+        self.assertIn("submarine_terminal_keypress", keymap)
+        self.assertIn("submarine_terminal_close", keymap)
+        self.assertNotIn("claude_terminal", keymap)
+        self.assertFalse(os.path.isfile(
+            os.path.join(pkg, "Default.sublime-keymap")))
 
     def test_no_legacy_command_names(self):
         hits = []

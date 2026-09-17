@@ -435,5 +435,4059 @@
         "context": [
             { "key": "setting.submarine_output", "operator": "equal", "operand": true }
         ]
+    },
+
+    // ── Embedded terminal (terminal/) ─────────────────────────────────
+    // Context keys are set by terminal/commands.py; keys stay inert in
+    // ordinary views. Terminal views also pin super+w to close,
+    // handing the live pty back instead of orphaning it.
+    //
+    // ctrl+/ opens the terminal. Not cmd+/ — that is Sublime's toggle
+    // comment. The tag (also the tab title) makes a repeat press focus the
+    // same terminal instead of stacking sheets; the palette entry stays
+    // tag-free so extra terminals are still one command away.
+    {
+        "keys": ["ctrl+/"],
+        "command": "submarine_terminal_open",
+        "args": { "tag": "Terminal" }
+    },
+    {
+        "keys": [
+            "super+w"
+        ],
+        "command": "submarine_terminal_close",
+        "context": [
+            {
+                "key": "submarine_terminal",
+                "operator": "equal",
+                "operand": true
+            }
+        ]
+    },
+    {
+        "keys": [
+            "super+="
+        ],
+        "command": "submarine_terminal_adjust_font_size",
+        "args": {
+            "action": "increase"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "super+plus"
+        ],
+        "command": "submarine_terminal_adjust_font_size",
+        "args": {
+            "action": "increase"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "super+-"
+        ],
+        "command": "submarine_terminal_adjust_font_size",
+        "args": {
+            "action": "decrease"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "super+0"
+        ],
+        "command": "submarine_terminal_adjust_font_size",
+        "args": {
+            "action": "reset"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "up"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "up"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "down"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "down"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "right"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "right"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "left"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "left"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "insert"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "insert"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "delete"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "delete"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "pageup"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "pageup"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "pagedown"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "pagedown"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "home"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "home"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "end"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "end"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "escape"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "escape"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            },
+            {
+                "key": "submarine_terminal_view.finished",
+                "operator": "not_equal",
+                "operand": true
+            },
+            {
+                "key": "overlay_visible",
+                "operator": "equal",
+                "operand": false
+            },
+            {
+                "key": "popup_visible",
+                "operator": "equal",
+                "operand": false
+            }
+        ]
+    },
+    {
+        "keys": [
+            "tab"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "tab"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "space"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "space"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "backspace"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "backspace"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "enter"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "enter"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "A"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "A"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "B"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "B"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "C"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "C"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "D"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "D"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "E"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "E"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "F"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "F"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "G"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "G"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "H"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "H"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "I"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "I"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "J"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "J"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "K"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "K"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "L"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "L"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "M"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "M"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "N"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "N"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "O"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "O"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "P"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "P"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "Q"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "Q"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "R"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "R"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "S"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "S"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "T"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "T"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "U"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "U"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "V"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "V"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "W"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "W"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "X"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "X"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "Y"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "Y"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "Z"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "Z"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "a"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "a"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "b"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "b"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "c"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "c"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "d"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "d"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "e"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "e"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "f"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "f"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "g"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "g"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "h"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "h"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "i"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "i"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "j"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "j"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "k"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "k"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "l"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "l"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "m"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "m"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "n"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "n"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "o"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "o"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "p"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "p"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "q"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "q"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "r"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "r"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "s"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "s"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "t"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "t"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "u"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "u"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "v"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "v"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "w"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "w"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "x"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "x"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "y"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "y"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "z"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "z"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "["
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "["
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            " "
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": " "
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "!"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "!"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "\""
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "\""
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "#"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "#"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "$"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "$"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "%"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "%"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "&"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "&"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "'"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "'"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "("
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "("
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            ")"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": ")"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "*"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "*"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "+"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "+"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            ","
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": ","
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "-"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "-"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "."
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "."
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "/"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "/"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "0"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "0"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "1"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "1"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "2"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "2"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "3"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "3"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "4"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "4"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "5"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "5"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "6"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "6"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "7"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "7"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "8"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "8"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "9"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "9"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            ":"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": ":"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            ";"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": ";"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "<"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "<"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "="
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "="
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            ">"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": ">"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "?"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "?"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "@"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "@"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "]"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "]"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "^"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "^"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "_"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "_"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "`"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "`"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "{"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "{"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "|"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "|"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "}"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "}"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "~"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "~"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "\\"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "\\"
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+a"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "a",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+b"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "b",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+c"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "c",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+d"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "d",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+e"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "e",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+f"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "f",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+g"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "g",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+h"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "h",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+i"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "i",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+j"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "j",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+k"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "k",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal_view.key.ctrl+k"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+l"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "l",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+m"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "m",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+n"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "n",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+o"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "o",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+p"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "p",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal_view.key.ctrl+p"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+q"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "q",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+r"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "r",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+s"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "s",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+t"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "t",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+u"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "u",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+v"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "v",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+w"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "w",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+x"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "x",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+y"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "y",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+z"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "z",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+@"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "@",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+["
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "[",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+{"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "{",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+\\"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "\\",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+|"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "|",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+]"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "]",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+}"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "}",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+^"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "^",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+~"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "~",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+_"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "_",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+?"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "?",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+down"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "down",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+right"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "right",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+up"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "up",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+left"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "left",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+insert"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "insert",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+delete"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "delete",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+pageup"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "pageup",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+pagedown"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "pagedown",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+home"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "home",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+end"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "end",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "ctrl+backspace"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "backspace",
+            "ctrl": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+a"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "a",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+b"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "b",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+c"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "c",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+d"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "d",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+e"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "e",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+f"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "f",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+g"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "g",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+h"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "h",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+i"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "i",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+j"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "j",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+k"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "k",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+l"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "l",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+m"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "m",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+n"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "n",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+o"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "o",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+p"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "p",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+q"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "q",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+r"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "r",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+s"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "s",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+t"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "t",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+u"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "u",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+v"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "v",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+w"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "w",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+x"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "x",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+y"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "y",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+z"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "z",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+a"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "A",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+b"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "B",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+c"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "C",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+d"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "D",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+e"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "E",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+f"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "F",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+g"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "G",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+h"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "H",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+i"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "I",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+j"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "J",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+k"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "K",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+l"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "L",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+m"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "M",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+n"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "N",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+o"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "O",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+p"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "P",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+q"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "Q",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+r"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "R",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+s"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "S",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+t"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "T",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+u"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "U",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+v"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "V",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+w"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "W",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+x"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "X",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+y"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "Y",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+shift+z"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "Z",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+["
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "[",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+ "
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": " ",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+!"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "!",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+\""
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "\"",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+#"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "#",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+$"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "$",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+%"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "%",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+&"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "&",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+'"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "'",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+("
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "(",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+)"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": ")",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+*"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "*",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt++"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "+",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+,"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": ",",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+-"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "-",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+."
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": ".",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+/"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "/",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+0"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "0",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+1"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "1",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+2"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "2",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+3"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "3",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+4"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "4",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+5"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "5",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+6"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "6",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+7"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "7",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+8"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "8",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+9"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "9",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+:"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": ":",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+;"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": ";",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+<"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "<",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+="
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "=",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+>"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": ">",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+?"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "?",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+@"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "@",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+]"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "]",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+^"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "^",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+_"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "_",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+`"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "`",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+{"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "{",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+|"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "|",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+}"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "}",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+~"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "~",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+\\"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "\\",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+down"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "down",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+right"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "right",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+up"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "up",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+left"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "left",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+delete"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "delete",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "alt+backspace"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "backspace",
+            "alt": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "shift+down"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "down",
+            "shift": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "shift+right"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "right",
+            "shift": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "shift+up"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "up",
+            "shift": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "shift+left"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "left",
+            "shift": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "shift+insert"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "insert",
+            "shift": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "shift+delete"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "delete",
+            "shift": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "shift+pageup"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "pageup",
+            "shift": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "shift+pagedown"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "pagedown",
+            "shift": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "shift+home"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "home",
+            "shift": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "shift+end"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "end",
+            "shift": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "shift+tab"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "tab",
+            "shift": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
+    },
+    {
+        "keys": [
+            "shift+backspace"
+        ],
+        "command": "submarine_terminal_keypress",
+        "args": {
+            "key": "backspace",
+            "shift": true
+        },
+        "context": [
+            {
+                "key": "submarine_terminal"
+            }
+        ]
     }
 ]

@@ -9,8 +9,10 @@ def wire_session(session):
     from features.context import ContextManager
     attach_goal_harness(session)
     attach_scheduler(session)
-    from features.resume import attach_resume_preview
+    from features.resume import attach_resume_preview, transcript_cwd
     attach_resume_preview(session)
+    # Where a cwd-scoped backend filed this session's transcript (grok).
+    session._transcript_cwd = transcript_cwd
     if getattr(session, "context", None) is None:
         session.context = ContextManager(session)
     return session

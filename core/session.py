@@ -298,6 +298,9 @@ class Session:
         self._resume_drop_asking = bool(resume_id) and not fork
         self._resume_asking_interrupt_sent = False
         self._pending_resume_at = None  # type: Optional[str]
+        # Directory the resumed session's own transcript lives in, when the
+        # backend's resume is cwd-scoped (see `_resume_cwd`).
+        self._resume_cwd_resolved = ""
         self._queued_prompts = []  # type: List[str]
         self._inject_pending = False
         self._interrupt_stream = False
@@ -465,6 +468,12 @@ class Session:
                     saved_q = 0
                 if saved_q > int(getattr(self, "query_count", 0) or 0):
                     self.query_count = saved_q
+        self._resume_cwd_resolved = self._resume_cwd(saved_entry)
+        if self._resume_cwd_resolved:
+            # The whole session moves to the directory its transcript lives in:
+            # the bridge process, the backend's own resume, and the record this
+            # process writes back.
+            self.cwd = self._resume_cwd_resolved
         view_model = read_stamp(self.persist, STAMP_MODEL) if self.resume_id else None
         chosen_raw = resolve_init_model(
             requested_model=self.model,
@@ -539,6 +548,29 @@ class Session:
                 }),
             )
 
+    def _resume_cwd(self, saved_entry):
+        # type: (Optional[dict]) -> str
+        """Directory the backend filed the resumed session under, "" to keep.
+
+        Grok scopes `session/load` to the cwd, so a session resumed from another
+        project fails with FS_NOT_FOUND and the CLI silently opens a fresh one
+        with no prior turns. `features.resume` supplies the lookup; the saved
+        row's project is only a hint for finding the session on disk.
+        """
+        if not self.resume_id or self.fork:
+            return ""
+        resolver = getattr(self, "_transcript_cwd", None)
+        if not callable(resolver):
+            return ""
+        hint = ""
+        if saved_entry:
+            hint = saved_entry.get("project") or ""
+        try:
+            return resolver(self.backend, self.resume_id, hint or self.cwd or "",
+                            getattr(self, "agent_id", None) or "") or ""
+        except Exception:
+            return ""
+
     def _build_init_params(self, spec, chosen_raw, saved_entry, resume_session_at):
         # type: (Any, Optional[str], Optional[dict], Optional[str]) -> dict
         permission_mode = self.settings.get("permission_mode") or "acceptEdits"
@@ -553,6 +585,8 @@ class Session:
             saved_project = saved_entry.get("project") or ""
             if saved_project and saved_project != cwd:
                 cwd = saved_project
+        if self._resume_cwd_resolved:
+            cwd = self._resume_cwd_resolved
         # Fork is a new session: keep cwd, drop parent activity / goal / usage.
         if saved_entry and not self.fork:
             try:

@@ -7,11 +7,33 @@ Both speak JSON-RPC 2.0 over stdio, so this is mainly a message translator.
 import asyncio
 import json
 import os
+import re
 import sys
 import shutil
 import time
 from pathlib import Path
 from typing import Any, Optional, Tuple
+
+# Codex thread ids are UUIDs; app-server rejects anything else outright.
+_THREAD_ID_RE = re.compile(r"^[0-9a-fA-F\-]{36}$")
+
+
+def _codex_error_text(err: Any) -> str:
+    if isinstance(err, dict):
+        return str(err.get("message") or err)
+    return str(err or "")
+
+
+def _is_writer_conflict(err: Any) -> bool:
+    """True for app-server's -32600 "already has an active writer" refusal.
+
+    Codex allows one writer per thread, so a thread still loaded by an earlier
+    process cannot be resumed — only forked.
+    """
+    text = _codex_error_text(err).lower()
+    if not text:
+        return False
+    return "active writer" in text or ("already" in text and "writer" in text)
 
 
 # ── Logging: stderr → plugin console; also append to shared bridge log file ──
@@ -394,44 +416,119 @@ class CodexBridge(BaseBridge):
             return
 
         # Start a thread
-        thread_params = {"cwd": cwd}
         system_prompt = params.get("system_prompt")
-        if system_prompt:
-            thread_params["developerInstructions"] = system_prompt
-
-        # Resume if session_id provided (must be valid UUID)
         resume_id = params.get("resume")
-        if resume_id:
-            import re as _re
-            if not _re.match(r'^[0-9a-fA-F\-]{36}$', resume_id):
-                log(f"Invalid thread ID for resume (not UUID): {resume_id}")
-                send_error(req_id, -32000, f"Cannot resume: invalid thread ID '{resume_id}'")
-                return
-            thread_params["threadId"] = resume_id
-            start_id = await self.codex_request("thread/resume", thread_params)
-        else:
-            start_id = await self.codex_request("thread/start", thread_params)
+        fork_session = bool(params.get("fork_session", False))
+        if resume_id and not _THREAD_ID_RE.match(str(resume_id)):
+            await self._fail_init(
+                req_id, "Cannot open codex thread: %r is not a thread id"
+                        % resume_id)
+            return
 
-        # Wait for thread response
+        def _open_params(extra_id=None):
+            p = {"cwd": cwd}
+            if system_prompt:
+                p["developerInstructions"] = system_prompt
+            if extra_id:
+                p["threadId"] = extra_id
+            return p
+
+        if resume_id and fork_session:
+            method = "thread/fork"
+        elif resume_id:
+            method = "thread/resume"
+        else:
+            method = "thread/start"
+        start_id = await self.codex_request(
+            method, _open_params(resume_id if resume_id else None))
         thread_result = await self._wait_for_response(start_id)
+        err = self._request_errors.get(start_id)
+
+        # A codex process from an earlier plugin load can still own this
+        # thread's writer. thread/resume cannot steal it, but thread/fork loads
+        # the same rollout into a thread we do own.
+        recovered_fork = False
+        if err and method == "thread/resume" and _is_writer_conflict(err):
+            log("resume blocked by an active writer; forking the thread instead")
+            start_id = await self.codex_request(
+                "thread/fork", _open_params(resume_id))
+            thread_result = await self._wait_for_response(start_id)
+            err = self._request_errors.get(start_id)
+            recovered_fork = err is None
+
         if self.thread_id is None and thread_result:
             thread = thread_result.get("thread", thread_result)
             self.thread_id = thread.get("id") or thread_result.get("threadId")
 
         if not self.thread_id:
-            err_msg = f"Failed to {'resume' if resume_id else 'start'} codex thread"
-            log(err_msg)
-            send_error(req_id, -32000, err_msg)
+            what = "fork" if fork_session else ("resume" if resume_id else "start")
+            reason = _codex_error_text(err) or "no thread id in the response"
+            hint = ""
+            if _is_writer_conflict(err):
+                hint = (" — another codex process still owns it. Quit that "
+                        "session (or the Codex app) and retry.")
+            await self._fail_init(
+                req_id,
+                "Cannot %s codex thread %s: %s%s"
+                % (what, resume_id or "-", reason, hint))
             return
 
         self.session_id = self.thread_id
         log(f"Initialized: thread_id={self.thread_id}")
+        if recovered_fork:
+            send_notification("message", {
+                "type": "system",
+                "subtype": "init",
+                "data": {
+                    "message": (
+                        "Codex thread %s is still owned by another codex "
+                        "process, so it could not be resumed. Forked it into "
+                        "%s instead — the history is kept and this "
+                        "conversation continues as a new thread."
+                        % (resume_id, self.thread_id)
+                    ),
+                },
+            })
 
         send_result(req_id, {
             "session_id": self.session_id,
             "mcp_servers": [],
             "agents": [],
+            "forked": recovered_fork,
         })
+
+    async def _fail_init(self, req_id, message: str) -> None:
+        """Report an initialize failure, then exit.
+
+        A bridge that never got a thread has nothing to serve, and lingering
+        holds a codex writer plus its stdio pipes (the host only shuts a bridge
+        down on session close, never after an init error).
+        """
+        log(message)
+        send_error(req_id, -32000, message)
+        asyncio.get_event_loop().create_task(self._exit_after_error())
+
+    async def _exit_after_error(self, delay: float = 0.5) -> None:
+        self.running = False
+        try:
+            await asyncio.sleep(delay)
+            if self.codex_proc:
+                try:
+                    self.codex_proc.stdin.close()
+                except Exception:
+                    pass
+                try:
+                    await asyncio.wait_for(self.codex_proc.wait(), timeout=3)
+                except (asyncio.TimeoutError, ProcessLookupError):
+                    self.codex_proc.kill()
+        except Exception:
+            pass
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
+        os._exit(0)
 
     async def handle_query(self, req_id: int, params: dict) -> None:
         """Start a turn with the given prompt."""
@@ -534,6 +631,7 @@ class CodexBridge(BaseBridge):
             req_id = msg["id"]
             if "error" in msg:
                 log(f"Codex error response for req {req_id}: {msg['error']}")
+                self._request_errors[req_id] = msg["error"]
             if req_id in self._pending_responses:
                 self._pending_responses[req_id].set_result(msg.get("result"))
             return
@@ -981,6 +1079,7 @@ async def main():
     bridge = CodexBridge()
     # Fix: _pending_responses should be per-instance, not class-level
     bridge._pending_responses = {}
+    bridge._request_errors = {}
     await bridge.run()
 
 

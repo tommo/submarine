@@ -199,6 +199,15 @@ def toggle_bookmark(session_id: str, project_path=None, record=None) -> bool:
         return False
 
 
+def save_bookmarks(starred, project_path=None, records=None) -> bool:
+    try:
+        from core.records import save_bookmarks as _fn
+        _fn(starred, project_path, records=records)
+        return True
+    except Exception:
+        return False
+
+
 def load_bookmark_records(project_path=None):
     try:
         from core.records import load_bookmark_records as _fn

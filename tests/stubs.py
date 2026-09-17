@@ -122,6 +122,16 @@ def install_sublime():
     sublime.save_settings = lambda n: None
     sublime.status_message = lambda m: None
     sublime.error_message = lambda m: None
+    # Modal answers: tests set `_submarine_dialog` (True/False) and read back the
+    # questions asked from `_submarine_dialogs`.
+    sublime._submarine_dialog = None
+    sublime._submarine_dialogs = []
+
+    def _ok_cancel(message, ok="OK", cancel=""):
+        sublime._submarine_dialogs.append(message)
+        return sublime._submarine_dialog
+
+    sublime.ok_cancel_dialog = _ok_cancel
     sublime.active_window = lambda: None
     sublime.windows = lambda: []
     sublime.set_timeout = lambda f, t=0: None

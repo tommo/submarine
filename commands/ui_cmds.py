@@ -236,7 +236,8 @@ class SubmarineViewHistoryCommand(sublime_plugin.WindowCommand):
         history_file = None
         try:
             from features.resume import find_session_jsonl
-            history_file = find_session_jsonl(sid, backend, project)
+            history_file = find_session_jsonl(
+                sid, backend, project, session.get("agent_id") or "")
         except Exception:
             history_file = None
         if not history_file:

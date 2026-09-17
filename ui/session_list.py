@@ -36,8 +36,8 @@ from .session_api import (
     remember_active_session,
     remove_saved_session,
     rename_saved_session,
+    save_bookmarks,
     sessions_map,
-    toggle_bookmark,
     unregister_view,
 )
 
@@ -53,6 +53,12 @@ BACKEND_COL = 8  # pad/clip so deepseek (8) and grok (4) share a column
 TREE_INDENT = 1
 TREE_DEPTH_CAP = 6
 CHILD_MARK = "↳"
+# Leftmost row column: the current-session pointer. Fixed width so every row's
+# state mark lines up, and so the pointer never displaces that mark.
+CUR_MARK = "▸"
+CUR_CELL = CUR_MARK + " "
+BLANK_CELL = " " * len(CUR_CELL)
+STAR_MARK = "✨"  # pinned session, before the title
 _LIVE_BAND = {
     "input": 0, "unread": 0, "working": 1, "bg": 1, "ready": 1, "sleeping": 2,
 }
@@ -137,7 +143,8 @@ def _transcript_first_prompt(session) -> str:
             return ""
         backend = getattr(session, "backend", None) or "claude"
         cwd = getattr(session, "cwd", None) or ""
-        turns = load_turns(sid, backend, cwd)
+        turns = load_turns(sid, backend, cwd,
+                           agent_id=getattr(session, "agent_id", None) or "")
         if turns:
             return display_prompt(turns[0].get("prompt") or "")
     except Exception:
@@ -303,10 +310,39 @@ def format_header(cols: int = 0) -> str:
     return line[:cols] if len(line) > cols else line
 
 
-def _name_budget(prefix: str, extra: str, cols: int, compact: bool) -> int:
-    if cols <= 0:
-        return 48 if compact else 40
-    return max(8, cols - len(prefix) - len(extra))
+
+
+
+# Ranges whose glyphs take two cells. Kept narrow on purpose: the marks this
+# list draws (`△` `·` `⊡` `⚙` `⏸` `↳`) are all one cell — measured in-editor —
+# while the pin ✨ and CJK/emoji titles are not.
+_WIDE_RANGES = (
+    (0x1100, 0x115F), (0x2E80, 0x303E), (0x3041, 0x33FF), (0x3400, 0x4DBF),
+    (0x4E00, 0x9FFF), (0xA000, 0xA4CF), (0xAC00, 0xD7A3), (0xF900, 0xFAFF),
+    (0xFE30, 0xFE6F), (0xFF00, 0xFF60), (0xFFE0, 0xFFE6), (0x2728, 0x2728),
+    (0x1F300, 0x1FAFF),
+)
+
+
+def cell_width(text: str) -> int:
+    """Columns `text` occupies, counting wide glyphs as two.
+
+    The row layout is a grid of columns, so a title or a pin that renders two
+    cells wide has to be measured that way or the meta after it lands short.
+    """
+    text = text or ""
+    try:
+        from wcwidth import wcswidth  # the terminal port already requires it
+        n = wcswidth(text)
+        if n >= 0:
+            return n
+    except Exception:
+        pass
+    total = 0
+    for ch in text:
+        cp = ord(ch)
+        total += 2 if any(lo <= cp <= hi for lo, hi in _WIDE_RANGES) else 1
+    return total
 
 
 def fit_title(name: str, width: int) -> str:
@@ -314,11 +350,23 @@ def fit_title(name: str, width: int) -> str:
     name = name or ""
     if width <= 0:
         return ""
-    if len(name) <= width:
-        return f"{name:<{width}}"
-    if width == 1:
-        return "…"
-    return name[: width - 1] + "…"
+    if cell_width(name) <= width:
+        return name + (" " * (width - cell_width(name)))
+    keep = []
+    used = 0
+    for ch in name:
+        w = cell_width(ch)
+        if used + w > max(0, width - 1):
+            break
+        keep.append(ch)
+        used += w
+    return "".join(keep) + "…"
+
+
+def _name_budget(prefix: str, extra: str, cols: int, compact: bool) -> int:
+    if cols <= 0:
+        return 48 if compact else 40
+    return max(8, cols - cell_width(prefix) - cell_width(extra))
 
 
 def format_when(ts, now=None) -> str:
@@ -346,6 +394,52 @@ def format_when(ts, now=None) -> str:
     if sec < 86400 * 14:
         return f"{sec // 86400}d"
     return f"{sec // (86400 * 7)}w"
+
+
+def _stamp_change_in(ts, now) -> Optional[int]:
+    """Seconds until `format_when(ts)` renders a different label.
+
+    Mirrors its thresholds: the elapsed-time column is the one part of a row
+    that changes with the clock alone, so this is what schedules the next poll.
+    """
+    try:
+        t = float(ts)
+    except (TypeError, ValueError):
+        return None
+    if t <= 0:
+        return None
+    try:
+        sec = max(0, int(float(now) - t))
+    except (TypeError, ValueError):
+        return None
+    if sec < 5:
+        return 5 - sec
+    if sec < 60:
+        return 60 - sec
+    if sec < 3600:
+        return 60 - (sec % 60)
+    if sec < 86400:
+        return 3600 - (sec % 3600)
+    if sec < 86400 * 14:
+        return 86400 - (sec % 86400)
+    return 604800 - (sec % 604800)
+
+
+def _next_stamp_change(index: List[dict], now=None) -> float:
+    """Wall clock when the soonest rendered elapsed time changes label.
+
+    0.0 when no row shows one (nothing to wait for).
+    """
+    now = time.time() if now is None else float(now)
+    soonest = None
+    for r in index or ():
+        if r.get("kind") == "live" and (r.get("status") or "") in _STAMP:
+            continue  # live rows show a state word, not a clock
+        secs = _stamp_change_in(r.get("last_access") or r.get("last_activity"), now)
+        if secs is None:
+            continue
+        soonest = secs if soonest is None else min(soonest, secs)
+    return (now + soonest) if soonest is not None else 0.0
 
 
 def window_project(window) -> str:
@@ -426,13 +520,94 @@ def collect_live(window) -> List[dict]:
     return out
 
 
-def collect_history(live_ids: set, cwd: str) -> Tuple[List[dict], List[dict]]:
+def _recency(row: dict) -> tuple:
+    """Sort key for "which incarnation of a session is the current one"."""
+    try:
+        activity = float(row.get("last_activity") or 0)
+    except (TypeError, ValueError):
+        activity = 0.0
+    try:
+        seen = float(access_ts(row) or 0)
+    except (TypeError, ValueError):
+        seen = 0.0
+    return (activity, seen)
+
+
+def _chain_ids_of(agent_id: str, saved: List[dict],
+                  own_sid: str = "") -> List[str]:
+    """Ids of every incarnation of a session, from its saved records."""
+    ids = [s.get("session_id") for s in saved or ()
+           if agent_id and (s.get("agent_id") or "") == agent_id
+           and s.get("session_id")]
+    if own_sid and own_sid not in ids:
+        ids.append(own_sid)
+    return ids
+
+
+def tag_live_chains(live: List[dict], saved: List[dict]) -> None:
+    """Give a live row the ids of every incarnation of its session.
+
+    A live row renders from the registry, which knows only the id the backend
+    is on now; the pin and the delete commands need the rest of the chain (see
+    `collapse_chains`).
+    """
+    for r in live or ():
+        ids = _chain_ids_of(r.get("agent_id") or "", saved, r.get("session_id") or "")
+        if len(ids) > 1:
+            r["chain_ids"] = ids
+
+
+def collapse_chains(rows: List[dict], starred: Optional[set] = None,
+                    live_agents: Optional[set] = None) -> List[dict]:
+    """One row per session: a resume is not a new session.
+
+    Every resume mints a new session id, and switching backend keeps the same
+    `agent_id`, so the store holds one record per incarnation — HISTORY listed
+    the same session again and again, soonest with another backend's tag.
+    Records sharing an `agent_id` are one session: keep its newest incarnation
+    (the one a resume should target) and carry the chain's ids so a pin and a
+    delete still reach every incarnation.
+    """
+    starred = set(starred or ())
+    live_agents = set(live_agents or ())
+    chains: Dict[str, List[dict]] = {}
+    out: List[dict] = []
+    for r in rows or ():
+        aid = r.get("agent_id")
+        if not aid:
+            out.append(r)  # nothing to chain it with
+            continue
+        if aid in live_agents:
+            continue  # a sibling is live: the session sits in CURRENT
+        chains.setdefault(aid, []).append(r)
+    for members in chains.values():
+        if len(members) == 1:
+            out.append(members[0])
+            continue
+        ids = [m["session_id"] for m in members if m.get("session_id")]
+        row = dict(max(members, key=_recency))
+        row["chain_ids"] = ids
+        if any(sid in starred for sid in ids):
+            row["pinned"] = True
+        out.append(row)
+    return out
+
+
+def collect_history(live_ids: set, cwd: str,
+                    live_agents: Optional[set] = None,
+                    saved: Optional[List[dict]] = None
+                    ) -> Tuple[List[dict], List[dict]]:
     here, other = [], []
     cwd = (cwd or "").rstrip("/")
-    for s in load_saved_sessions():
+    live_agents = set(live_agents or ())
+    if saved is None:
+        saved = load_saved_sessions()
+    for s in saved:
         sid = s.get("session_id")
         if not sid or sid in live_ids:
             continue
+        if s.get("agent_id") and s.get("agent_id") in live_agents:
+            continue  # another incarnation of a live session: not history
         row = {
             "kind": "saved",
             "session_id": sid,
@@ -502,11 +677,39 @@ def is_empty_session_row(r: dict) -> bool:
         return True
 
 
+def _pinned(row: dict, starred: Optional[set] = None) -> bool:
+    """Is this row's session pinned?
+
+    A row stands for a whole chain of incarnations (`chain_ids`), so a star
+    left on whichever one the user pinned keeps showing — and unstarring the
+    row clears the chain instead of leaving the pin behind.
+    """
+    if not row:
+        return False
+    if row.get("pinned"):
+        return True
+    starred = starred or ()
+    if not starred:
+        return False
+    sid = row.get("session_id")
+    if sid and sid in starred:
+        return True
+    return any(x in starred for x in (row.get("chain_ids") or ()))
+
+
+def row_ids(row: dict) -> List[str]:
+    """Every session id this row stands for (a chain's ids, newest last)."""
+    ids = [sid for sid in (row.get("chain_ids") or []) if sid]
+    sid = row.get("session_id")
+    if sid and sid not in ids:
+        ids.append(sid)
+    return ids
+
+
 def drop_empty_sessions(rows: List[dict], starred: Optional[set] = None) -> List[dict]:
-    ids = set(starred or ())
     out = []
     for r in rows or []:
-        if is_empty_session_row(r) and r.get("session_id") not in ids:
+        if is_empty_session_row(r) and not _pinned(r, starred):
             continue
         out.append(r)
     return out
@@ -532,12 +735,11 @@ def _right_meta(r: dict) -> str:
 
 def pin_starred(rows: List[dict], starred: set) -> List[dict]:
     """Starred rows first within a group; relative order otherwise."""
-    ids = set(starred or ())
-    if not ids:
-        return list(rows or [])
+    if not starred:
+        return list(rows or ())
     pinned, rest = [], []
     for r in rows or []:
-        (pinned if r.get("session_id") in ids else rest).append(r)
+        (pinned if _pinned(r, starred) else rest).append(r)
     return pinned + rest
 
 
@@ -610,7 +812,7 @@ def tree_order(rows: List[dict], starred: Optional[set] = None) -> List[dict]:
         cur = parent_of[i]
         seen = set()  # type: set
         while cur is not None and cur not in seen:
-            if src[cur].get("session_id") in ids:
+            if _pinned(src[cur], ids):
                 return True
             seen.add(cur)
             cur = parent_of[cur]
@@ -618,7 +820,7 @@ def tree_order(rows: List[dict], starred: Optional[set] = None) -> List[dict]:
 
     leaders = [
         i for i in range(n)
-        if src[i].get("session_id") in ids and not has_starred_ancestor(i)
+        if _pinned(src[i], ids) and not has_starred_ancestor(i)
     ]
     leaders.sort(key=lambda i: _section_sort_key(src[i]))
     leader_set = set(leaders)
@@ -663,15 +865,17 @@ def _fmt_row(r: dict, starred: set, compact: bool = False, cols: int = 0) -> str
     mark = _mark(r["status"]) if live else "·"
     if r.get("torn_off"):
         mark = "⊡"
-    elif r.get("bound"):
-        mark = "▸"
-    star = "△ " if r.get("session_id") in (starred or ()) else ""
+    # The current-session column is the row's leftmost cell, and only live rows —
+    # the CURRENT section, where a current session can be — carry it: a history
+    # row never holds a cell open for a glyph it cannot show.
+    cur = (CUR_CELL if r.get("bound") else BLANK_CELL) if live else ""
+    star = STAR_MARK + " " if _pinned(r, starred) else ""
     tree = tree_prefix(r.get("depth") or 0)
     if compact:
-        pre = f"{mark} {tree}{backend_abbrev(r.get('backend'))} "
+        pre = f"{cur}{mark} {tree}{backend_abbrev(r.get('backend'))} "
         return pre + star + fit_title(
             name, _name_budget(pre + star, "", cols, True))
-    pre = f"{mark} {tree}{backend_cell(r.get('backend'))} "
+    pre = f"{cur}{mark} {tree}{backend_cell(r.get('backend'))} "
     extra = _right_meta(r)
     return (
         pre + star
@@ -716,9 +920,19 @@ def build_for_window(window, cols: int = 0) -> Tuple[str, List[dict]]:
         cwd = window.folders()[0]
     live = collect_live(window)
     live_ids = {r["session_id"] for r in live if r.get("session_id")}
-    here, _other = collect_history(live_ids, cwd)
+    live_agents = {r.get("agent_id") for r in live if r.get("agent_id")}
     starred = load_bookmarks(cwd or None)
-    here = _include_starred_saved(here, live_ids, cwd, starred)
+    saved = load_saved_sessions() if starred else None
+    if saved:
+        # Only pins need this: a live row's other incarnations matter to a star.
+        tag_live_chains(live, saved)
+    here, _other = collect_history(live_ids, cwd, live_agents=live_agents,
+                                   saved=saved)
+    here = collapse_chains(here, starred, live_agents)
+    have = set(live_ids)
+    for r in here:
+        have.update(row_ids(r))
+    here = _include_starred_saved(here, have, cwd, starred)
     here = drop_empty_sessions(here, starred)
     return render_list(live, here, [], starred, cols=cols)
 
@@ -1092,8 +1306,45 @@ def _live_session_for_row(row: dict):
     return None
 
 
+def starred_confirm(window, row: dict) -> bool:
+    """Ask before closing out a starred row. True when the action may run.
+
+    Closing a live session stops it, and closing a HISTORY row drops the resume
+    entry — both worth a question when the row is pinned.
+    """
+    if not row or sublime is None:
+        return True
+    sid = row.get("session_id")
+    if not sid:
+        return True
+    cwd = ""
+    try:
+        if window and window.folders():
+            cwd = window.folders()[0]
+    except Exception:
+        cwd = ""
+    try:
+        starred = load_bookmarks(cwd or None) or set()
+    except Exception:
+        return True
+    if not _pinned(row, starred):
+        return True
+    name = one_line_title(row.get("name") or "") or sid
+    live = row.get("kind") == "live"
+    verb = "Close" if live else "Delete"
+    what = "session" if live else "session from the list"
+    msg = ("%s starred %s?\n\n%s\n\n"
+           "Unstar it first (s) to keep it out of this question." % (verb, what, name))
+    try:
+        return bool(sublime.ok_cancel_dialog(msg, verb))
+    except Exception:
+        return True
+
+
 def close_row(window, row: dict, remove: Optional[bool] = None) -> bool:
     """Del a list row. Only HISTORY removes the saved resume entry.
+
+    Callers that act on a keystroke ask `starred_confirm` first.
 
     CURRENT (including starred live): stop the live sheet (tabs) or the
     bound host (single) and keep the save.
@@ -1158,14 +1409,23 @@ def close_row(window, row: dict, remove: Optional[bool] = None) -> bool:
                 except Exception:
                     pass
         if remove and sid:
-            try:
-                remove_saved_session(sid)
-            except Exception:
-                pass
+            _forget_row_rows(row)
         return True
     if remove and sid:
-        return bool(remove_saved_session(sid))
+        return _forget_row_rows(row)
     return False
+
+
+def _forget_row_rows(row: dict) -> bool:
+    """Drop a HISTORY row's resume entries — every id the session was resumed
+    under, or the next incarnation would just take its place in the list."""
+    dropped = False
+    for sid in row_ids(row):
+        try:
+            dropped = bool(remove_saved_session(sid)) or dropped
+        except Exception:
+            pass
+    return dropped
 
 
 def jsonl_path_for_row(window, row: dict) -> Optional[str]:
@@ -1174,6 +1434,7 @@ def jsonl_path_for_row(window, row: dict) -> Optional[str]:
     sid = row.get("session_id")
     backend = row.get("backend") or "claude"
     cwd = row.get("project") or ""
+    agent_id = row.get("agent_id") or ""
     if not cwd and window:
         try:
             folders = window.folders()
@@ -1195,9 +1456,10 @@ def jsonl_path_for_row(window, row: dict) -> Optional[str]:
             pass
         backend = getattr(live, "backend", None) or backend
         sid = getattr(live, "session_id", None) or sid
+        agent_id = getattr(live, "agent_id", None) or agent_id
     try:
         from features.resume import find_session_jsonl
-        return find_session_jsonl(sid, backend, cwd)
+        return find_session_jsonl(sid, backend, cwd, agent_id or "")
     except Exception:
         return None
 
@@ -1328,6 +1590,13 @@ class SessionListView:
             self.view = self.window.new_file()
             self.view.set_scratch(True)
             self.view.set_read_only(True)
+            # A new sheet lands at the end of the active group; the list is
+            # usually kept in its own split, so put it back in its slot.
+            try:
+                from core.placement import TAB_LIST, apply_view_tab
+                apply_view_tab(self.window, self.view, TAB_LIST)
+            except Exception as e:
+                print("[Submarine] session list tab: %s" % e)
         # Symbol so the list tab is findable among session sheets.
         self.view.set_name("☰ Sessions")
         self._apply_chrome()
@@ -1342,6 +1611,7 @@ class SessionListView:
         except Exception:
             vx, vy = 0.0, 0.0
         cols = view_cols(self.view)
+        state_cols = cols  # the fingerprint uses the width before any fallback
         text, index = build_for_window(self.window, cols=cols)
         self.view.settings().set(WRITING_KEY, True)
         cur = self.view.substr(sublime.Region(0, self.view.size()))
@@ -1364,6 +1634,7 @@ class SessionListView:
         if text != cur:
             self._write_list_text(text)
             wrote = True
+        self._remember_state(state_cols, index)
         # Wide glyphs (⏸/…) can exceed em; only then drop a column.
         for _ in range(3):
             try:
@@ -1414,6 +1685,14 @@ class SessionListView:
                 self.view.settings().set(WRITING_KEY, False)
             except Exception:
                 pass
+
+    def _remember_state(self, cols: int, index: List[dict]) -> None:
+        """Snapshot what this render was built from, for `_list_changed`."""
+        _stamps[self.view.id()] = _next_stamp_change(index)
+        try:
+            _fingerprints[self.view.id()] = list_state_key(self.window, cols)
+        except Exception:
+            pass
 
     def _write_list_text(self, text: str) -> None:
         view = self.view
@@ -1516,6 +1795,15 @@ class SessionListClickListener(sublime_plugin.EventListener):
             _go()
 
     def on_activated(self, view):
+        if view and view.settings().get(SETTING):
+            # A list restored with the window, or one left behind by a reload,
+            # has no poll armed and renders nothing on its own; focusing it
+            # brings it current and starts its clock again.
+            _arm_session_list_poll()
+            try:
+                refresh_session_list(view.window())
+            except Exception:
+                pass
         self._schedule_follow(view, force=True)
 
     def on_selection_modified(self, view):
@@ -1532,16 +1820,136 @@ class SessionListClickListener(sublime_plugin.EventListener):
         self._schedule_follow(view, force=True)
 
 
-def refresh_session_list(window) -> None:
+# --- what an idle poll may skip ---------------------------------------------
+# A Sessions view is refreshed on events (session state changes) and by a
+# timer. The timer exists for what no event reports: the elapsed-time column
+# aging, a split being resized, or another process rewriting the session store.
+# Every tick compares a fingerprint first — the registry, the star records, and
+# a stat of `.sessions.json` — and only renders when that changed or an elapsed
+# time came due, so a tick with nothing to show costs a couple of reads and a
+# tuple compare instead of a rebuild plus a buffer write.
+_POLL_MIN_MS = 1000
+_POLL_MAX_MS = 8000
+_fingerprints = {}  # type: Dict[int, Any]  # list view id -> what it renders
+# list view id -> wall clock when its own elapsed-time column next changes.
+# Per view: two open lists hold rows of different ages, and one of them
+# re-arming a shared deadline used to leave the other's clock frozen.
+_stamps = {}  # type: Dict[int, float]
+_poll_delay = _POLL_MIN_MS
+_poll_stopped = False  # set on plugin unload: this incarnation stops polling
+_poll_gen = 0          # the shared generation this incarnation armed under
+
+
+def _sessions_store_path() -> str:
+    try:
+        from core.records import default_sessions_path
+        return default_sessions_path()
+    except Exception:
+        return ""
+
+
+def _store_signature(path: str):
+    """(mtime_ns, size) — enough to tell a JSON store was rewritten."""
+    if not path:
+        return None
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    mtime = getattr(st, "st_mtime_ns", None)
+    if mtime is None:
+        mtime = int(st.st_mtime * 1000000000)
+    return (int(mtime), int(st.st_size))
+
+
+def list_state_key(window, cols: int):
+    """Cheap proxy for `build_for_window`: everything a render reads.
+
+    Live rows come from the registry alone, and the history rows only from
+    `.sessions.json` — which is rewritten whole on every change, so a stat
+    covers it without parsing the file on each tick.
+    """
+    cwd = ""
+    try:
+        if window and window.folders():
+            cwd = window.folders()[0]
+    except Exception:
+        cwd = ""
+    rows = collect_live(window)
+    # Stars and their record snapshots both ride in bookmarks.json, and a
+    # snapshot (name, counts) shows on a row whose store entry was pruned.
+    try:
+        starred = tuple(sorted(load_bookmarks(cwd or None) or ()))
+    except Exception:
+        starred = ()
+    try:
+        records = json.dumps(load_bookmark_records(cwd or None) or {},
+                             sort_keys=True, default=str)
+    except Exception:
+        records = ""
+    return (
+        int(cols),
+        cwd,
+        tuple(
+            (r.get("session_id"), r.get("agent_id"), r.get("parent_agent_id"),
+             r.get("view_id"), r.get("name"), r.get("backend"), r.get("model"),
+             r.get("status"), r.get("query_count"), r.get("last_access"),
+             r.get("last_activity"), r.get("bound"), r.get("torn_off"))
+            for r in rows
+        ),
+        _store_signature(_sessions_store_path()),
+        starred,
+        records,
+    )
+
+
+def _stamp_due(view_id, now=None) -> bool:
+    """Has this view's elapsed-time column aged into a new label?"""
+    deadline = _stamps.get(view_id) or 0.0
+    if not deadline:
+        return False
+    return (time.time() if now is None else float(now)) >= deadline
+
+
+def _soonest_stamp() -> float:
+    """When the first open list needs its clock repainted (0.0 for none)."""
+    soonest = 0.0
+    for vid in _open_list_view_ids():
+        deadline = _stamps.get(vid) or 0.0
+        if deadline and (not soonest or deadline < soonest):
+            soonest = deadline
+    return soonest
+
+
+def _list_changed(window, view) -> bool:
+    """Would re-rendering this list show anything new?"""
+    try:
+        key = list_state_key(window, view_cols(view))
+    except Exception:
+        return True
+    if key != _fingerprints.get(view.id()):
+        return True
+    return _stamp_due(view.id())
+
+
+def refresh_session_list(window, force: bool = True) -> bool:
+    """Re-render this window's Sessions view; True when it ran.
+
+    Callers that just changed something (a command, a session event) leave
+    `force` alone. The poll passes False, so an idle tick skips the rebuild.
+    """
     if not window:
-        return
+        return False
     for v in window.views():
         if v.settings().get(SETTING) and v.is_valid():
+            if not force and not _list_changed(window, v):
+                return False
             sl = SessionListView.__new__(SessionListView)
             sl.window = window
             sl.view = v
             sl.refresh()
-            return
+            return True
+    return False
 
 
 def _session_list_open() -> bool:
@@ -1555,12 +1963,16 @@ def _session_list_open() -> bool:
     return False
 
 
-def refresh_all_session_lists() -> None:
+def refresh_all_session_lists(force: bool = True) -> bool:
+    """Refresh every open list; True when at least one was re-rendered."""
+    changed = False
     try:
         for w in sublime.windows():
-            refresh_session_list(w)
+            if refresh_session_list(w, force=force):
+                changed = True
     except Exception:
         pass
+    return changed
 
 
 _refresh_pending = False
@@ -1585,21 +1997,95 @@ def schedule_session_list_refresh() -> None:
     _arm_session_list_poll()
 
 
+def _poll_generation() -> int:
+    """A counter on the long-lived `sublime` module, shared by every copy.
+
+    A reload leaves the previous incarnation's pending `set_timeout` callbacks
+    alive, and nothing else it holds is visible from outside; this is how a
+    stopped chain tells them apart.
+    """
+    try:
+        return int(getattr(sublime, "_submarine_poll_gen", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _bump_poll_generation() -> None:
+    try:
+        sublime._submarine_poll_gen = _poll_generation() + 1
+    except Exception:
+        pass
+
+
+def _open_list_view_ids() -> List[int]:
+    """Every open Sessions view id, across all windows."""
+    out: List[int] = []
+    try:
+        for w in sublime.windows():
+            for v in w.views():
+                if v.settings().get(SETTING):
+                    out.append(v.id())
+    except Exception:
+        pass
+    return out
+
+
+def _prune_fingerprints() -> None:
+    """Drop memories of views that are gone (closed, or window shut)."""
+    live = set(_open_list_view_ids())
+    for vid in [k for k in _fingerprints if k not in live]:
+        _fingerprints.pop(vid, None)
+    for vid in [k for k in _stamps if k not in live]:
+        _stamps.pop(vid, None)
+
+
 def _arm_session_list_poll() -> None:
-    global _poll_armed
-    if _poll_armed:
+    global _poll_armed, _poll_delay, _poll_gen
+    if _poll_stopped or _poll_armed:
         return
     _poll_armed = True
-    sublime.set_timeout(_session_list_poll, 900)
+    _poll_delay = _POLL_MIN_MS
+    _poll_gen = _poll_generation()
+    _prune_fingerprints()
+    sublime.set_timeout(_session_list_poll, _poll_delay)
+
+
+def stop_session_list_poll() -> None:
+    """Stop the poll chain of every copy of this module. `plugin_unloaded` calls
+    it: a reload leaves the old incarnation's callbacks pending, and without
+    this each one keeps re-rendering the list on its own clock.
+    """
+    global _poll_stopped, _poll_armed
+    _poll_stopped = True
+    _poll_armed = False
+    _stamps.clear()
+    _fingerprints.clear()
+    _bump_poll_generation()
+
+
+def _next_poll_delay() -> int:
+    """Back off while nothing moves, but wake for the next elapsed-time change."""
+    delay = _poll_delay
+    soonest = _soonest_stamp()
+    if soonest:
+        left = int(max(0.0, soonest - time.time()) * 1000) + 50
+        if left < delay:
+            delay = left
+    return max(_POLL_MIN_MS, min(_POLL_MAX_MS, delay))
 
 
 def _session_list_poll() -> None:
-    global _poll_armed
-    if not _session_list_open():
+    global _poll_armed, _poll_delay
+    if (_poll_stopped or _poll_gen != _poll_generation()
+            or not _session_list_open()):
         _poll_armed = False
         return
-    refresh_all_session_lists()
-    sublime.set_timeout(_session_list_poll, 900)
+    # force=False: rebuild only when the fingerprint or a stamp says so.
+    if refresh_all_session_lists(force=False):
+        _poll_delay = _POLL_MIN_MS
+    else:
+        _poll_delay = min(_POLL_MAX_MS, _poll_delay * 2)
+    sublime.set_timeout(_session_list_poll, _next_poll_delay())
 
 
 class SubmarineSessionListSetTextCommand(sublime_plugin.TextCommand):
@@ -1612,7 +2098,11 @@ class SubmarineSessionListSetTextCommand(sublime_plugin.TextCommand):
 
 
 class SubmarineSessionListCloseCommand(sublime_plugin.TextCommand):
-    """Delete/close the session under the caret in the Sessions list."""
+    """Delete/close the session under the caret in the Sessions list.
+
+    A starred row asks first (`starred_confirm`); anything else goes straight
+    through.
+    """
 
     def run(self, edit):
         import json
@@ -1633,7 +2123,7 @@ class SubmarineSessionListCloseCommand(sublime_plugin.TextCommand):
             return
         name = (row.get("name") or "").strip() or "session"
         list_view = self.view
-        if close_row(win, row):
+        if starred_confirm(win, row) and close_row(win, row):
             refresh_session_list(win)
 
             def _stay(_v=list_view, _win=win, _line=line):
@@ -1784,7 +2274,7 @@ class SubmarineSessionListStarCommand(sublime_plugin.TextCommand):
                 cwd = folders[0]
         except Exception:
             cwd = ""
-        now = toggle_bookmark(sid, cwd or None, record={
+        record = {
             "name": row.get("name"),
             "backend": row.get("backend"),
             "project": row.get("project") or cwd,
@@ -1792,7 +2282,27 @@ class SubmarineSessionListStarCommand(sublime_plugin.TextCommand):
             "query_count": row.get("query_count"),
             "last_activity": row.get("last_activity"),
             "last_access": row.get("last_access"),
-        })
+        }
+        try:
+            starred = set(load_bookmarks(cwd or None) or ())
+        except Exception:
+            starred = set()
+        try:
+            recs = dict(load_bookmark_records(cwd or None) or {})
+        except Exception:
+            recs = {}
+        # A pin covers the whole session: every id a row stands for is starred
+        # and unstarred together, or an older incarnation would keep it pinned.
+        pinned = _pinned(row, starred)
+        for x in row_ids(row):
+            if pinned:
+                starred.discard(x)
+                recs.pop(x, None)
+            else:
+                starred.add(x)
+                recs[x] = dict(record)
+        save_bookmarks(starred, cwd or None, records=recs)
+        now = not pinned
         name = (row.get("name") or "").strip() or sid
         refresh_session_list(win)
         sublime.status_message(

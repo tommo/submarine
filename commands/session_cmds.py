@@ -369,6 +369,12 @@ class SubmarineStopCommand(sublime_plugin.WindowCommand):
             view_id = s.output.view.id()
             s.stop()
             unregister_view(view_id)
+            # The sheet stays open, so `on_close` will not report this stop.
+            try:
+                from ui.session_list import schedule_session_list_refresh
+                schedule_session_list_refresh()
+            except Exception:
+                pass
 
 
 class SubmarineTearOffSessionCommand(sublime_plugin.WindowCommand):

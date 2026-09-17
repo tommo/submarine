@@ -18,9 +18,15 @@ contexts:
     - match: '^\s+\(none\)$'
       scope: comment.line.session-list
 
-    - match: '^▸'
+    # Row lead: the current-session column — `▸ ` on the session this window
+    # shows, `  ` on any other live row — then the state mark. Only live rows
+    # carry it, so its fixed offsets are ui/session_list.py:_fmt_row's.
+    - match: '^▸ '
       scope: keyword.bound.session-list
-      push: row_rest
+      push: row_lead
+
+    - match: '^  (?=[⊡●!?○⏸·])'
+      push: row_lead
 
     - match: '^⊡'
       scope: keyword.torn-off.session-list
@@ -50,6 +56,38 @@ contexts:
       scope: comment.mark.session-list
       push: row_rest
 
+  row_lead:
+    - match: '⊡'
+      scope: keyword.torn-off.session-list
+      set: row_rest
+
+    - match: '●'
+      scope: keyword.working.session-list
+      set: row_rest
+
+    - match: '\?'
+      scope: keyword.input.session-list
+      set: row_rest
+
+    - match: '!'
+      scope: keyword.unread.session-list
+      set: row_rest
+
+    - match: '○'
+      scope: keyword.ready.session-list
+      set: row_rest
+
+    - match: '⏸'
+      scope: keyword.sleeping.session-list
+      set: row_rest
+
+    - match: '·'
+      scope: comment.mark.session-list
+      set: row_rest
+
+    - match: '$'
+      pop: true
+
   header_rest:
     - match: '\b(enter|dclick|r|v|t|s|f|j)\b'
       scope: keyword.operator.session-list
@@ -63,7 +101,7 @@ contexts:
   row_rest:
     - match: '↳'
       scope: comment.tree.session-list
-    - match: '[△★]'
+    - match: '[△★✨]'
       scope: keyword.star.session-list
     # First token is the backend column only — do not scan the title.
     - match: '(?:claude|grok|kimi|codex|pi|deepseek|[A-Z]{2,3})\b'
@@ -73,6 +111,9 @@ contexts:
       pop: true
 
   row_title:
+    # The pin sits between the backend column and the title.
+    - match: '✨'
+      scope: keyword.star.session-list
     - match: '\s+\d+q\b'
       scope: comment.nq.session-list
     - match: '\s+(busy)\s*$'

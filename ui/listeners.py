@@ -332,6 +332,13 @@ class SubmarineEventListener(sublime_plugin.EventListener):
         window = view.window()
         if not window:
             return
+        # Remember where this window keeps its session sheet / session list.
+        # Sublime raises no event for a tab drag, but a drag focuses the view.
+        try:
+            from core.placement import remember_view_tab
+            remember_view_tab(window, view)
+        except Exception:
+            pass
         if keys.is_output_view(view):
             return
         session_view_id = keys.read_setting(
@@ -382,6 +389,13 @@ class SubmarineEventListener(sublime_plugin.EventListener):
                 pass
 
     def on_pre_close(self, view):
+        # Closing a tracked sheet (session or list): remember its slot while
+        # the index is still readable, so reopening lands in the same place.
+        try:
+            from core.placement import remember_view_tab
+            remember_view_tab(view.window(), view)
+        except Exception:
+            pass
         task_id = view.settings().get("submarine_workflow_view") or view.settings().get(
             "claude_workflow_view")
         if not task_id:
@@ -403,7 +417,25 @@ class SubmarineEventListener(sublime_plugin.EventListener):
             if sublime is not None:
                 sublime.set_timeout(refocus, 0)
 
+    def on_pre_close_window(self, window):
+        """Window going away (including quit): keep every tracked tab slot."""
+        try:
+            from core.placement import remember_view_tab
+        except Exception:
+            return
+        for v in window.views():
+            remember_view_tab(window, v)
+
     def on_close(self, view):
+        # Closing a sheet changes what the Sessions list shows: a live row
+        # leaves CURRENT, or stays as a detached one without its current-column
+        # mark. The refresh is debounced (it renders after the bookkeeping
+        # below), so closing a session never waits for the poll.
+        try:
+            from ui.session_list import schedule_session_list_refresh
+            schedule_session_list_refresh()
+        except Exception:
+            pass
         if sublime is not None:
             sublime.load_settings(keys.OUTPUT_SETTINGS).clear_on_change(
                 "submarine_output_%s" % view.id()
