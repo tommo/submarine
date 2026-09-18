@@ -724,6 +724,36 @@ def _ensure_resume_input(session, n=0):
         sched.call_later(120, lambda: _ensure_resume_input(session, n + 1))
 
 
+def scroll_to_tail(session, delay_ms: int = 30) -> None:
+    """Land a re-opened sheet on its tail instead of on its oldest line.
+
+    A resume paints the transcript into a sheet whose viewport is still at the
+    top, so the session opens showing the start of old history. Chrome only: a
+    viewless session no-ops, and the deferred call lets Sublime lay the new text
+    out first. Already-at-the-tail sheets are left alone (the user may have
+    scrolled there, and a short sheet has nothing to scroll).
+    """
+    out = getattr(session, "output", None)
+    composer = getattr(out, "composer", None) if out is not None else None
+    sched = getattr(session, "scheduler", None)
+    if composer is None or sched is None:
+        return
+
+    def _do():
+        sheet = getattr(out, "sheet", None)
+        try:
+            if sheet is not None and sheet.is_following_tail():
+                return
+        except Exception:
+            pass
+        try:
+            composer.scroll_to_end(force=True)
+        except Exception:
+            pass
+
+    sched.call_later(max(0, int(delay_ms)), _do)
+
+
 def _on_init_paint(session, result):
     if isinstance(result, dict) and result.get("error"):
         return
@@ -737,6 +767,7 @@ def _on_init_paint(session, result):
             print("[Submarine] resume preview: %s" % e)
     if not getattr(session, "resume_id", None):
         return
+    scroll_to_tail(session)
     if getattr(session, "quick_mode", False):
         return
     sched = getattr(session, "scheduler", None)

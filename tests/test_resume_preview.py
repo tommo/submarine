@@ -663,5 +663,75 @@ class TestResumePreview(unittest.TestCase):
         self.assertEqual(len(s.on_init), 1)
 
 
+class TestResumeTailScroll(unittest.TestCase):
+    """Opening a session by resuming lands on the tail.
+
+    The preview is painted into a sheet whose viewport is still at the top, so
+    without this the session opens on the oldest line it painted.
+    """
+
+    def _session(self, resume_id="sid", following=(False,)):
+        from tests.fakes import FakeScheduler
+        scrolled = []
+        state = {"following": following}
+
+        class _Composer(object):
+            def scroll_to_end(self, force=False):
+                scrolled.append(bool(force))
+
+        class _Sheet(object):
+            def is_following_tail(self, slack=120):
+                return state["following"][0]
+
+        class _Out(object):
+            composer = _Composer()
+            sheet = _Sheet()
+
+        class _S(object):
+            quick_mode = False
+            on_init = []
+            output = _Out()
+
+        s = _S()
+        s.resume_id = resume_id
+        s.scheduler = FakeScheduler()
+        return s, scrolled, state
+
+    def _paint(self, s):
+        import features.resume as resume
+        orig = resume.paint_resume_preview
+        resume.paint_resume_preview = lambda session: True
+        try:
+            resume._on_init_paint(s, {"session_id": "sid"})
+        finally:
+            resume.paint_resume_preview = orig
+
+    def test_a_resumed_sheet_scrolls_to_its_tail(self):
+        s, scrolled, _state = self._session()
+        self._paint(s)
+        self.assertEqual(scrolled, [], "scrolling must wait for layout")
+        s.scheduler.fire_due()
+        self.assertEqual(scrolled, [True], "force, so history ownership cannot veto")
+
+    def test_a_sheet_already_at_the_tail_is_left_alone(self):
+        s, scrolled, _state = self._session(following=([True],))
+        self._paint(s)
+        s.scheduler.fire_due()
+        self.assertEqual(scrolled, [])
+
+    def test_a_fresh_session_does_not_scroll(self):
+        s, scrolled, _state = self._session(resume_id=None)
+        self._paint(s)
+        s.scheduler.fire_due()
+        self.assertEqual(scrolled, [])
+
+    def test_a_viewless_session_is_not_touched(self):
+        s, scrolled, _state = self._session()
+        s.output = None
+        self._paint(s)
+        s.scheduler.fire_due()
+        self.assertEqual(scrolled, [])
+
+
 if __name__ == "__main__":
     unittest.main()
