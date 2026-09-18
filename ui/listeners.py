@@ -178,6 +178,15 @@ def settle_active_output_view(window) -> None:
         SubmarineOutputEventListener(view)._restore_session(window, paint=True)
         s = get_session_for_view(view)
     if not s:
+        # Nothing to restore: this sheet has no session (a stale one from an
+        # older build, or one whose session ended while it was hidden). Show
+        # the branding page rather than whatever it was left holding.
+        try:
+            from ui import idle
+            if not idle.is_idle(view):
+                idle.render(view, window)
+        except Exception:
+            pass
         return
     if hasattr(s, "_update_status_bar"):
         s._update_status_bar()

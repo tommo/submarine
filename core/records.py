@@ -44,7 +44,7 @@ except ImportError:
             return False
 
 
-SESSIONS_CAP = 400
+SESSIONS_CAP = 500
 
 # View settings (ST persist these across restart).
 STAMP_SESSION_ID = "submarine_session_id"
@@ -209,7 +209,7 @@ class SessionRecord:
 
 
 class SessionStore:
-    """`.sessions.json` — plugin dir, cap SESSIONS_CAP (400), MRU-front."""
+    """`.sessions.json` — plugin dir, capped by `SESSIONS_CAP`, MRU-front."""
 
     def __init__(self, path: Optional[str] = None) -> None:
         self.path = path or default_sessions_path()

@@ -45,6 +45,25 @@ def last_event_is_text(events: list) -> bool:
     return bool(events) and isinstance(events[-1], str)
 
 
+def format_user_prompt_block(text: str, has_context: bool,
+                             context_prefix: str) -> str:
+    """Frozen ◎ user-turn header as written into the buffer.
+
+    Continuation lines are indented two spaces; ▶ sits at the end of the
+    last line. Matches composer ◎ + draft except for that indent and the
+    trailing ▶ — so promoting the sticky strip in place does not move the
+    first line of the user message.
+    """
+    lines = (text or "").split("\n")
+    if len(lines) > 1:
+        indented = lines[0] + "\n" + "\n".join("  " + l for l in lines[1:])
+    else:
+        indented = text or ""
+    if has_context:
+        return "◎ %s ▶\n  %s\n" % (indented, context_prefix)
+    return "◎ %s ▶\n" % indented
+
+
 def should_incremental_append(
         prev_event_count: int,
         prev_joined_text: str,

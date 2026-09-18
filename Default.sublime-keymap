@@ -8,9 +8,12 @@
         "command": "submarine_quick_agent"
     },
     {
-        // Keep old chord as alias so existing muscle memory still works
         "keys": ["super+alt+\\"],
-        "command": "submarine_switch"
+        "command": "submarine_reveal_session"
+    },
+    {
+        "keys": ["super+ctrl+\\"],
+        "command": "submarine_session_list"
     },
     {
         "keys": ["super+shift+escape"],
@@ -453,6 +456,34 @@
             "tag": "Terminal",
             "cwd": "${file_path:${folder}}"
         }
+    },
+    // ── The no-session page (ui/idle.py) ────────────────────────────────
+    // A Submarine sheet with no session shows a branding page and these
+    // keys; a bound sheet never matches the idle flag, so nothing here
+    // shadows a live composer.
+    {
+        "keys": ["enter"],
+        "command": "submarine_start",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_idle", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["r"],
+        "command": "submarine_resume",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_idle", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["l"],
+        "command": "submarine_session_list",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_idle", "operator": "equal", "operand": true }
+        ]
     },
     {
         "keys": [

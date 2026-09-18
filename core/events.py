@@ -563,6 +563,10 @@ class BridgeEventRouter:
                 "status: running" in low
                 or low.strip() in ("background", "backgrounded")
                 or name in ("Task", "Subagent", "spawn_subagent")
+                # Claude Code acks a background launch with "Command running in
+                # background with ID: <id>…"; without this the ⚙ row closes the
+                # instant the job starts. The gate also keeps the id + log path.
+                or self.bg.note_launch_ack(tool_use_id, content or "")
             ):
                 return
             self.bg.finalize_tool(tool_use_id, keep=not is_error)

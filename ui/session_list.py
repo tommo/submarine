@@ -46,7 +46,7 @@ SETTING = keys.SESSION_LIST
 ROWS_KEY = keys.SESSION_LIST_ROWS
 WRITING_KEY = "submarine_slist_writing"
 FOLLOW_GEN_KEY = "submarine_slist_follow_gen"
-HISTORY_CAP = 400  # default; override with session_list_history_limit
+HISTORY_CAP = 500  # default; override with session_list_history_limit
 # Full row needs ~backend(8) + title(16+) + status/time. Below this, abbrev.
 COMPACT_COLS = 56
 BACKEND_COL = 8  # pad/clip so deepseek (8) and grok (4) share a column
@@ -274,7 +274,8 @@ def view_cols(view, fallback: int = 80) -> int:
         except Exception:
             margin = 0
         usable = max(em, vw - 2 * margin)
-        return max(24, int(usable / em))
+        # Two columns of slack: ST's gutter/scrollbar plus wide-glyph overflow.
+        return max(24, int(usable / em) - 2)
     except Exception:
         return fallback
 
@@ -1042,6 +1043,11 @@ def reveal_live_session(window, session, focus: bool = True,
         force_sheet = True
     view = session.output.view if session.output else None
     if view and view.is_valid():
+        try:
+            from ui import idle
+            idle.clear(view)   # the sheet belongs to this session again
+        except Exception:
+            pass
         win = view.window() or window
         prev = None if focus else win.active_view()
         win.focus_view(view)
@@ -1625,6 +1631,47 @@ class SessionListView:
         self.refresh(follow=True)
         self.window.focus_view(self.view)
 
+    def select_active(self) -> bool:
+        """Put the caret on this window's active session row, if listed."""
+        if not self.view or not self.view.is_valid():
+            return False
+        session = None
+        try:
+            session = get_active_session(self.window)
+        except Exception:
+            session = None
+        if session is None:
+            return False
+        try:
+            index = json.loads(self.view.settings().get(ROWS_KEY) or "[]")
+        except Exception:
+            index = []
+        if not index:
+            return False
+        aid = getattr(session, "agent_id", None)
+        sid = getattr(session, "session_id", None)
+        target = None
+        if aid:
+            for rec in index:
+                if rec.get("agent_id") == aid:
+                    target = rec
+                    break
+        if target is None and sid:
+            for rec in index:
+                if rec.get("session_id") == sid:
+                    target = rec
+                    break
+        if target is None:
+            return False
+        try:
+            pt = self.view.text_point(max(0, int(target.get("line") or 1) - 1), 0)
+            self.view.sel().clear()
+            self.view.sel().add(sublime.Region(pt))
+            self.view.show(pt)
+            return True
+        except Exception:
+            return False
+
     def refresh(self, follow: bool = False):
         if not self.view or not self.view.is_valid():
             return
@@ -1742,10 +1789,12 @@ def show_session_list(window) -> Optional[SessionListView]:
             sl.view = v
             sl._apply_chrome()
             sl.refresh()
+            sl.select_active()
             window.focus_view(v)
             _arm_session_list_poll()
             return sl
     sl = SessionListView(window)
+    sl.select_active()
     _arm_session_list_poll()
     return sl
 

@@ -201,6 +201,24 @@ turn: idle/live/compacting/interrupting. Sleep is DERIVED:
   dispatch stubs from claude_main; rename log paths/env (`SUBLIME_CLAUDE_*`→`SUBMARINE_*`) and
   shared bridge-support imports to the new `bridge/support/` package
   (settings cascade, logger, constants — must stay sublime-free).
+- **Port gaps that silently disabled a feature** (fixed in this tree, worth
+  carrying in any further port): `helpers/clipboard_image.{js,sh,ps1}` — without
+  them `submarine_paste_image` prints "clipboard helper missing" and falls back
+  to pasting text; the `context.build_prompt` fold at send time — without it the
+  📎 chips (images included) never reach the bridge, because `Session.query`
+  takes `images` from elsewhere (`tests/test_context_images.py`); and the chip
+  gestures — modifier-click to remove one (`ContextManager.remove_at` had no
+  caller anywhere), the trailing `clear` link, and clicking a folder/image chip
+  revealing it rather than opening it (`tests/test_context_chips.py`).
+- **The claude background-task wire is not the ACP one** (see
+  `sandbox/claude_bg/README.md`): background bash acks with "Command running in
+  background with ID: …", opens `task_started` (with `is_backgrounded`) even for
+  foreground commands, and finishes with `task_updated {status}` — a
+  `task_notification` only when the turn is still live. The host keeps ⚙ on that
+  ack, ignores foreground tasks, and treats a terminal `task_updated` as the
+  completion (one notification turn, upgraded in place if the CLI's own
+  notification follows). Captures in `sandbox/claude_bg/fixtures/` replay through
+  the real gate in `tests/test_cc_bg_host_gate.py`.
 - **50 production invariants** in the report §9 are acceptance criteria
   (cancel-as-notification, agent_busy retry, q0 AskUser mapping, plan outcome
   shape, foreign-session filter, load-replay no-paint, bundled remap, busy-state

@@ -578,6 +578,22 @@ class SubmarineOutputView(FormatHelpers):
         """Set the live retry hint. Viewless: records hint, no buffer write."""
         self.renderer.set_retry_hint(text)
 
+    def render_idle(self, window=None):
+        """No session left to show: the branding page (ui/idle.py). Viewless: no-op."""
+        try:
+            from ui import idle
+            return idle.render(self.sheet.view, window or self.sheet.window)
+        except Exception:
+            return False
+
+    def clear_idle(self):
+        """A session is taking the sheet over: drop the idle flag."""
+        try:
+            from ui import idle
+            idle.clear(self.sheet.view)
+        except Exception:
+            pass
+
     def enter_input_mode(self):
         """Open the ◎ composer. Viewless: no-op (restored via surface_restore)."""
         self.composer.enter_input_mode()
@@ -649,6 +665,15 @@ class SubmarineOutputView(FormatHelpers):
 
     def restore_draft_caret(self, force=False):
         return self.composer.restore_draft_caret(force=force)
+
+    def collapse_empty_composer_tail(self):
+        self.composer.collapse_empty_composer_tail()
+
+    def ensure_composer_spare_line(self):
+        self.composer.ensure_composer_spare_line()
+
+    def _view_is_focused(self):
+        return self.sheet.view_is_focused()
 
     def refresh_preserving_input(self):
         self.renderer.refresh_preserving_input()
@@ -1165,40 +1190,115 @@ class SubmarineOutputView(FormatHelpers):
             except Exception:
                 pass
 
+    @staticmethod
+    def _modifier_held_for_remove():
+        # type: () -> bool
+        """True if Ctrl or primary (Cmd on macOS) is held during a chip click.
+
+        Ported from sublime-claude: Phantom `on_navigate` gets no modifier
+        state, so the live keyboard flags are read directly. Anywhere else
+        (Linux, or a failed lookup) reports False and the click just opens.
+        """
+        import sys
+        try:
+            if sys.platform == "darwin":
+                from ctypes import CDLL, c_uint64, util
+                lib = CDLL(util.find_library("ApplicationServices"))
+                # kCGEventSourceStateHIDSystemState = 1
+                lib.CGEventSourceFlagsState.argtypes = [c_uint64]
+                lib.CGEventSourceFlagsState.restype = c_uint64
+                flags = lib.CGEventSourceFlagsState(1)
+                k_control, k_command = 0x00040000, 0x00100000
+                return bool(flags & (k_control | k_command))
+            if sys.platform == "win32":
+                import ctypes
+                return bool(ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000)
+        except Exception:
+            pass
+        return False
+
+    def _open_context_ref(self, ref):
+        """Follow one chip ref: editor for code (with its line), reveal else."""
+        from features.context import chip_ref, first_line_of_range
+
+        ref = chip_ref(ref)
+        path, name = ref["path"], ref["name"]
+        if not path:
+            self._status("No path for %s" % name)
+            return
+        if ref["action"] == "open":
+            self._open_path(path, line=first_line_of_range(ref["line_range"]))
+        else:
+            self._reveal_path(path)
+
+    def _status(self, message):
+        if sublime is not None:
+            try:
+                sublime.status_message(message)
+            except Exception:
+                pass
+
+    def _context_session(self):
+        """Session that owns the 📎 chips: view binding first, quick host next.
+
+        A quick/multi-slot view's registry binding lags its chip repaint, and
+        losing the session there would leave the chips inert.
+        """
+        session = get_session_for_view(self.view)
+        if session is not None:
+            return session
+        window = self.view.window() if self.view is not None else None
+        if window is None:
+            return None
+        try:
+            from features.quick import get_host
+            host = get_host(window)
+        except Exception:
+            return None
+        return getattr(host, "active_session", None) if host is not None else None
+
+    @staticmethod
+    def _context_manager(session):
+        """The session's pending-context manager, or None when unwired."""
+        return getattr(session, "context", None)
+
     def _handle_context_href(self, href):
-        """Clickable 📎 chips: open:N (pending) or turn:N (frozen)."""
+        """Clickable 📎 chips: open:N (pending), turn:N (frozen), clear.
+
+        Modifier-click on a pending chip removes it; the trailing `clear`
+        link drops the whole queue.
+        """
+        from features.context import chip_ref
+
         if not href:
             return
-        session = get_session_for_view(self.view)
+        if href == "clear":
+            ctx = self._context_manager(self._context_session())
+            if ctx is not None:
+                ctx.clear()
+                self._status("Context cleared")
+            return
         kind, _, rest = href.partition(":")
         try:
             idx = int(rest)
         except (TypeError, ValueError):
-            idx = -1
-        if kind == "open" and session and getattr(session, "pending_context", None):
-            items = list(session.pending_context)
-            if 0 <= idx < len(items):
-                item = items[idx]
-                path = getattr(item, "path", None) or (
-                    item.get("path") if isinstance(item, dict) else None)
-                if path:
-                    # Modifier-click removes (best-effort: always open; commands layer
-                    # can bind a dedicated remove).
-                    self._open_path(path)
             return
-        if kind == "turn" and self.current:
+        if kind in ("open", "item"):
+            ctx = self._context_manager(self._context_session())
+            items = list(getattr(ctx, "items", None) or [])
+            if not 0 <= idx < len(items):
+                return
+            item = items[idx]
+            if self._modifier_held_for_remove():
+                if ctx.remove_at(idx):
+                    self._status("Removed context: %s" % chip_ref(item)["name"])
+                return
+            self._open_context_ref(item)
+            return
+        if kind in ("turn", "tref") and self.current:
             refs = list(getattr(self.current, "context_refs", None) or [])
-            if 0 <= idx < len(refs):
-                path = refs[idx].get("path") or ""
-                lr = refs[idx].get("line_range") or ""
-                line = None
-                if lr:
-                    try:
-                        line = int(str(lr).lstrip("L").split("-")[0])
-                    except Exception:
-                        line = None
-                if path:
-                    self._open_path(path, line=line)
+            if 0 <= idx < len(refs) and isinstance(refs[idx], dict):
+                self._open_context_ref(refs[idx])
 
     def _format_tool_detail(self, tool):
         from .formatters import format_tool_detail

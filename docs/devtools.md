@@ -95,6 +95,16 @@ Use this after editing plugin Python instead of quitting Sublime.
 | **soft** (default) | `plugin_unloaded` → unload all `Submarine.*` → purge `sys.modules` → `sublime_plugin.reload_plugin` on every root `.py` with import interception so **submodules** re-exec |
 | **hard** | Add package to `Preferences.ignored_packages`, then remove it (~1s later) — full ST package unload/load |
 
+**A command that did not exist before needs `--hard`** (or a Sublime restart).
+Soft reload re-registers the root plugin files only, and Sublime dispatches from
+the class objects *it* scanned when it loaded the package (`Submarine.commands.*`,
+`Submarine.ui.*` — note the prefix; the plugin's own imports make bare twins like
+`commands.session_cmds`). Neither a soft reload nor
+`sublime_plugin.reload_plugin("Submarine.commands.session_cmds")` refreshes that
+scan in ST 4143: re-running the module puts the new class in `sys.modules`, but
+the command stays unknown, so a chord bound to it does nothing. Measured
+2026-09-18 with `submarine_reveal_session`.
+
 ### After reload
 
 1. Socket briefly dies; CLI `--wait` re-pings until `ok`.
@@ -228,11 +238,74 @@ CLI prefers `op=debug`; if the live plugin predates that handler, it
 
 ---
 
+## Session control (`op: "sessions"`)
+
+For callers **outside** Sublime — a terminal, a script, or an agent that is not
+itself a Submarine session. Four actions, JSON only: no `code` field, nothing
+here evaluates Python, because this surface is meant to be handed to agents.
+
+```json
+{"op": "sessions", "action": "list", "scope": "all"}
+{"op": "sessions", "action": "list", "scope": "children", "parent": "agent-…"}
+{"op": "sessions", "action": "view", "ref": {"name": "GUEST"}, "mode": "tail", "turns": 3}
+{"op": "sessions", "action": "view", "ref": {"agent_id": "agent-…"}, "mode": "text"}
+{"op": "sessions", "action": "view", "ref": "agent-…", "mode": "edits", "limit": 20}
+{"op": "sessions", "action": "chat", "ref": "GUEST", "prompt": "run the tests",
+ "queue": "queue|interrupt|reject", "wait": true, "idem": "k1"}
+{"op": "sessions", "action": "interrupt", "ref": "GUEST",
+ "caller": {"kind": "external", "name": "claude-code", "pid": 4711}}
+```
+
+Envelope: `{"ok": bool, "data": {…}, "error": null|string, "ref_resolved": {…},
+"instance": {"pid", "plugin_dir"}, "ts"}`. `data.code` carries a stable reason
+(`not_found`, `ambiguous`, `busy`, `no_view`, `bad_request`, `unknown_action`,
+`internal`); `ambiguous` and `not_found` answer with `data.candidates`.
+
+Semantics worth knowing before scripting it:
+
+- `ref` resolves **exactly** — an `agent_id`/`session_id`/`subsession_id`, a view
+  id, or a `name` that matches one session — and never falls back to "the active
+  view" or "the only working session". `ref_resolved` comes back on every reply,
+  so pass that next time and stop guessing.
+- `view:mode=tail` reads the backend transcript, so it works for live, sleeping,
+  detached and **closed** sessions (the grok resume chain included);
+  `mode=text` needs a sheet and says `no_view` rather than creating one;
+  `mode=edits` pages the Edit/Write rows and needs no view at all.
+- `chat` never stops a session and never opens a sheet. `queue` decides what
+  happens mid-turn (`queue` behind it, `interrupt` to cancel and hoist, `reject`
+  to fail). A sleeping target is handed to the socket thread, which wakes it,
+  waits for the bridge, then sends; `wait:true` additionally follows the turn
+  and later returns `timed_out` rather than pretending the work was dropped.
+  `idem` makes a retry safe: the same key never sends the prompt twice.
+- `interrupt` reports what it leaves behind: while the bridge acknowledgement is
+  outstanding the session is still `working` with `turn_phase: "interrupting"`
+  (`settling: true`); the host's settle timer reconciles a lost ack.
+
+CLI for the same surface, no agent in the loop:
+
+```bash
+python3 submarine_sessions.py list [--scope all|window|children]
+python3 submarine_sessions.py view GUEST --turns 2 [--mode tail|text|edits]
+python3 submarine_sessions.py chat GUEST "run the tests" [--wait] [--queue reject]
+python3 submarine_sessions.py interrupt GUEST
+python3 submarine_sessions.py --manual       # the same text as docs/session-control.md
+```
+
+`chat --wait` prints the reply by following up with a `view --turns 1` request.
+The full manual — every option, the error codes, the state model, the
+troubleshooting table — is `docs/session-control.md`, printed by `--manual`.
+
+---
+
 ## Not in agent MCP
 
 `debug_*` handlers still exist on the host for the CLI/socket path, but they
 are **not** advertised in `mcp/tools.py` `tools/list`. In-session agents only
 see product tools (`list_sessions`, `update_goal`, `set_timer`, …).
+
+`op:"sessions"` is in the same boat for now: the socket and the CLI speak it,
+and no in-session tool wraps it. An outside agent reaches it through
+`submarine_sessions.py` (or its own client) until a stdio MCP façade exists.
 
 ---
 

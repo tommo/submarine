@@ -429,6 +429,143 @@ class SubmarineHideSessionCommand(sublime_plugin.WindowCommand):
         return bool(s and s.output and s.output.view and s.output.view.is_valid())
 
 
+class SubmarineRevealSessionCommand(sublime_plugin.WindowCommand):
+    def run(self):
+        session = get_active_session(self.window)
+        window = self.window
+        if session is None:
+            found = self._session_elsewhere()
+            if found is not None:
+                session, window = found
+                try:
+                    window.bring_to_front()
+                except Exception:
+                    pass
+        if session is not None and self._reveal(session, window):
+            self._land(session)
+            self._trace("revealed", session, window)
+            return
+        if self._focus_sheet():
+            self._trace("focused the window's sheet", None, window)
+            return
+        self._trace("no session to reveal", None, window, level="warn")
+        sublime.status_message("Submarine: no session to reveal")
+
+    def _trace(self, what, session, window, level="info"):
+        """One line into the devtools ring/file — a dead chord is otherwise
+        indistinguishable from a dead binding, and this is where that gets read."""
+        try:
+            from features.devtools import server as devtools
+            devtools.log("reveal session: %s" % what, level=level,
+                         agent=getattr(session, "agent_id", "") if session else "",
+                         window=window.id() if window else None)
+        except Exception:
+            pass
+
+    def _reveal(self, session, window):
+        """Attach the session to `window`'s sheet. False when neither path works."""
+        if window is None:
+            return False
+        try:
+            from ui.host import HostView, is_single_mode
+            if is_single_mode() and not getattr(session, "torn_off", False):
+                if HostView.for_window(window).attach(
+                        window, session, focus=True):
+                    return True
+        except Exception:
+            pass
+        try:
+            from ui.session_list import reveal_live_session
+            return bool(reveal_live_session(
+                window, session, focus=True, force_sheet=True))
+        except Exception:
+            return False
+
+    def _session_elsewhere(self):
+        """(session, window) of the most recently active session in another window."""
+        try:
+            windows = dict((w.id(), w) for w in sublime.windows())
+        except Exception:
+            return None
+        try:
+            from core.registry import default_registry
+            mine = self.window.id() if self.window else None
+            best = None
+            for session in default_registry.iter_sessions():
+                if getattr(session, "quick_mode", False):
+                    continue
+                try:
+                    wid = session.window.id()
+                except Exception:
+                    continue
+                if wid == mine or wid not in windows:
+                    continue
+                stamp = 0.0
+                for attr in ("last_access", "last_activity", "last_interaction"):
+                    try:
+                        stamp = max(stamp, float(getattr(session, attr, 0) or 0))
+                    except Exception:
+                        pass
+                if best is None or stamp >= best[0]:
+                    best = (stamp, session, windows[wid])
+            if best is None:
+                return None
+            return best[1], best[2]
+        except Exception:
+            return None
+
+    def _land(self, session):
+        """Caret in the composer if it's open, else the tail of the sheet."""
+        out = getattr(session, "output", None)
+        if out is None:
+            return
+        if not getattr(session, "working", False):
+            try:
+                enter = getattr(session, "_enter_input_with_draft", None)
+                if callable(enter):
+                    enter()
+            except Exception:
+                pass
+        try:
+            if out.is_input_mode():
+                out.focus_composer(
+                    force_show=True, steal_focus=True, park_at_end=True)
+                return
+        except Exception:
+            pass
+        try:
+            from ui.session_list import reveal_session_bottom
+            reveal_session_bottom(session)
+        except Exception:
+            view = getattr(out, "view", None)
+            if view is None:
+                return
+            try:
+                end = view.size()
+                view.show(sublime.Region(end, end), False)
+            except Exception:
+                pass
+
+    def _focus_sheet(self):
+        """No session here: at least bring a Submarine sheet forward, at the tail."""
+        try:
+            for view in self.window.views():
+                if keys.is_output_view(view):
+                    self.window.focus_view(view)
+                    try:
+                        end = view.size()
+                        view.show(sublime.Region(end, end), False)
+                    except Exception:
+                        pass
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def is_enabled(self):
+        return self.window is not None
+
+
 class SubmarineSleepSessionCommand(sublime_plugin.WindowCommand):
     def run(self):
         session = get_active_session(self.window)

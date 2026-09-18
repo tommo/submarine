@@ -29,16 +29,30 @@ class FakeScheduler:
 
     def fire_due(self, max_ms=None):
         # type: (Optional[int]) -> int
-        keep = []
-        fired = 0
-        for ms, fn, tok in self.pending:
-            if max_ms is None or ms <= max_ms:
-                fn()
-                fired += 1
-            else:
-                keep.append((ms, fn, tok))
-        self.pending = keep
-        return fired
+        """Fire what was due when this was called, once each.
+
+        Callbacks armed *during* the drain stay pending: a callback that
+        re-arms itself (the busy-mark chain) would otherwise spin this forever.
+        Step those with `fire_next()`.
+        """
+        due = [p for p in self.pending if max_ms is None or p[0] <= max_ms]
+        self.pending = [p for p in self.pending if not (max_ms is None or p[0] <= max_ms)]
+        for _ms, fn, _tok in due:
+            fn()
+        return len(due)
+
+    def fire_next(self):
+        # type: () -> int
+        """Fire only the most recently armed callback, once.
+
+        Self-re-arming chains (a spinner tick) re-arm on every fire, so this is
+        the way to step them.
+        """
+        if not self.pending:
+            return 0
+        _ms, fn, _tok = self.pending.pop()
+        fn()
+        return 1
 
     def fire_all(self):
         # type: () -> int
@@ -75,6 +89,7 @@ class FakeOutput:
         self.plans = []  # type: list
         self._asking_cleared = 0
         self.spinners = 0
+        self.spinner_frames = []  # type: list  # (frames, n)
         self.retry_hints = []  # type: list
         self.input_enters = 0
         self.resets = []  # type: list
@@ -87,6 +102,14 @@ class FakeOutput:
         self.view = None
         self.pending_context = []  # type: list
         self.artifact_cards = []  # type: list
+        self.current = None
+        self._question_input_mode = False
+        self.composer_text = ""
+        self.collapsed_tails = 0
+        self.spare_lines = 0
+        self.scrolls = 0
+        self.caret_restores = 0
+        self._caret_owner = "draft"
 
     def prompt(self, text, context_names=None, context_refs=None):
         self.prompts.append((text, context_names, context_refs))
@@ -166,6 +189,7 @@ class FakeOutput:
 
     def advance_spinner(self, frames=None):
         self.spinners += 1
+        self.spinner_frames.append((frames, self.spinners))
 
     def set_retry_hint(self, text):
         self.retry_hints.append(text)
@@ -173,6 +197,34 @@ class FakeOutput:
     def enter_input_mode(self):
         self.input_enters += 1
         self._input = True
+
+    def get_input_text(self):
+        return self.composer_text
+
+    def set_composer_text(self, text):
+        self.composer_text = text or ""
+
+    def collapse_empty_composer_tail(self):
+        self.collapsed_tails += 1
+
+    def ensure_composer_spare_line(self):
+        self.spare_lines += 1
+
+    def _view_is_focused(self):
+        return False
+
+    def scroll_composer_chrome(self, force=False):
+        self.scrolls += 1
+
+    def restore_draft_caret(self, force=False):
+        self.caret_restores += 1
+        return True
+
+    def caret_owner(self):
+        return self._caret_owner
+
+    def set_caret_owner(self, owner):
+        self._caret_owner = owner
 
     def reset_active_states(self, soft=False):
         self.resets.append(soft)

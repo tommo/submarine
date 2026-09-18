@@ -105,7 +105,7 @@
         "command": "submarine_switch"
     },
     {
-        "caption": "Submarine: Session List",
+        "caption": "Submarine: Session List (⌃⌘\\)",
         "command": "submarine_session_list"
     },
     {
@@ -140,6 +140,10 @@
     {
         "caption": "Submarine: Hide Session (keep running)",
         "command": "submarine_hide_session"
+    },
+    {
+        "caption": "Submarine: Reveal Session View (⌥⌘\\)",
+        "command": "submarine_reveal_session"
     },
     {
         "caption": "Submarine: Quick Agent (⌘⇧\\ toggle show/hide)",

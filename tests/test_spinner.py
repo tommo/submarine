@@ -1,0 +1,131 @@
+"""The busy mark in the session sheet has to move.
+
+Regression: the port kept the drawing (`ui/renderer.py` renders
+`frames[_spinner_frame]`), the frames, the turn phases and the facade
+(`output.advance_spinner`) — but nothing ever *called* it, so the mark sat on
+frame 0 for the whole turn. The driver is `Session._animate`, ported from
+sublime-claude, kicked on a phase change.
+"""
+from __future__ import annotations
+
+import os
+import sys
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core.session import (
+    SPINNER_RESPOND_MS,
+    SPINNER_TOOL_MS,
+    SPINNER_WAIT_MS,
+)
+from plat.constants import SPINNER_RESPONDING, SPINNER_WAITING
+from tests.fakes import FakeClient, FakeOutput, FakeScheduler, make_session
+
+
+class SpinnerTest(unittest.TestCase):
+    def _working(self, phase="waiting"):
+        out = FakeOutput()
+        client = FakeClient()
+        s = make_session(output=out, client=client, initialized=True)
+        s.turn.begin_query()
+        s.turn_phase = phase
+        return s, out, client
+
+    def _frames_seen(self, out):
+        return [f for f, _n in out.spinner_frames]
+
+    def _step(self, session, times=1):
+        """Advance the chain one frame at a time (`fire_due` cannot drain a
+        callback that re-arms)."""
+        for _ in range(times):
+            session.scheduler.fire_next()
+
+    def test_a_turn_starts_the_chain_and_the_mark_moves(self):
+        s, out, _client = self._working("waiting")
+        s._kick_animation()
+        self.assertEqual(len(out.spinner_frames), 1, "one frame immediately")
+        self.assertEqual(self._frames_seen(out), [SPINNER_WAITING])
+        self._step(s, 3)
+        self.assertEqual(len(out.spinner_frames), 4)
+        self.assertTrue(all(f == SPINNER_WAITING for f in self._frames_seen(out)))
+        self.assertEqual(s.scheduler.pending[-1][0], SPINNER_WAIT_MS)
+
+    def test_the_phase_picks_the_frames_and_the_speed(self):
+        s, out, _client = self._working("responding")
+        s._kick_animation()
+        self.assertEqual(self._frames_seen(out), [SPINNER_RESPONDING])
+        self.assertEqual(s.scheduler.pending[-1][0], SPINNER_RESPOND_MS)
+        s.turn_phase = "tool"
+        self._step(s)
+        self.assertEqual(self._frames_seen(out)[-1], SPINNER_RESPONDING)
+        self.assertEqual(s.scheduler.pending[-1][0], SPINNER_TOOL_MS)
+
+    def test_a_phase_change_kicks_the_chain(self):
+        """The event port reports a phase per stream chunk, so only a *change*
+        may kick — otherwise the mark would tick per event, not per interval."""
+        s, out, _client = self._working("waiting")
+        s._set_turn_phase("responding")
+        self.assertEqual(len(out.spinner_frames), 1)
+        # Same phase again (per-chunk "responding"): no extra chain.
+        s._set_turn_phase("responding")
+        s._set_turn_phase("responding")
+        self.assertEqual(len(out.spinner_frames), 1)
+
+    def test_the_chain_stops_when_the_turn_ends(self):
+        s, out, _client = self._working("waiting")
+        s._kick_animation()
+        before = len(out.spinner_frames)
+        s.turn.end_live()
+        self._step(s, 3)
+        self.assertEqual(len(out.spinner_frames), before, "no frame after the turn")
+        self.assertEqual(s.turn_phase, "idle", "the end of a turn is idle")
+        # Nothing is left armed once the turn is over.
+        self.assertEqual(s.scheduler.pending, [])
+
+    def test_the_chain_stops_when_the_bridge_is_gone(self):
+        """`stop()` leaves the turn object alone but drops the client; the
+        chain must not run forever against a dead session."""
+        s, out, _client = self._working("waiting")
+        s._kick_animation()
+        s.client = None
+        before = len(out.spinner_frames)
+        self._step(s, 3)
+        self.assertEqual(len(out.spinner_frames), before)
+        self.assertEqual(s.scheduler.pending, [])
+
+    def test_a_kick_never_leaves_two_chains_racing(self):
+        s, out, _client = self._working("waiting")
+        s._kick_animation()
+        s._kick_animation()          # e.g. waiting → responding quickly
+        self.assertEqual(len(out.spinner_frames), 2, "both kicked once")
+        # The orphaned generation is still queued (the first kick armed it
+        # before the second): it ticks once, finds a newer generation and dies
+        # instead of re-arming, leaving exactly one live chain.
+        for _ in range(4):
+            if not s.scheduler.pending:
+                break
+            _ms, fn, _tok = s.scheduler.pending.pop(0)
+            fn()
+        self.assertEqual(len(s.scheduler.pending), 1, "one live chain, one tick armed")
+        self._step(s)
+        self.assertEqual(len(s.scheduler.pending), 1, "and it stays at one")
+
+    def test_not_working_means_no_chain(self):
+        out = FakeOutput()
+        s = make_session(output=out, client=FakeClient(), initialized=True)
+        s._kick_animation()
+        self.assertEqual(out.spinner_frames, [])
+        self.assertEqual(s.scheduler.pending, [])
+
+    def test_a_viewless_sheet_still_counts_as_chrome_only(self):
+        """The renderer guards on the view; the driver must not care, so a
+        background turn keeps ticking (and paints nothing)."""
+        s, out, _client = self._working("responding")
+        out.view = None
+        s._kick_animation()
+        self.assertEqual(len(out.spinner_frames), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

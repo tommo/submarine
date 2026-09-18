@@ -31,6 +31,20 @@ _TITLE_ICON_RE = re.compile(r'^(?:[◉◇•○◐◓◑◒❓⏸↻⚠✘❌!�
 TAB_NAME_MAX = 40  # session name only; status + `GR> ` sit in front of this
 
 
+class _HeadlessRegion(object):
+    """Minimal Region stand-in when tests run without the Sublime runtime."""
+
+    def __init__(self, a, b=None):
+        self.a = a
+        self.b = a if b is None else b
+
+    def begin(self):
+        return min(self.a, self.b)
+
+    def end(self):
+        return max(self.a, self.b)
+
+
 def format_tab_title(base: str, prefix: str, abbrev: str = "",
                      max_name: int = TAB_NAME_MAX) -> str:
     """Status + optional `GR> ` + truncated session name.
@@ -61,6 +75,7 @@ class OutputSheet:
         self.view = None
         self._name = "Submarine"
         self._panel_name = None
+        self._pending_vp_pin = None
 
     def _has_view(self) -> bool:
         return self._valid()
@@ -349,70 +364,163 @@ class OutputSheet:
         return vis.end() + slack >= size
 
     def pin_view_state(self) -> dict:
+        """Snapshot a *text anchor* at the viewport top + visible selection.
+
+        Pixel-only viewport y jumps when mid-buffer lines change length.
+        """
         view = self.view
         pin = {
+            "anchor": 0,
+            "vis_a": 0,
+            "vis_b": 0,
+            "y_off": 0.0,
+            "x": 0.0,
             "sels": [],
+            "size": 0,
             "preserve_sel": True,
-            "vx": 0.0, "vy": 0.0,
-            "anchor_pt": 0,
-            "anchor_off": 0,
         }
         if not self._valid():
             return pin
         try:
-            vx, vy = view.viewport_position()
-            pin["vx"], pin["vy"] = float(vx), float(vy)
+            vp = view.viewport_position()
+            pin["x"] = float(vp[0])
         except Exception:
-            pass
+            vp = (0.0, 0.0)
         try:
             vis = view.visible_region()
-            pin["anchor_pt"] = vis.begin()
-            pin["anchor_off"] = 0
+            pin["vis_a"] = vis.begin()
+            pin["vis_b"] = vis.end()
+        except Exception:
+            vis = None
+        try:
+            pin["size"] = view.size()
         except Exception:
             pass
         try:
-            pin["sels"] = [(r.begin(), r.end()) for r in view.sel()]
+            anchor = int(view.layout_to_text(vp))
+        except Exception:
+            anchor = pin["vis_a"]
+        pin["anchor"] = anchor
+        try:
+            _ax, ay = view.text_to_layout(anchor)
+            pin["y_off"] = float(vp[1]) - float(ay)
+        except Exception:
+            pass
+        try:
+            pin["sels"] = [(r.a, r.b) if hasattr(r, "a") else (r.begin(), r.end())
+                           for r in view.sel()]
         except Exception:
             pass
         return pin
 
     def restore_view_state(self, pin: dict) -> None:
+        """Restore viewport to the pinned text anchor; keep caret out of the tail.
+
+        Sticky-composer carets use pin['composer_caret'] / preserve_sel so
+        deferred restores do not yank the caret to viewport-top or draft EOF
+        while the user is editing mid-draft during a stream.
+        """
         if not self._valid() or not pin:
             return
         view = self.view
         try:
-            if pin.get("preserve_sel") and pin.get("sels"):
-                if sublime is not None:
-                    view.sel().clear()
-                    for a, b in pin["sels"]:
-                        view.sel().add(sublime.Region(int(a), int(b)))
-            if pin.get("composer_caret") is not None and sublime is not None:
-                pos = int(pin["composer_caret"])
-                view.sel().clear()
-                view.sel().add(sublime.Region(pos, pos))
+            size = view.size()
         except Exception:
-            pass
-        try:
-            view.set_viewport_position(
-                (float(pin.get("vx", 0)), float(pin.get("vy", 0))), False)
-        except Exception:
-            pass
-
-    def schedule_viewport_restore(self, pin: dict) -> None:
-        if sublime is None or not pin:
             return
-        view = self.view
+        anchor = max(0, min(int(pin.get("anchor") or 0), max(0, size)))
+        vis_a = max(0, min(int(pin.get("vis_a") or anchor), size))
+        vis_b = max(vis_a, min(int(pin.get("vis_b") or anchor), size))
+        y_off = float(pin.get("y_off") or 0)
+        x = float(pin.get("x") or pin.get("vx") or 0)
 
-        def _pass(p=pin, v=view):
-            if v and v.is_valid():
+        def _apply_vp():
+            if not view.is_valid():
+                return
+            try:
+                _ax, ay = view.text_to_layout(anchor)
+                view.set_viewport_position((x, max(0.0, float(ay) + y_off)), False)
+            except Exception:
                 try:
-                    v.set_viewport_position(
-                        (float(p.get("vx", 0)), float(p.get("vy", 0))), False)
+                    if sublime is not None:
+                        view.show(
+                            sublime.Region(anchor, anchor),
+                            show_surrounds=False,
+                            animate=False,
+                            keep_to_left=True,
+                        )
+                    else:
+                        view.set_viewport_position(
+                            (x, float(pin.get("vy") or 0)), False)
                 except Exception:
                     pass
 
-        sublime.set_timeout(_pass, 0)
-        sublime.set_timeout(_pass, 16)
+        def _add_sel(a, b):
+            if sublime is not None:
+                view.sel().add(sublime.Region(a, b))
+            else:
+                view.sel().add(_HeadlessRegion(a, b))
+
+        cc = pin.get("composer_caret")
+        if cc is not None:
+            try:
+                pos = max(0, min(int(cc), size))
+                view.sel().clear()
+                _add_sel(pos, pos)
+            except Exception:
+                pass
+            _apply_vp()
+            return
+
+        keep = []
+        for a, b in (pin.get("sels") or []):
+            lo, hi = (a, b) if a <= b else (b, a)
+            if hi >= vis_a and lo <= vis_b:
+                keep.append((
+                    max(0, min(int(a), size)),
+                    max(0, min(int(b), size)),
+                ))
+        if keep:
+            try:
+                view.sel().clear()
+                for a, b in keep:
+                    _add_sel(a, b)
+            except Exception:
+                pass
+        elif pin.get("preserve_sel"):
+            pass
+        elif pin.get("sels"):
+            try:
+                view.sel().clear()
+                _add_sel(anchor, anchor)
+            except Exception:
+                pass
+        _apply_vp()
+
+    def schedule_viewport_restore(self, pin: dict) -> None:
+        """Re-apply pin after ST's post-edit scroll settles (double tick)."""
+        if not pin:
+            return
+        self._pending_vp_pin = pin
+        if sublime is None:
+            return
+
+        def _pass1():
+            p = getattr(self, "_pending_vp_pin", None)
+            if p is None:
+                return
+            self.restore_view_state(p)
+
+            def _pass2():
+                p2 = getattr(self, "_pending_vp_pin", None)
+                if p2 is None:
+                    return
+                self.restore_view_state(p2)
+                if getattr(self, "_pending_vp_pin", None) is p2:
+                    self._pending_vp_pin = None
+
+            sublime.set_timeout(_pass2, 0)
+
+        sublime.set_timeout(_pass1, 0)
 
     def view_is_focused(self) -> bool:
         if not self._valid():

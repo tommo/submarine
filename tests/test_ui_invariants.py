@@ -15,6 +15,7 @@ from ui.models import (
 from ui.sheet import format_tab_title
 from ui.render_policy import (
     cap_history,
+    format_user_prompt_block,
     should_incremental_append,
     tasks_fold_rows,
 )
@@ -79,6 +80,18 @@ class TestIncrementalAppend(unittest.TestCase):
     def test_empty_delta_is_none(self):
         self.assertIsNone(
             should_incremental_append(1, "hello", ["hello"], False))
+
+
+class TestUserPromptBlock(unittest.TestCase):
+    def test_single_line(self):
+        self.assertEqual(
+            format_user_prompt_block("hello", False, "📎 "),
+            "◎ hello ▶\n")
+
+    def test_continuation_indent_and_context(self):
+        self.assertEqual(
+            format_user_prompt_block("a\nb", True, "📎 "),
+            "◎ a\n  b ▶\n  📎 \n")
 
 
 class TestGoalTasksStripped(unittest.TestCase):

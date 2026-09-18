@@ -298,6 +298,11 @@ class MCPSocketServer:
                 try:
                     if op == "debug":
                         result["result"] = self._debug_op(request)
+                    elif op == "sessions":
+                        # Session control for callers outside Sublime
+                        # (submarine_sessions.py). JSON only: no `code`, no eval.
+                        from features.session_control import dispatch as _control
+                        result["result"] = _control(request)
                     else:
                         result["result"] = self._eval(
                             code, tool, caller_agent_id=agent_id)

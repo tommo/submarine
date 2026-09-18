@@ -90,6 +90,10 @@ class RecordingView(object):
     def substr(self, region):
         if region is None:
             return self._content
+        if isinstance(region, int):
+            if region < 0 or region >= len(self._content):
+                return ""
+            return self._content[region]
         if hasattr(region, "begin"):
             a, b = region.begin(), region.end()
         elif hasattr(region, "a"):
@@ -97,6 +101,15 @@ class RecordingView(object):
         else:
             return self._content
         return self._content[a:b]
+
+    def line(self, pt):
+        text = self._content
+        pt = max(0, min(int(pt), len(text)))
+        a = text.rfind("\n", 0, pt) + 1
+        b = text.find("\n", pt)
+        if b < 0:
+            b = len(text)
+        return _Region(a, b)
 
     def settings(self):
         return self._settings
@@ -164,6 +177,12 @@ class RecordingView(object):
 
     def text_to_layout(self, pt):
         return (0.0, float(pt))
+
+    def layout_to_text(self, pos):
+        try:
+            return max(0, min(int(pos[1]), len(self._content)))
+        except Exception:
+            return 0
 
     def assign_syntax(self, path):
         pass

@@ -21,7 +21,8 @@ except ImportError:
 
 UI_MODE_TABS = "tabs"
 UI_MODE_SINGLE = "single"
-PLACEHOLDER = "(no session)\n"
+# The no-session sheet is rendered by `ui/idle.py`; there is no placeholder
+# text here any more.
 
 _INSTANCES = {}  # type: dict
 _mode_override = None  # type: Optional[str]
@@ -325,6 +326,13 @@ class HostView(object):
             except Exception:
                 pass
             output.view = host
+            # A session owns this sheet now; the idle page and its flag go away.
+            clear_idle = getattr(output, "clear_idle", None)
+            if callable(clear_idle):
+                try:
+                    clear_idle()
+                except Exception:
+                    pass
 
         self._paint_bound(session, host)
         self._finish_bound(window, session, host, focus=focus)
@@ -607,11 +615,14 @@ class HostView(object):
 
     def _write_placeholder(self, host):
         # type: (Any) -> None
+        """No session to bind: show the branding page (ui/idle.py).
+
+        Was a bare `(no session)` line, which said nothing about this window,
+        what a new session would start, or how to get out of the state.
+        """
         try:
-            host.set_read_only(False)
-            host.run_command(keys.CMD_CLEAR_ALL)
-            host.run_command(keys.CMD_INSERT, {"pos": 0, "text": PLACEHOLDER})
-            host.set_read_only(True)
+            from ui import idle
+            idle.render(host, self.window)
         except Exception:
             pass
         try:

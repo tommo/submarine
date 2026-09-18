@@ -7,8 +7,8 @@ import unittest
 from core.registry import default_registry
 from tests.fakes import make_session
 from ui import keys
+from ui import idle
 from ui.host import (
-    PLACEHOLDER,
     HostView,
     apply_ui_mode,
     is_single_mode,
@@ -670,7 +670,7 @@ class TestHostClose(_SingleViewCase):
         self.assertIsNone(a.output.view)
         self.assertIn(a.agent_id, default_registry.by_agent)
         self.assertIsNone(default_registry.for_view(host))
-        self.assertIn(PLACEHOLDER.strip(), host._content)
+        self.assertIn(idle.BRAND, host._content, "the idle page")
 
 
 class TestAgentIdStable(_SingleViewCase):

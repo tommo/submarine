@@ -4,15 +4,17 @@ A ContextManager owns one session's queued context (files, selections, folders,
 images, path refs) and the prompt-building logic that prepends them to the next
 query. The output view's `📎 ...` indicator is updated whenever the list changes.
 
-The Session class still exposes `add_context_file/selection/folder/image/path`,
-`clear_context`, and `pending_context` as thin shims pointing at this object,
-so existing callers (commands.py, listeners.py, output.py) keep working.
+The Session class exposes `add_context_file/selection/folder/image/path`,
+`clear_context`, and `pending_context` as thin shims pointing at this object
+(installed by `main._attach_session_shims`), so existing callers (commands/,
+listeners) keep working. The output view's 📎 chips reach the manager through
+`session.context` itself — `items` to read, `remove_at` for modifier-click.
 """
 import base64
 import os
 import re
 import tempfile
-from typing import List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from core.session import Session
@@ -83,6 +85,33 @@ def first_line_of_range(line_range: str) -> Optional[int]:
         return None
     m = re.match(r"L(\d+)", line_range)
     return int(m.group(1)) if m else None
+
+
+def chip_ref(item: Any) -> dict:
+    """Normalise a ContextItem or a stored chip ref dict into one ref dict.
+
+    Chip clicks need the same four fields whichever side of the turn they come
+    from: the pending list holds ContextItems, a frozen transcript holds the
+    `as_ref()` dicts. `action` is what decides editor-open vs file-manager
+    reveal, `line_range` where a selection jumps to.
+    """
+    if isinstance(item, dict):
+        ref = dict(item)
+    else:
+        try:
+            ref = dict(item.as_ref())
+        except AttributeError:
+            ref = {
+                "name": getattr(item, "name", "") or "?",
+                "path": getattr(item, "path", "") or "",
+                "line_range": getattr(item, "line_range", "") or "",
+                "action": getattr(item, "open_action", "") or "reveal",
+            }
+    ref["name"] = ref.get("name") or "?"
+    ref["path"] = ref.get("path") or ""
+    ref["line_range"] = ref.get("line_range") or ""
+    ref["action"] = ref.get("action") or ("open" if ref["path"] else "reveal")
+    return ref
 
 
 class ContextItem:

@@ -194,11 +194,61 @@ Close of the host view: existing close interception runs
 `keep_running_on_close`; host view is gone; next `open_row` recreates it.
 Detached sessions are unaffected.
 
+## Revealing the session view again
+
+`submarine_reveal_session` (`⌥⌘\`) brings this window's session view back to
+the front from anywhere in the window — the counterpart of
+`submarine_hide_session`, which closes the sheet and leaves the session running.
+Single mode attaches onto the window's host sheet (`HostView.attach`, so the
+no-session page is replaced); tabs mode reattaches a detached sheet
+(`reveal_live_session(..., force_sheet=True)`), including a torn-off one. A
+torn-off session keeps its own sheet in single mode too. The caret lands in the
+composer when it's open (idle sessions re-enter it), otherwise at the tail of
+the sheet. With no session in the window it focuses an existing Submarine sheet
+at the tail instead, else reports that there is no session.
+
+The session is looked up in this window first and then in the other windows (most
+recently active wins), bringing that window to the front — a session lives in the
+window that opened it, so from a code window the useful answer is "show me my
+session", not "there is no session here". Each invocation leaves one line in the
+devtools ring (`python3 features/devtools/cli.py log --grep "reveal session"`):
+a dead chord and a dead binding are otherwise indistinguishable.
+
+The binding carries no context: after a hide there is no output view left for
+one to match. The terminal keeps the plain, `ctrl` and `alt` backslash chords for
+its own keypress pass-through, and `⌥⌘\` was the legacy `submarine_switch` alias
+(switch stays on `⌘\`). Note that adding a *new* command needs a hard package
+reload (`docs/devtools.md`), not just a soft one.
+
+## The no-session page
+
+A Submarine sheet outlives the session it showed — a stop, a plugin reload, a
+tear-off with nothing to bind in its place. That state is rendered by
+`ui/idle.py`: a short page with the brand, the window's project, what a new
+session would start (`default_backend` / `default_models`), and the keys out
+(`enter` new session, `r` resume, `l` session list, ⌘\ switch, ⌃⌘\ session list
+(caret on the active session), ctrl+/ terminal, palette). It replaced a bare
+`(no session)` line, and sheets that kept a dead
+session's chrome and name.
+
+- One writer: `idle.render()` writes the page and sets `submarine_idle` on the
+  view; `idle.clear()` runs wherever a session takes the sheet over
+  (`HostView._attach`, `reveal_live_session`, `TurnRenderer.clear`), so the
+  flag can never outlive the page.
+- The three keys are bound in `Default.sublime-keymap` under the idle context
+  (`setting.submarine_output` + `setting.submarine_idle`), so they cannot
+  shadow a live composer.
+- Callers: `HostView._write_placeholder` (detach, tear-off with no successor),
+  `Session.stop()`, and `settle_active_output_view` when a sheet is activated
+  with no session to restore.
+- Chrome only: the page starts and stops nothing, and renders with zero
+  sessions and zero bridges.
+
 ## Tear-off / dock
 
 - Tear-off: detach the bound session, `reveal_live_session(..., force_sheet=True)`,
   mark `session.torn_off = True`, then attach the most-recent other
-  window session (else host placeholder). Never stops the bridge.
+  window session (else the no-session page). Never stops the bridge.
 - Dock: clear `torn_off`, `HostView.attach` onto the host, soft-close the
   standalone sheet.
 - Session list: torn-off rows use `⊡` and open their own sheet (not the

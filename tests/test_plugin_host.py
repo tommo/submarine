@@ -21,6 +21,16 @@ def _command_names_imported(path):
     return names
 
 
+def _command_classes_defined(path):
+    with open(path, encoding="utf-8") as f:
+        tree = ast.parse(f.read(), filename=path)
+    names = set()
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name.endswith("Command"):
+            names.add(node.name)
+    return names
+
+
 class TestPluginHost(unittest.TestCase):
     def test_python_version_is_3_8(self):
         path = os.path.join(ROOT, ".python-version")
@@ -58,6 +68,22 @@ class TestPluginHost(unittest.TestCase):
                     sys.modules.pop(key, None)
                 else:
                     sys.modules[key] = mod
+
+    def test_commands_package_exports_every_command_class(self):
+        """A class in commands/*.py that never reaches commands/__init__.py
+        is invisible to ST — the palette entry and keymap chord both no-op."""
+        defined = set()
+        cmd_dir = os.path.join(ROOT, "commands")
+        for name in os.listdir(cmd_dir):
+            if not name.endswith(".py") or name.startswith("_"):
+                continue
+            defined |= _command_classes_defined(os.path.join(cmd_dir, name))
+        exported = _command_names_imported(os.path.join(cmd_dir, "__init__.py"))
+        missing = sorted(defined - exported)
+        self.assertEqual(
+            missing, [],
+            "commands/__init__.py missing command re-exports: %s" % missing,
+        )
 
     def test_root_reexports_all_command_classes(self):
         # ST only discovers Command subclasses on ROOT plugin modules.

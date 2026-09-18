@@ -29,6 +29,7 @@ TASKS_EXPANDED = "submarine_tasks_expanded"
 SUBSESSION_ID = "submarine_subsession_id"
 PARENT_AGENT_ID = "submarine_parent_agent_id"
 QUESTION_INPUT_MODE = "submarine_question_input_mode"
+IDLE = "submarine_idle"   # the sheet is showing the no-session page (ui/idle.py)
 
 # Window settings
 ACTIVE_AGENT = "submarine_active_agent"

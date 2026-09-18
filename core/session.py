@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .background import BackgroundTaskGate
 from .events import BridgeEventRouter
@@ -59,6 +59,19 @@ try:
     from plat.constants import DEFAULT_SESSION_NAME
 except ImportError:
     DEFAULT_SESSION_NAME = "Submarine"
+
+try:
+    from plat.constants import SPINNER_RESPONDING, SPINNER_WAITING
+except ImportError:  # pragma: no cover - package layout
+    SPINNER_RESPONDING = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    SPINNER_WAITING = "◇◈◆◈"
+
+# Busy-mark frame intervals, by turn phase (ms). Ported from sublime-claude's
+# Session._animate: the diamond while waiting on the model, the braille spinner
+# while it is answering or running a tool.
+SPINNER_TOOL_MS = 200
+SPINNER_RESPOND_MS = 160
+SPINNER_WAIT_MS = 240
 
 
 _CONTEXT_LIMITS = {
@@ -220,6 +233,9 @@ class Session:
         self.next_wake_at = None  # type: Optional[float]
         self.quick_mode = False
         self.current_tool = None  # type: Optional[str]
+        # Busy-mark chain generation: bumping it orphans the previous chain, so
+        # a re-kick never leaves two chains racing the frame counter.
+        self._anim_gen = 0
         self.keep_running_on_close = None  # type: Optional[bool]
 
         # Identity triple. Resume (not fork) pre-fills session_id so the
@@ -293,6 +309,7 @@ class Session:
         self.plan_file = None  # type: Optional[str]
         self.draft_prompt = ""
         self._composer_allowed = True
+        self._input_mode_entered = False
         # Resume after interrupt-in-asking: drop leftover question/permission/plan
         # until the user starts a new query.
         self._resume_drop_asking = bool(resume_id) and not fork
@@ -781,6 +798,7 @@ class Session:
             self._auto_retry_pending = False
             self._auto_retry_count = 0
 
+        typed = prompt
         raw = (prompt or "").strip()
         compact = is_compact_prompt(raw)
         # Live session/prompt still owns the agent (Kimi: tool ✔ is not
@@ -816,12 +834,48 @@ class Session:
         self.query_count += 1
         self._clear_error_halt()
         self._pending_resume_at = None
+        # Preserve sticky draft whenever the user is typing mid-stream —
+        # including when a queued turn fires. Only clear on a normal user
+        # submit (no sticky open, not silent, not queue-driven).
+        if self.output and self.output.is_input_mode():
+            try:
+                live = self.output.get_input_text()
+            except Exception:
+                live = ""
+            shown = (display_prompt if display_prompt is not None else typed) or ""
+            # User submit of the current ◎ draft: consume it (promote in place),
+            # do not restore it into the next composer.
+            if not silent and not firing_queue and live.strip() == shown.strip():
+                self.draft_prompt = ""
+            else:
+                self.draft_prompt = live
+        elif silent or firing_queue:
+            pass
+        else:
+            self.draft_prompt = ""
+        self._input_mode_entered = False
         if not self.client or not getattr(self.client, "is_alive", lambda: True)():
             self.turn.end_live(query_gen)
             self._mark_error_halt("bridge died")
             return
 
-        ui_prompt = display_prompt if display_prompt is not None else prompt
+        # Fold pending context in at *send* time, not at submit: a prompt that
+        # lands in the queue keeps the user's text (and its readable chip), and
+        # the context rides whichever prompt actually reaches the model. Images
+        # come back separately — they are content blocks, never text.
+        prompt, ctx_images = self._build_prompt_with_context(prompt)
+        if ctx_images:
+            images = list(images or []) + ctx_images
+        ctx_names = list(context_names or [])
+        ctx_refs = list(context_refs or [])
+        ctx = getattr(self, "context", None)
+        if ctx is not None and not ctx_names and not ctx_refs:
+            try:
+                _taken, ctx_names, ctx_refs = ctx.take()
+            except Exception:
+                ctx_names, ctx_refs = [], []
+
+        ui_prompt = display_prompt if display_prompt is not None else typed
         if not silent:
             try:
                 self.output.show(focus=False)
@@ -835,7 +889,7 @@ class Session:
                 one = " ".join((ui_prompt or "").split())
                 if one:
                     self._set_name(one[:200])
-            self.output.prompt(ui_prompt, context_names, context_refs=context_refs)
+            self.output.prompt(ui_prompt, ctx_names, context_refs=ctx_refs)
 
         self._set_turn_phase("waiting")
         self.chrome.refresh_tab_title()
@@ -855,6 +909,53 @@ class Session:
                 self.output.text("\n\n*Failed to send query. Bridge process died.*\n")
             except Exception:
                 pass
+            return
+
+        # Sticky EOF composer: re-open ◎ so the next message can be typed
+        # (queued) while this turn streams. Silent wakes keep any draft.
+        try:
+            current = getattr(self.output, "current", None)
+            if current is not None:
+                current.working = True
+                if silent:
+                    current.duration = 0
+                    current.has_meta = False
+                    render = getattr(self.output, "_render_current", None)
+                    if callable(render):
+                        render()
+        except Exception:
+            pass
+        if not silent:
+            def _sticky():
+                if not self.output or self.output.is_input_mode():
+                    return
+                has_modal = getattr(self.output, "has_turn_modal_ui", None)
+                if callable(has_modal) and has_modal():
+                    return
+                if getattr(self.output, "_question_input_mode", False):
+                    return
+                self._input_mode_entered = False
+                self._enter_input_with_draft()
+
+            self.scheduler.call_later(40, _sticky)
+
+    def _build_prompt_with_context(self, prompt):
+        # type: (str) -> Tuple[str, List[dict]]
+        """Pending context → `(prompt_with_text_context, images)`.
+
+        Ported from sublime-claude's `Session._build_prompt_with_context`: the
+        📎 chips exist so the next query carries them, and an image has to leave
+        as a content block (`{"mime_type", "data", "path"}`) rather than as
+        text. No context manager (or nothing pending) → the prompt unchanged.
+        """
+        build = getattr(getattr(self, "context", None), "build_prompt", None)
+        if not callable(build):
+            return prompt, []
+        try:
+            full, images = build(prompt)
+        except Exception:
+            return prompt, []
+        return full, list(images or [])
 
     def _on_done(self, result, _expected_gen=None):
         # type: (dict, Optional[int]) -> None
@@ -1204,9 +1305,21 @@ class Session:
             self.output.clear(keep_supportive=False)
         except Exception:
             pass
+        # The sheet outlives the session: show the branding page instead of
+        # leaving the dead session's chrome in the buffer (ui/idle.py).
+        try:
+            self.output.render_idle(getattr(self, "window", None))
+        except Exception:
+            pass
         self._queued_prompts = []
         try:
             self.chrome.set_status("")
+        except Exception:
+            pass
+        # Nothing is running any more: leave the phase honest, so the next
+        # turn's phase change is what starts the busy mark again.
+        try:
+            self._set_turn_phase("idle")
         except Exception:
             pass
 
@@ -1677,12 +1790,186 @@ class Session:
 
     def _enter_input_if_idle(self):
         # type: () -> None
-        if self.working or not self._composer_allowed:
+        if self.working:
             return
+        self._enter_input_with_draft()
+
+    def _enter_input_with_draft(self):
+        # type: () -> None
+        """Enter sticky composer and restore draft.
+
+        Allowed while working — the next message can be typed (and queued)
+        mid-stream. `_enter_input_if_idle` is the idle-only wrapper.
+        """
+        if not self.output:
+            return
+        if not getattr(self, "_composer_allowed", True):
+            return
+        if self.is_sleeping:
+            return
+        view = getattr(self.output, "view", None)
+        if view is not None:
+            try:
+                st = view.settings()
+                if st.get("submarine_sleeping") or st.get("claude_sleeping"):
+                    return
+            except Exception:
+                pass
+        if getattr(self, "_quick_finished", False):
+            return
+        has_modal = getattr(self.output, "has_turn_modal_ui", None)
+        if callable(has_modal) and has_modal():
+            return
+
+        focused = getattr(self.output, "_view_is_focused", None)
+        owner_fn = getattr(self.output, "caret_owner", None)
+
+        def _draft_owned():
+            try:
+                owner = owner_fn() if callable(owner_fn) else "draft"
+            except Exception:
+                owner = "draft"
+            return owner == "draft"
+
+        def _repin_draft():
+            try:
+                if callable(focused) and focused() and _draft_owned():
+                    scroll = getattr(self.output, "scroll_composer_chrome", None)
+                    restore = getattr(self.output, "restore_draft_caret", None)
+                    if callable(scroll):
+                        scroll(force=False)
+                    if callable(restore):
+                        restore()
+            except Exception:
+                pass
+
+        if self.output.is_input_mode():
+            self._input_mode_entered = True
+            if not self.working:
+                now = time.time()
+                self.last_idle_at = now
+                self.last_activity = now
+            try:
+                self.output.refresh_background_hints()
+            except Exception:
+                pass
+            _repin_draft()
+            return
+
+        if self._input_mode_entered and not self.working:
+            if self.output.is_input_mode():
+                _repin_draft()
+                return
+            self._input_mode_entered = False
+
+        if not self.working and self._fire_next_queued():
+            return
+
+        try:
+            current = getattr(self.output, "current", None)
+            if current is not None and getattr(current, "working", False) and not self.working:
+                current.working = False
+        except Exception:
+            pass
+
+        try:
+            pending_q = getattr(self.output, "pending_question", None)
+            if (
+                getattr(self.output, "_question_input_mode", False)
+                and not (pending_q and getattr(pending_q, "callback", None))
+            ):
+                self.output._question_input_mode = False
+        except Exception:
+            pass
+
         try:
             self.output.enter_input_mode()
         except Exception:
             pass
+
+        if not self.output.is_input_mode():
+            def _retry(tries=0):
+                if not self.output:
+                    return
+                if self.output.is_input_mode():
+                    self._input_mode_entered = True
+                    _repin_draft()
+                    return
+                if callable(has_modal) and has_modal():
+                    if tries < 8:
+                        self.scheduler.call_later(
+                            100 + tries * 50, lambda t=tries: _retry(t + 1))
+                    return
+                try:
+                    current = getattr(self.output, "current", None)
+                    if (
+                        current is not None
+                        and getattr(current, "working", False)
+                        and not self.working
+                    ):
+                        current.working = False
+                except Exception:
+                    pass
+                self._input_mode_entered = False
+                try:
+                    self.output.enter_input_mode()
+                except Exception:
+                    pass
+                if self.output.is_input_mode():
+                    self._input_mode_entered = True
+                    if not self.working:
+                        self.last_idle_at = time.time()
+                    return
+                if tries < 8:
+                    self.scheduler.call_later(
+                        80 + tries * 40, lambda t=tries: _retry(t + 1))
+
+            self.scheduler.call_later(50, lambda: _retry(0))
+            return
+
+        self._input_mode_entered = True
+        if not self.working:
+            self.last_idle_at = time.time()
+
+        if self.draft_prompt:
+            draft = self.draft_prompt
+            if not str(draft).strip():
+                draft = ""
+                self.draft_prompt = ""
+            try:
+                self.output.set_composer_text(draft)
+            except Exception:
+                if draft and view is not None:
+                    try:
+                        view.run_command("append", {"characters": draft})
+                    except Exception:
+                        pass
+                ensure = getattr(self.output, "ensure_composer_spare_line", None)
+                if callable(ensure):
+                    try:
+                        ensure()
+                    except Exception:
+                        pass
+            try:
+                if callable(focused) and focused():
+                    set_owner = getattr(self.output, "set_caret_owner", None)
+                    if callable(set_owner):
+                        set_owner("draft")
+                    scroll = getattr(self.output, "scroll_composer_chrome", None)
+                    restore = getattr(self.output, "restore_draft_caret", None)
+                    if callable(scroll):
+                        scroll(force=True)
+                    if callable(restore):
+                        restore()
+            except Exception:
+                pass
+        elif self.output.is_input_mode():
+            collapse = getattr(self.output, "collapse_empty_composer_tail", None)
+            if callable(collapse):
+                try:
+                    collapse()
+                except Exception:
+                    pass
 
     def _is_detached(self):
         # type: () -> bool
@@ -1720,6 +2007,55 @@ class Session:
                 self._set_unread(False)
         try:
             self.chrome.refresh_tab_title()
+        except Exception:
+            pass
+        # A phase change is a turn moving: make sure the busy mark is ticking.
+        # Only on change — the event port reports "responding" per chunk.
+        self._kick_animation()
+
+    # ─── busy mark ──────────────────────────────────────────────────────────
+
+    def _kick_animation(self):
+        # type: () -> None
+        """Start the busy-mark chain for this turn. Bumps the generation, so a
+        chain left behind by a cancelled timer can never race this one."""
+        if not self.working:
+            return
+        self._anim_gen = int(getattr(self, "_anim_gen", 0)) + 1
+        self._animate(self._anim_gen)
+
+    def _animate(self, gen):
+        # type: (int) -> None
+        """One spinner frame, then re-arm. Port of sublime-claude's `_animate`.
+
+        Chrome only: the glyph is the sheet's (`ui/renderer.py` draws
+        `frames[_spinner_frame]` and no-ops without a view), so a background
+        turn costs one timer per frame and no buffer work.
+        """
+        if gen != self._anim_gen:
+            return
+        if not self.working or self.client is None:
+            if not self.working:
+                self._set_turn_phase("idle")
+            return
+        phase = self.turn_phase or "waiting"
+        if phase == "tool":
+            frames, interval = SPINNER_RESPONDING, SPINNER_TOOL_MS
+        elif phase == "responding":
+            frames, interval = SPINNER_RESPONDING, SPINNER_RESPOND_MS
+        else:
+            frames, interval = SPINNER_WAITING, SPINNER_WAIT_MS
+        try:
+            self.output.advance_spinner(frames=frames)
+        except TypeError:
+            try:
+                self.output.advance_spinner()
+            except Exception:
+                pass
+        except Exception:
+            pass
+        try:
+            self.scheduler.call_later(interval, lambda: self._animate(gen))
         except Exception:
             pass
 

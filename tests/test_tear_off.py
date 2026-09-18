@@ -6,8 +6,8 @@ import unittest
 
 from core.registry import default_registry
 from tests.test_single_view import RecordingWindow, _session
+from ui import idle
 from ui.host import (
-    PLACEHOLDER,
     HostView,
     apply_ui_mode,
     can_dock,
@@ -117,7 +117,7 @@ class TestTearOff(_TearOffCase):
         self.assertTrue(a.torn_off)
         self.assertIsNot(a.output.view, host)
         self.assertIsNone(default_registry.for_view(host))
-        self.assertIn(PLACEHOLDER.strip(), host._content)
+        self.assertIn(idle.BRAND, host._content, "the idle page")
         self.assertTrue(host.is_valid())
 
     def test_tear_off_without_session_uses_bound(self):

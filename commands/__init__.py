@@ -19,6 +19,7 @@ from .session_cmds import (  # noqa: F401
     SubmarineTearOffSessionCommand,
     SubmarineDockSessionCommand,
     SubmarineHideSessionCommand,
+    SubmarineRevealSessionCommand,
     SubmarineSleepSessionCommand,
     SubmarineWakeSessionCommand,
     SubmarineToggleAutoSleepCommand,

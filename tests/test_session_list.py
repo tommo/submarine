@@ -1,6 +1,7 @@
 """Session list scratch: render + line index (no Sublime runtime)."""
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import time
@@ -885,7 +886,7 @@ class TestRenderSessionList(unittest.TestCase):
                 return types.SimpleNamespace(get=lambda k, d=None: 6 if k == "margin" else d)
 
         cols = sl.view_cols(_V())
-        self.assertEqual(cols, 98)
+        self.assertEqual(cols, 96)
 
     def test_header_fits_view_cols(self):
         wide = sl.format_header(72)
@@ -1194,8 +1195,8 @@ class TestRenderSessionList(unittest.TestCase):
         self.assertEqual([r["session_id"] for r in here], ["b", "a"])
         self.assertEqual(other, [])
         self.assertEqual(sl.history_cap(), sl.HISTORY_CAP)
-        # Upstream 2e6e415 raised the resume/list cap to 400.
-        self.assertEqual(sl.HISTORY_CAP, 400)
+        # Upstream 2e6e415 raised the resume/list cap to 400; 500 here.
+        self.assertEqual(sl.HISTORY_CAP, 500)
 
     def test_live_filters_to_window_project(self):
         from tests.stubs import install
@@ -1679,6 +1680,143 @@ class TestRenderSessionList(unittest.TestCase):
         text, _ = sl.render_list(live, [], [], cols=24)
         child = [ln for ln in text.splitlines() if "ch" in ln or sl.CHILD_MARK in ln]
         self.assertTrue(any(sl.CHILD_MARK in ln for ln in child))
+
+
+class TestSelectActive(unittest.TestCase):
+    """⌃⌘\\ opens the list with the caret on this window's active session."""
+
+    def setUp(self):
+        from tests.stubs import install_sublime
+        self._sub, _ = install_sublime()
+        self._prev_sublime = sl.sublime
+        sl.sublime = self._sub
+        self._get = sl.get_active_session
+
+    def tearDown(self):
+        sl.sublime = self._prev_sublime
+        sl.get_active_session = self._get
+
+    def _list(self, rows):
+        class _Sel(list):
+            def clear(s):
+                del s[:]
+
+            def add(s, region):
+                s.append(region)
+
+        class _Settings(object):
+            def __init__(s, data):
+                s._data = data
+
+            def get(s, k, d=None):
+                return s._data.get(k, d)
+
+        class _View(object):
+            def __init__(s):
+                s._settings = _Settings({sl.ROWS_KEY: json.dumps(rows)})
+                s._sel = _Sel()
+                s.shown = []
+
+            def is_valid(s):
+                return True
+
+            def settings(s):
+                return s._settings
+
+            def sel(s):
+                return s._sel
+
+            def text_point(s, row, col):
+                return row * 100 + col
+
+            def show(s, pt, show_surrounds=True):
+                s.shown.append(pt)
+
+        slv = sl.SessionListView.__new__(sl.SessionListView)
+        slv.window = object()
+        slv.view = _View()
+        return slv
+
+    def test_caret_lands_on_the_active_session(self):
+        rows = [
+            {"session_id": "a", "agent_id": "aa", "kind": "live", "line": 4},
+            {"session_id": "b", "agent_id": "ab", "kind": "live", "line": 5},
+        ]
+        slv = self._list(rows)
+        sl.get_active_session = lambda win: types.SimpleNamespace(
+            agent_id="ab", session_id="b")
+        self.assertTrue(slv.select_active())
+        # line 5 → row 4 (0-based) → text_point 400
+        self.assertEqual(slv.view.shown, [400])
+        self.assertEqual(len(slv.view.sel()), 1)
+
+    def test_no_active_session_leaves_the_caret(self):
+        slv = self._list([
+            {"session_id": "a", "agent_id": "aa", "kind": "live", "line": 4},
+        ])
+        sl.get_active_session = lambda win: None
+        slv.view.sel().add("keep")
+        self.assertFalse(slv.select_active())
+        self.assertEqual(list(slv.view.sel()), ["keep"])
+        self.assertEqual(slv.view.shown, [])
+
+    def test_unknown_session_leaves_the_caret(self):
+        slv = self._list([
+            {"session_id": "a", "agent_id": "aa", "kind": "live", "line": 4},
+        ])
+        sl.get_active_session = lambda win: types.SimpleNamespace(
+            agent_id="missing", session_id="nope")
+        slv.view.sel().add("keep")
+        self.assertFalse(slv.select_active())
+        self.assertEqual(list(slv.view.sel()), ["keep"])
+
+    def test_show_session_list_selects_active(self):
+        from tests.stubs import FakeView, FakeWindow
+        view = FakeView(5)
+        view.settings().set(sl.SETTING, True)
+        win = FakeWindow()
+        win._views.append(view)
+        selected = []
+        real = sl.SessionListView
+
+        class _SL(object):
+            def _apply_chrome(self):
+                pass
+
+            def refresh(self, follow=False):
+                pass
+
+            def select_active(self):
+                selected.append(self.view.id())
+
+        sl.SessionListView = _SL
+        try:
+            out = sl.show_session_list(win)
+            self.assertIsNotNone(out)
+            self.assertEqual(selected, [5])
+        finally:
+            sl.SessionListView = real
+
+
+class TestSessionListKeymap(unittest.TestCase):
+    def setUp(self):
+        import re
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        kept = []
+        for line in open(os.path.join(root, "Default.sublime-keymap"),
+                         encoding="utf-8"):
+            if line.strip().startswith("//"):
+                continue
+            kept.append(re.sub(r"\s+//.*$", "", line))
+        self.keymap = json.loads("\n".join(kept))
+
+    def test_cmd_ctrl_backslash_opens_the_list(self):
+        hits = [e for e in self.keymap
+                if e.get("command") == "submarine_session_list"
+                and e.get("keys") == ["super+ctrl+\\"]]
+        self.assertEqual(len(hits), 1)
+        self.assertFalse(hits[0].get("context"),
+                         "must work from any view, including a hidden sheet")
 
 
 if __name__ == "__main__":

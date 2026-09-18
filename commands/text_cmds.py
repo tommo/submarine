@@ -204,7 +204,8 @@ class SubmarineSubmitInputCommand(sublime_plugin.TextCommand):
                 pass
             return
 
-        s.output.exit_input_mode(keep_text=False)
+        # Leave ◎ open so prompt() can promote the draft in place — wiping
+        # then rewriting the user line jumps it in the view.
         s.draft_prompt = ""
         s._input_mode_entered = False
 
@@ -226,7 +227,9 @@ class SubmarineSubmitInputCommand(sublime_plugin.TextCommand):
             except Exception as e:
                 print("[Submarine] quick submit: %s" % e)
 
-        s.query(text)
+        # display_prompt keeps the transcript showing what was typed: `query`
+        # folds the 📎 context (and its images) into what the model receives.
+        s.query(text, display_prompt=text)
 
         def _rearm():
             if not s.output or s.output.is_input_mode():

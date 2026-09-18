@@ -1,7 +1,7 @@
 """Sticky ◎ composer at EOF. All caret policy delegates to geometry.py."""
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Tuple
 
 from plat.constants import BACKGROUND_PREFIX, CONTEXT_PREFIX, INPUT_MARKER
 
@@ -40,6 +40,7 @@ class Composer:
         self._pad_phantom_set = None
         self._context_phantom_set = None
         self._detached_draft = ""
+        self._submit_pin = None  # type: Optional[dict]
 
     def _has_view(self) -> bool:
         view = self.owner.view
@@ -250,7 +251,12 @@ class Composer:
                     session._update_queue_phantom()
             except Exception:
                 pass
-        self.focus(force_show=True, steal_focus=False, preserve_caret=True)
+        if self._submit_pin:
+            self.focus(force_show=False, steal_focus=False, preserve_caret=True)
+            self.restore_submit_pin()
+            self._submit_pin = None
+        else:
+            self.focus(force_show=True, steal_focus=False, preserve_caret=True)
 
     def exit_input_mode(self, keep_text: bool = False) -> str:
         """Close the composer. Viewless: clears the input-mode flag, returns draft."""
@@ -289,6 +295,111 @@ class Composer:
             except Exception:
                 pass
         return input_text
+
+    def pin_submit_line(self, pt: int) -> None:
+        """Remember where the ◎ user line sits in the viewport (pre-submit)."""
+        view = self.owner.view
+        if not view:
+            self._submit_pin = None
+            return
+        try:
+            y = float(view.text_to_layout(int(pt))[1])
+            vx, vy = view.viewport_position()
+            vx, vy = float(vx), float(vy)
+        except Exception:
+            self._submit_pin = None
+            return
+        self._submit_pin = {
+            "pt": int(pt),
+            "y": y,
+            "vx": vx,
+            "vy": vy,
+            "y_in_view": y - vy,
+        }
+
+    def restore_submit_pin(self) -> bool:
+        """Keep the ◎ user line at the same viewport Y as pin_submit_line."""
+        pin = self._submit_pin
+        view = self.owner.view
+        if not pin or not view:
+            return False
+        try:
+            pt = max(0, min(int(pin.get("pt") or 0), view.size()))
+            y = float(view.text_to_layout(pt)[1])
+            target_vy = y - float(pin.get("y_in_view") or 0)
+            view.set_viewport_position(
+                (float(pin.get("vx") or 0), max(0.0, target_vy)), False)
+            return True
+        except Exception:
+            return False
+
+    def promote_to_prompt(self, text: str, has_context: bool = False
+                          ) -> Optional[Tuple[int, int]]:
+        """Turn the sticky ◎ strip into the frozen ◎ prompt ▶ line in place.
+
+        One buffer replace from the input-area peel to EOF — the user message
+        does not vanish and reappear, so its layout Y stays put. Returns the
+        conversation region (including the preceding newline when there is
+        one) or None if the composer was not open.
+        """
+        from .render_policy import format_user_prompt_block
+
+        view = self.owner.view
+        if not view or not self._input_mode:
+            return None
+        marker_len = len(self._input_marker)
+        marker_start = int(self._input_start or 0) - marker_len
+        if marker_start < 0:
+            return None
+        try:
+            if view.substr(_region(marker_start, marker_start + marker_len)) != self._input_marker:
+                return None
+        except Exception:
+            return None
+
+        self.pin_submit_line(marker_start)
+        peel = self.peel_start()
+        if peel is None:
+            peel = marker_start
+        start = peel
+        if start > 0:
+            try:
+                if view.substr(_region(start - 1, start)) == "\n":
+                    start -= 1
+            except Exception:
+                pass
+        body = format_user_prompt_block(text, has_context, CONTEXT_PREFIX)
+        if start < peel:
+            body = "\n" + body
+        view.set_read_only(False)
+        view.run_command(keys.CMD_REPLACE, {
+            "start": max(0, start), "end": view.size(), "text": body,
+        })
+        session = get_session_for_view(view)
+        if session:
+            for meth in ("_update_permission_banner", "_update_wakeup_banner"):
+                fn = getattr(session, meth, None)
+                if callable(fn):
+                    try:
+                        fn(show=False)
+                    except Exception:
+                        pass
+            self._clear_session_queue(session)
+        self._input_mode = False
+        self._input_start = 0
+        self._input_area_start = 0
+        self._detached_draft = ""
+        keys.write_setting(view.settings(), keys.INPUT_MODE, False)
+        view.set_read_only(True)
+        self._pending_context_region = (0, 0)
+        self._refresh_context_phantoms([])
+        self._update_composer_pad_phantom()
+        # ◎ in the written block: after optional leading newline
+        new_pt = start + (1 if start < peel else 0)
+        if self._submit_pin is not None:
+            self._submit_pin["pt"] = new_pt
+        self.restore_submit_pin()
+        return (start, start + len(body))
 
     def reset_input_mode(self, reenter: bool = False) -> None:
         """Strip composer chrome. Viewless: drop input-mode flag and offsets."""
@@ -489,6 +600,23 @@ class Composer:
                     force=True, reapply_caret=(self.caret_owner() == OWNER_DRAFT))
                 if self.caret_owner() == OWNER_DRAFT:
                     self.restore_draft_caret()
+                    # One coalesced deferred reapply (not stacked 16+80 thrash)
+                    if self.owner.sheet.view_is_focused() and sublime is not None:
+                        tok = int(getattr(self, "_pending_caret_token", 0) or 0) + 1
+                        self._pending_caret_token = tok
+
+                        def _once(t=tok):
+                            if getattr(self, "_pending_caret_token", 0) != t:
+                                return
+                            if not self.owner.sheet.view_is_focused():
+                                return
+                            if self.caret_owner() != OWNER_DRAFT:
+                                return
+                            self._scroll_layout_to_bottom(
+                                force=True, reapply_caret=True)
+                            self.restore_draft_caret()
+
+                        sublime.set_timeout(_once, 30)
         except Exception:
             pass
 
@@ -706,8 +834,24 @@ class Composer:
             items = list(session.pending_context) if session and getattr(session, "pending_context", None) else []
             if sublime is not None:
                 sublime.set_timeout(lambda it=items: self._refresh_context_phantoms(it), 10)
+            if session and hasattr(session, "_update_queue_phantom") and sublime is not None:
+                sublime.set_timeout(session._update_queue_phantom, 15)
         except Exception:
             pass
+
+    def ensure_composer_spare_line(self) -> None:
+        """Re-pin hairline under ◎ (no blank buffer rows)."""
+        self.collapse_empty_composer_tail()
+        self._update_composer_pad_phantom()
+
+    def _composer_pad_width_px(self) -> int:
+        """Viewport width in px for pad — never wider than the pane."""
+        view = self.owner.view
+        try:
+            vw = float(view.viewport_extent()[0])
+            return max(80, int(vw) - 8)
+        except Exception:
+            return 400
 
     def collapse_empty_composer_tail(self) -> None:
         view = self.owner.view
@@ -788,11 +932,7 @@ class Composer:
             if self._pad_phantom_set is None:
                 self._pad_phantom_set = sublime.PhantomSet(view, keys.PHANTOM_PAD)
             pt = self._composer_last_line_pt()
-            try:
-                vw = float(view.viewport_extent()[0])
-                w = max(80, int(vw) - 8)
-            except Exception:
-                w = 400
+            w = self._composer_pad_width_px()
             html = (
                 '<body id="submarine-pad" style="margin:0;padding:0;">'
                 '<div style="margin:2px 0 0 0;padding:0;line-height:1;'
@@ -864,6 +1004,8 @@ class Composer:
                 10)
 
     def _refresh_context_phantoms(self, context_items: list) -> None:
+        from features.context import chip_ref
+
         view = self.owner.view
         if not view or not view.is_valid() or sublime is None:
             return
@@ -891,10 +1033,17 @@ class Composer:
         pt = start + idx + len(CONTEXT_PREFIX.strip())
         chips = []
         for i, item in enumerate(context_items):
-            name = getattr(item, "name", None) or (item.get("name") if isinstance(item, dict) else str(item))
+            ref = chip_ref(item)
+            what = "open" if ref["action"] == "open" else "reveal"
+            tip = "click to %s; ctrl/cmd+click to remove" % what
             chips.append(
-                '<a href="open:%d">%s</a>' % (i, _html_escape(str(name)))
+                '<a href="open:%d" title="%s">%s</a>'
+                % (i, _html_escape(tip), _html_escape(str(ref["name"])))
             )
+        chips.append(
+            '<a href="clear" title="clear all context" '
+            'style="color:color(var(--foreground) alpha(0.55))">clear</a>'
+        )
         html = (
             '<body id="submarine-ctx" style="margin:0;padding:0 0 0 6px;'
             'font-size:11px;">%s</body>' % " · ".join(chips)

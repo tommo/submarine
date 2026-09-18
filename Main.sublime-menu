@@ -14,8 +14,12 @@
                         "command": "submarine_switch"
                     },
                     {
-                        "caption": "Session List",
+                        "caption": "Session List                      ⌃⌘\\",
                         "command": "submarine_session_list"
+                    },
+                    {
+                        "caption": "Reveal Session View              ⌥⌘\\",
+                        "command": "submarine_reveal_session"
                     },
                     {
                         "caption": "Quick Agent (toggle)          ⌘⇧\\",

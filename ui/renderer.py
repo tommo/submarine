@@ -26,6 +26,7 @@ from .models import (
 )
 from .render_policy import (
     cap_history,
+    format_user_prompt_block,
     should_incremental_append,
     tasks_fold_rows,
     text_events_joined,
@@ -281,11 +282,55 @@ class TurnRenderer:
         self._render_pending = False
         self._struct_dirty = True
         c = self.owner.composer
+        promoted = None
+        refs = list(context_refs or [])
+        if not refs and context_names:
+            refs = [{"name": n, "path": "", "line_range": "", "action": "reveal"}
+                    for n in context_names]
+        names = list(context_names or [r.get("name") or "?" for r in refs])
+        has_ctx = bool(names or refs)
+
+        # Freeze the previous turn *before* touching ◎. Peel is the boundary
+        # while the composer is still open; closing first would make a full
+        # rewrite swallow a just-promoted prompt.
+        prev_todos = []
+        prev_goal = None
+        if self.current:
+            try:
+                self._materialize_turn_context_line(self.current)
+            except Exception as e:
+                print("[Submarine] materialize context line: %s" % e)
+            self.current.working = False
+            if _goal_is_open(self.current.goal):
+                prev_goal = self.current.goal
+            self.current.goal = None
+            if not self.current.todos_all_done:
+                prev_todos = _open_todos(self.current.todos)
+            self.current.todos = []
+            self.current.todos_all_done = True
+            self._render_pending = False
+            try:
+                self._do_render()
+            except Exception as e:
+                print("[Submarine] prompt finalize render: %s" % e)
+            self.conversations.append(self.current)
+            self.conversations, dropped = cap_history(self.conversations)
+            if dropped:
+                print("[Submarine] conversation history capped: dropped %d oldest turn(s)" % dropped)
+
         if c.is_input_mode():
             session = get_session_for_view(self.owner.view)
+            live = ""
+            try:
+                live = c.get_input_text()
+            except Exception:
+                live = ""
             if session:
-                session.draft_prompt = c.get_input_text()
-            c.exit_input_mode(keep_text=False)
+                session.draft_prompt = live
+            if (text or "").strip() and live.strip() == (text or "").strip():
+                promoted = c.promote_to_prompt(text, has_context=has_ctx)
+            if promoted is None:
+                c.exit_input_mode(keep_text=False)
         else:
             session = get_session_for_view(self.owner.view)
             try:
@@ -312,36 +357,6 @@ class TurnRenderer:
             c._pending_context_region = (0, 0)
         c._refresh_context_phantoms([])
 
-        prev_todos = []
-        prev_goal = None
-        if self.current:
-            try:
-                self._materialize_turn_context_line(self.current)
-            except Exception as e:
-                print("[Submarine] materialize context line: %s" % e)
-            self.current.working = False
-            if _goal_is_open(self.current.goal):
-                prev_goal = self.current.goal
-            self.current.goal = None
-            if not self.current.todos_all_done:
-                prev_todos = _open_todos(self.current.todos)
-            self.current.todos = []
-            self.current.todos_all_done = True
-            self._render_pending = False
-            try:
-                self._do_render()
-            except Exception as e:
-                print("[Submarine] prompt finalize render: %s" % e)
-            self.conversations.append(self.current)
-            self.conversations, dropped = cap_history(self.conversations)
-            if dropped:
-                print("[Submarine] conversation history capped: dropped %d oldest turn(s)" % dropped)
-
-        refs = list(context_refs or [])
-        if not refs and context_names:
-            refs = [{"name": n, "path": "", "line_range": "", "action": "reveal"}
-                    for n in context_names]
-        names = list(context_names or [r.get("name") or "?" for r in refs])
         self.current = Conversation(
             prompt=text, todos=prev_todos, goal=prev_goal,
             context_names=names, context_refs=refs)
@@ -349,17 +364,20 @@ class TurnRenderer:
         self.owner.sheet.update_title()
 
         view = self.owner.view
+        if promoted is not None:
+            self.current.region = promoted
+            if view:
+                self.owner.sheet.set_hidden_region(
+                    keys.CONV_REGION, promoted[0], promoted[1])
+                if refs and sublime is not None:
+                    sublime.set_timeout(
+                        lambda r=list(refs), a=promoted[0], b=promoted[1]:
+                            self._refresh_turn_context_phantoms(r, region=(a, b)),
+                        15)
+            return
         start = view.size() if view else 0
         prefix = "\n" if start > 0 else ""
-        lines = text.split("\n")
-        if len(lines) > 1:
-            indented = lines[0] + "\n" + "\n".join("  " + l for l in lines[1:])
-        else:
-            indented = text
-        if names or refs:
-            line = "%s◎ %s ▶\n  %s\n" % (prefix, indented, CONTEXT_PREFIX)
-        else:
-            line = "%s◎ %s ▶\n" % (prefix, indented)
+        line = prefix + format_user_prompt_block(text, has_ctx, CONTEXT_PREFIX)
         if view:
             end = self.owner._write(line)
             self.current.region = (start, end)
@@ -877,6 +895,11 @@ class TurnRenderer:
     def clear(self, keep_supportive=True):
         """Clear the transcript. Viewless: drops conversations, no buffer write."""
         self._mark_buffer_dirty("clear", (), {"keep_supportive": keep_supportive})
+        try:
+            from ui import idle
+            idle.clear(self.owner.view)   # this sheet is a session's now
+        except Exception:
+            pass
         c = self.owner.composer
         was_input_mode = c.is_input_mode()
         sess = get_session_for_view(self.owner.view)
@@ -1138,17 +1161,9 @@ class TurnRenderer:
                 reg0 = 0
         prefix = "\n" if reg0 > 0 else ""
         if conv.prompt:
-            prompt_lines = conv.prompt.split("\n")
-            if len(prompt_lines) > 1:
-                indented = prompt_lines[0] + "\n" + "\n".join(
-                    "  " + l for l in prompt_lines[1:])
-            else:
-                indented = conv.prompt
-            if conv.context_names or conv.context_refs:
-                lines.append("%s◎ %s ▶\n" % (prefix, indented))
-                lines.append("  %s\n" % CONTEXT_PREFIX)
-            else:
-                lines.append("%s◎ %s ▶\n" % (prefix, indented))
+            has_ctx = bool(conv.context_names or conv.context_refs)
+            lines.append(prefix + format_user_prompt_block(
+                conv.prompt, has_ctx, CONTEXT_PREFIX))
         events_text, events_end_off = self._events_block(conv, leading_nl=True)
         if events_text:
             lines.append(events_text)
@@ -1505,6 +1520,12 @@ class TurnRenderer:
                 off = min(caret_off, len(draft or ""))
                 c._draft_caret_off = off
                 self._replant_composer(draft, off)
+                try:
+                    s = get_session_for_view(view)
+                    if s and hasattr(s, "_update_queue_phantom"):
+                        s._update_queue_phantom()
+                except Exception:
+                    pass
             elif caret_in_composer and c.caret_owner() == "draft":
                 max_off = max(0, view.size() - c._input_start)
                 pos = c._input_start + max(0, min(caret_off, max_off, len(draft or "")))
@@ -1516,7 +1537,14 @@ class TurnRenderer:
                 except Exception:
                     pass
 
-        if pin is not None:
+        def _reapply_draft_caret_if_composing():
+            if (was_input and c.is_input_mode() and caret_in_composer
+                    and c.caret_owner() == "draft"):
+                c.restore_draft_caret()
+
+        if getattr(c, "_submit_pin", None):
+            c.restore_submit_pin()
+        elif pin is not None:
             if was_input and caret_in_composer and c.caret_owner() == "draft":
                 pin = dict(pin)
                 pin["sels"] = []
@@ -1531,7 +1559,22 @@ class TurnRenderer:
                 pin["preserve_sel"] = True
             self.owner.sheet.restore_view_state(pin)
             self.owner.sheet.schedule_viewport_restore(pin)
+            _reapply_draft_caret_if_composing()
+            if (was_input and caret_in_composer
+                    and c.caret_owner() == "draft" and sublime is not None):
+                tok = int(getattr(c, "_pending_caret_token", 0) or 0) + 1
+                c._pending_caret_token = tok
+
+                def _once(t=tok):
+                    if getattr(c, "_pending_caret_token", 0) != t:
+                        return
+                    _reapply_draft_caret_if_composing()
+
+                sublime.set_timeout(_once, 0)
         else:
+            if was_input and (
+                    not caret_in_composer or c.caret_owner() == "history"):
+                self.owner.sheet._pending_vp_pin = None
             may_scroll = (
                 was_input and c.is_input_mode()
                 and c.caret_owner() == "draft"
@@ -1539,17 +1582,58 @@ class TurnRenderer:
             )
             if may_scroll:
                 if self.owner.sheet.view_is_focused():
-                    c._scroll_layout_to_bottom(force=(delta_sz != 0), reapply_caret=True)
+                    c._scroll_layout_to_bottom(
+                        force=(delta_sz != 0), reapply_caret=True)
+                    _reapply_draft_caret_if_composing()
+                    if delta_sz != 0 and caret_in_composer and sublime is not None:
+                        tok = int(getattr(c, "_pending_caret_token", 0) or 0) + 1
+                        c._pending_caret_token = tok
+
+                        def _after_scroll(t=tok):
+                            if getattr(c, "_pending_caret_token", 0) != t:
+                                return
+                            if c.caret_owner() != "draft":
+                                return
+                            if self.owner.sheet.view_is_focused():
+                                c._scroll_layout_to_bottom(
+                                    force=True, reapply_caret=True)
+                            c.restore_draft_caret()
+
+                        sublime.set_timeout(_after_scroll, 0)
             elif (want_scroll or typing_at_tail) and c.caret_owner() != "history":
                 c.scroll_to_end(force=False)
+                _reapply_draft_caret_if_composing()
 
         if c.is_input_mode() or c._question_input_mode:
             view.set_read_only(False)
+            if c._question_input_mode:
+                try:
+                    regs = view.get_regions(keys.QUESTION_INPUT_MARKER)
+                    if regs:
+                        c._question_input_start = regs[0].end()
+                        c._input_start = c._question_input_start
+                except Exception:
+                    pass
 
         if following or not self.current.working:
             if sublime is not None:
                 sublime.set_timeout(self._refresh_media_phantoms, 10)
                 sublime.set_timeout(self._refresh_artifact_phantoms, 10)
+        try:
+            s = get_session_for_view(view)
+            if s and getattr(s, "_wakeup_armed", None) and s._wakeup_armed():
+                fn = getattr(s, "_update_wakeup_banner", None)
+                if callable(fn) and sublime is not None:
+                    sublime.set_timeout(
+                        lambda sess=s: sess._update_wakeup_banner(show=True), 15)
+            if s and c.is_input_mode() and was_input:
+                if sublime is not None and hasattr(s, "_update_permission_banner"):
+                    sublime.set_timeout(
+                        lambda sess=s: sess._update_permission_banner(show=True), 15)
+            elif s and not c.is_input_mode() and hasattr(s, "_clear_queue_phantom"):
+                s._clear_queue_phantom()
+        except Exception:
+            pass
         self.owner._sel_guard = False
 
     def _try_append(self, delta):
@@ -1596,7 +1680,9 @@ class TurnRenderer:
             except Exception:
                 pass
         following = self.owner.sheet.is_following_tail()
-        if following and c.caret_owner() == "draft":
+        if getattr(c, "_submit_pin", None):
+            c.restore_submit_pin()
+        elif following and c.caret_owner() == "draft":
             c.scroll_to_end(force=False)
         return True
 
@@ -1747,6 +1833,8 @@ class TurnRenderer:
         # Buffer already has 📎; names live in phantoms — leave as-is.
 
     def _refresh_turn_context_phantoms(self, refs, region=None):
+        from features.context import chip_ref
+
         view = self.owner.view
         if not view or not view.is_valid() or sublime is None:
             return
@@ -1774,8 +1862,12 @@ class TurnRenderer:
         pt = a + idx + len(CONTEXT_PREFIX.strip())
         chips = []
         for i, ref in enumerate(refs):
-            name = (ref or {}).get("name") or "?"
-            chips.append('<a href="turn:%d">%s</a>' % (i, _esc(name)))
+            ref = chip_ref(ref)
+            what = "open" if ref["action"] == "open" else "reveal"
+            tip = "click to %s %s" % (what, ref["path"] or ref["name"])
+            chips.append(
+                '<a href="turn:%d" title="%s">%s</a>'
+                % (i, _esc(tip), _esc(ref["name"])))
         html = (
             '<body id="submarine-turn-ctx" style="margin:0;padding:0 0 0 6px;'
             'font-size:11px;">%s</body>' % " · ".join(chips)
