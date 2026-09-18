@@ -678,6 +678,21 @@ class Session:
             err = result.get("error")
             error_msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
             log_plugin("init error: %s" % error_msg)
+            # The bridge has nothing to serve after a failed handshake. Drop
+            # it now: a client left installed makes sleep() refuse cleanup and
+            # restart() unable to recover (there is no session id to wake).
+            if self.client:
+                client = self.client
+                self.client = None
+                try:
+                    if not client.send("shutdown", {}, lambda _: client.stop()):
+                        client.stop()   # already dead: reap it now
+                except Exception:
+                    try:
+                        client.stop()
+                    except Exception:
+                        pass
+            self.initialized = False
             self._mark_error_halt(error_msg)
             self.chrome.set_status("error")
             try:

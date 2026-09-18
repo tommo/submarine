@@ -293,6 +293,10 @@ class CodexBridge(BaseBridge):
         self._turn_start_time: float = 0
         self._last_usage: Optional[dict] = None
 
+        # App-server request id of the turn/start behind _query_req_id: an
+        # error response to it means the turn never starts, so the host query
+        # must be failed right there (nothing else would ever resolve it).
+        self._turn_start_req_id: Optional[int] = None
         # Accumulate command output from outputDelta events
         self._command_output: dict[str, list[str]] = {}
         # call_id / item_id map for MCP tool_use ↔ tool_result pairing
@@ -354,7 +358,18 @@ class CodexBridge(BaseBridge):
     # Dispatch handled by BaseBridge.handle_request via _dispatch_table
 
     async def handle_initialize(self, req_id: int, params: dict) -> None:
-        """Initialize: spawn codex app-server, create thread."""
+        """Initialize: spawn codex app-server, create thread.
+
+        Every failure goes through _fail_init: a bridge that answers the
+        handshake with an error is never shut down by the host, so it must
+        exit itself or it keeps the app-server (and its thread writer) alive.
+        """
+        try:
+            await self._initialize(req_id, params)
+        except Exception as e:
+            await self._fail_init(req_id, "Codex initialize failed: %s" % e)
+
+    async def _initialize(self, req_id: int, params: dict) -> None:
         cwd = params.get("cwd", os.getcwd())
         model = params.get("model")
         permission_mode = params.get("permission_mode", "default")
@@ -412,7 +427,9 @@ class CodexBridge(BaseBridge):
         # Wait for initialize response
         init_result = await self._wait_for_response(init_id)
         if init_result is None:
-            send_error(req_id, -32000, "Codex initialize timed out")
+            reason = _codex_error_text(self._request_errors.pop(init_id, None))
+            await self._fail_init(
+                req_id, "Codex initialize %s" % (reason or "timed out"))
             return
 
         # Start a thread
@@ -442,7 +459,7 @@ class CodexBridge(BaseBridge):
         start_id = await self.codex_request(
             method, _open_params(resume_id if resume_id else None))
         thread_result = await self._wait_for_response(start_id)
-        err = self._request_errors.get(start_id)
+        err = self._request_errors.pop(start_id, None)
 
         # A codex process from an earlier plugin load can still own this
         # thread's writer. thread/resume cannot steal it, but thread/fork loads
@@ -453,7 +470,7 @@ class CodexBridge(BaseBridge):
             start_id = await self.codex_request(
                 "thread/fork", _open_params(resume_id))
             thread_result = await self._wait_for_response(start_id)
-            err = self._request_errors.get(start_id)
+            err = self._request_errors.pop(start_id, None)
             recovered_fork = err is None
 
         if self.thread_id is None and thread_result:
@@ -559,7 +576,7 @@ class CodexBridge(BaseBridge):
                 else:
                     user_input.append({"type": "image", "url": img})
 
-        await self.codex_request("turn/start", {
+        self._turn_start_req_id = await self.codex_request("turn/start", {
             "threadId": self.thread_id,
             "input": user_input,
         })
@@ -631,6 +648,9 @@ class CodexBridge(BaseBridge):
             req_id = msg["id"]
             if "error" in msg:
                 log(f"Codex error response for req {req_id}: {msg['error']}")
+                if req_id == self._turn_start_req_id:
+                    self._fail_turn_start(msg["error"])
+                    return
                 self._request_errors[req_id] = msg["error"]
             if req_id in self._pending_responses:
                 self._pending_responses[req_id].set_result(msg.get("result"))
@@ -920,6 +940,16 @@ class CodexBridge(BaseBridge):
                     is_error=False,
                 )
 
+    def _fail_turn_start(self, err: Any) -> None:
+        """turn/start was rejected: the turn never starts, so no turn/completed
+        will ever resolve the host query. Fail it now and clear the state."""
+        reason = _codex_error_text(err) or "turn/start rejected"
+        self._turn_start_req_id = None
+        if self._query_req_id is not None:
+            send_error(self._query_req_id, -32000, "Codex: %s" % reason)
+            self._query_req_id = None
+        self.turn_id = None
+
     def _complete_turn(self, is_error: bool = False) -> None:
         """Send turn result notification and deferred query response."""
         duration = time.time() - self._turn_start_time if self._turn_start_time else 0
@@ -933,6 +963,7 @@ class CodexBridge(BaseBridge):
         if self._last_usage:
             result_msg["usage"] = self._last_usage
         send_notification("message", result_msg)
+        self._turn_start_req_id = None
         # Respond to the deferred query request — triggers _on_done in session.py
         if self._query_req_id is not None:
             send_result(self._query_req_id, {

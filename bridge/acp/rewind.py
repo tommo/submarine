@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
 from typing import Optional
 
 _BRIDGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -161,15 +162,29 @@ class RewindMixin:
         draft = (disk or {}).get("draft_prompt") or ""
         if not draft and isinstance(acp_result, dict):
             draft = acp_result.get("prompt_text") or ""
-        send_result(req_id, {
-            "ok": True,
+        # ok only when something actually cut the history: the disk truncate
+        # completed, or the ACP rewind reported success. The host restarts as
+        # rewound on ok, so a double failure must not claim it.
+        disk_ok = isinstance(disk, dict) and not disk.get("error")
+        acp_ok = isinstance(acp_result, dict) and bool(acp_result.get("success"))
+        out = {
+            "ok": bool(disk_ok or acp_ok),
             "prompt_index": target,
             "draft_prompt": draft,
             "mode": mode,
             "disk": disk or {},
             "acp": acp_result,
             "session_id": self.session_id,
-        })
+        }
+        if not out["ok"]:
+            detail = []
+            if isinstance(disk, dict) and disk.get("error"):
+                detail.append("disk: %s" % disk["error"])
+            if isinstance(acp_result, dict) and acp_result.get("error"):
+                detail.append("acp: %s" % acp_result["error"])
+            out["error"] = "; ".join(detail) or "rewind did not cut the history"
+            self.file_log(f"rewind/execute FAILED target={target}: {out['error']}")
+        send_result(req_id, out)
 
     @staticmethod
     def _chat_row_text(o: dict) -> str:
@@ -204,7 +219,20 @@ class RewindMixin:
         sdir = self._grok_session_dir()
         if not sdir:
             return {"error": "session dir not found", "draft_prompt": ""}
+        try:
+            return self._client_rewind_files(sdir, target_prompt_index)
+        except Exception as e:
+            self.file_log(
+                f"client rewind conversation target={target_prompt_index} "
+                f"FAILED, history untouched: {e}")
+            return {"error": "history rewrite failed: %s" % e,
+                    "draft_prompt": "", "session_dir": sdir}
 
+    def _client_rewind_files(self, sdir: str, target_prompt_index: int) -> dict:
+        """The cut itself. Every output is staged in the session dir and the
+        files are only swapped in once all of them were written, so a failure
+        never leaves one file truncated and the others untouched."""
+        pending = []  # (path, kept lines) — replaced together at the end
         chat_path = os.path.join(sdir, "chat_history.jsonl")
         rp_path = os.path.join(sdir, "rewind_points.jsonl")
         up_path = os.path.join(sdir, "updates.jsonl")
@@ -244,9 +272,7 @@ class RewindMixin:
                                 or o.get("prompt_text")
                                 or draft
                             )
-            with open(rp_path, "w", encoding="utf-8") as f:
-                for line in kept_lines:
-                    f.write(line + "\n")
+            pending.append((rp_path, kept_lines))
 
         # chat_history: cut at first row whose prompt_index >= target
         if os.path.isfile(chat_path):
@@ -291,9 +317,7 @@ class RewindMixin:
                         break
                     user_turns += 1
             if cut_at is not None:
-                with open(chat_path, "w", encoding="utf-8") as f:
-                    for line in lines[:cut_at]:
-                        f.write(line + "\n")
+                pending.append((chat_path, lines[:cut_at]))
 
         # updates.jsonl: stream-cut at first _meta.promptIndex >= target
         # (later tool_call rows lack promptIndex and must still drop).
@@ -313,10 +337,9 @@ class RewindMixin:
                         continue
                     kept_u.append(raw)
                     kept_up += 1
-            with open(up_path, "w", encoding="utf-8") as f:
-                for line in kept_u:
-                    f.write(line + "\n")
+            pending.append((up_path, kept_u))
 
+        self._replace_history_files(pending)
         self.file_log(
             f"client rewind conversation target={target_prompt_index} "
             f"cut_at={cut_at} draft_len={len(draft or '')} "
@@ -332,6 +355,35 @@ class RewindMixin:
             "kept_updates": kept_up,
             "dropped_updates": dropped_up,
         }
+
+    @staticmethod
+    def _replace_history_files(pending) -> None:
+        """Stage every file next to its target, then rename them into place.
+
+        Nothing is replaced until all staging writes succeeded; a failure
+        removes the staged files and raises with the history untouched.
+        """
+        staged = []
+        try:
+            for path, lines in pending:
+                fd, tmp = tempfile.mkstemp(
+                    prefix="." + os.path.basename(path) + ".", suffix=".tmp",
+                    dir=os.path.dirname(path))
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    for line in lines:
+                        f.write(line + "\n")
+                    f.flush()
+                    os.fsync(f.fileno())
+                staged.append((tmp, path))
+        except Exception:
+            for tmp, _path in staged:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+            raise
+        for tmp, path in staged:
+            os.replace(tmp, path)
 
     @staticmethod
     def _updates_line_prompt_index(line: str):

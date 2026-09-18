@@ -595,19 +595,68 @@ class TestSessionChains(unittest.TestCase):
              sl.save_bookmarks, sl.refresh_session_list) = prev
 
     def test_deleting_a_collapsed_row_drops_every_incarnation(self):
-        dropped = []
-        prev_remove = sl.remove_saved_session
-        prev_bookmarks = sl.load_bookmarks
-        sl.remove_saved_session = lambda sid: dropped.append(sid) or True
-        sl.load_bookmarks = lambda project=None: set()
+        """Delete on a starred HISTORY row used to come straight back: the
+        store rows went, the bookmark and its snapshot stayed, and the next
+        render rebuilt the row from the snapshot."""
+        from core.records import load_bookmarks, save_bookmarks
+        from tests.stubs import install
+        sublime = install()
+        proj = tempfile.mkdtemp(prefix="submarine-del-")
+        store = [
+            {"session_id": "old", "agent_id": "a1", "name": "GUEST",
+             "backend": "grok", "project": proj, "state": "closed",
+             "query_count": 3, "last_activity": 1, "last_access": 1},
+            {"session_id": "mid", "agent_id": "a1", "name": "GUEST",
+             "backend": "grok", "project": proj, "state": "closed",
+             "query_count": 3, "last_activity": 2, "last_access": 2},
+            {"session_id": "new", "agent_id": "a1", "name": "GUEST",
+             "backend": "grok", "project": proj, "state": "closed",
+             "query_count": 3, "last_activity": 3, "last_access": 3},
+            {"session_id": "solo", "agent_id": "b1", "name": "solo run",
+             "backend": "grok", "project": proj, "state": "closed",
+             "query_count": 2, "last_activity": 4, "last_access": 4},
+        ]
+
+        def _remove(sid):
+            before = len(store)
+            store[:] = [r for r in store if r["session_id"] != sid]
+            return len(store) != before
+
+        prev = (sl.sublime, sl.remove_saved_session, sl.load_saved_sessions)
+        sl.sublime = sublime
+        sl.remove_saved_session = _remove
+        sl.load_saved_sessions = lambda: [dict(r) for r in store]
         row = self._rec("new", "a1", section="HISTORY")
         row["chain_ids"] = ["old", "mid", "new"]
         try:
-            self.assertTrue(sl.close_row(None, row))
+            win = _win_for([proj])
+            # Star the whole chain, the way the star key does.
+            save_bookmarks({"old", "mid", "new"}, proj, records={
+                x: {"name": "GUEST", "backend": "grok", "project": proj}
+                for x in ("old", "mid", "new")})
+            _text, index = sl.build_for_window(win, cols=80)
+            self.assertEqual(sorted(r["session_id"] for r in index),
+                             ["new", "solo"])
+
+            self.assertTrue(sl.close_row(win, row))
+            self.assertEqual([r["session_id"] for r in store], ["solo"])
+            self.assertEqual(load_bookmarks(proj), set())
+            _text, index = sl.build_for_window(win, cols=80)
+            self.assertEqual([r["session_id"] for r in index], ["solo"])
+
+            # Counter-case: a star the store CAP pruned still lists — that
+            # is what the bookmark snapshot exists for.
+            save_bookmarks({"pruned"}, proj, records={
+                "pruned": {"name": "kept by star", "backend": "kimi",
+                           "project": proj, "query_count": 7}})
+            text, index = sl.build_for_window(win, cols=80)
+            self.assertEqual(sorted(r["session_id"] for r in index),
+                             ["pruned", "solo"])
+            self.assertIn("kept by star", text)
         finally:
-            sl.remove_saved_session = prev_remove
-            sl.load_bookmarks = prev_bookmarks
-        self.assertEqual(sorted(dropped), ["mid", "new", "old"])
+            (sl.sublime, sl.remove_saved_session, sl.load_saved_sessions) = prev
+            import shutil
+            shutil.rmtree(proj, ignore_errors=True)
 
 
 class TestRenderSessionList(unittest.TestCase):

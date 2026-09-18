@@ -27,6 +27,10 @@ _LEGACY_TABS = "claude_tabs"
 _LEGACY_SESSION_TAB = "claude_session_tab"
 _WINDOW_TABS_FILE = "window_tabs.json"
 _WINDOW_TABS_CAP = 40
+# Live windows' slots, keyed by runtime window id: two open windows on the
+# same folders share one persisted row, so this layer keeps them apart while
+# both are open (dies with the process; the file is the restart fallback).
+_LIVE_TABS = {}  # type: dict
 
 
 def view_tab_kind(view) -> Optional[str]:
@@ -57,11 +61,13 @@ def _window_tabs_path() -> str:
 
 def window_tab_key(window) -> str:
     # type: (Any) -> str
-    """Stable per-window identity for the remembered tab position.
+    """Stable identity for the remembered tab position.
 
-    The workspace file is stable across restarts and unique per window; the
-    project file and the folder list are fallbacks for windows without one,
-    and the runtime id is the last resort (memory only, not restart-surviving).
+    The workspace file and the project file are stable across restarts and
+    unique per window. The folder list is a restart-surviving best effort
+    that windows opened on the same folders SHARE — they are told apart only
+    while both are open (`_LIVE_TABS`), and after a restart both read the
+    last writer's row. The runtime id is the last resort (memory only).
     """
     if window is None:
         return ""
@@ -125,9 +131,20 @@ def save_window_tabs(tabs: dict) -> bool:
         return False
 
 
+def _live_tab_key(window):
+    # type: (Any) -> Optional[Any]
+    try:
+        return window.id()
+    except Exception:
+        return None
+
+
 def _tab_layout(window, kind):
     # type: (Any, str) -> Optional[dict]
     """Remembered layout: this window's memory, else the persisted entry."""
+    live = _LIVE_TABS.get(_live_tab_key(window))
+    if isinstance(live, dict) and isinstance(live.get(kind), dict):
+        return live[kind]
     try:
         settings = window.settings()
         tabs = settings.get(_TABS) or settings.get(_LEGACY_TABS) or {}
@@ -185,6 +202,9 @@ def remember_view_tab(window, view, kind=None) -> bool:
     if index < 0:
         index = 0
     layout = {"group": int(group), "index": index, "ts": time.time()}
+    live_key = _live_tab_key(window)
+    if live_key is not None:
+        _LIVE_TABS.setdefault(live_key, {})[kind] = layout
     try:
         tabs = dict(window.settings().get(_TABS) or {})
         tabs[kind] = layout
@@ -239,10 +259,13 @@ def apply_view_tab(window, view, kind=None) -> bool:
         if group < 0 or group >= n_groups:
             group = window.active_group()
         n_in = len(window.views_in_group(group))
-        # An empty group is a legitimate target: a sheet is often alone in its
-        # own split, so its remembered slot is the only one.
-        index = max(0, min(index, n_in - 1)) if n_in > 0 else 0
         cur_group, cur_index = window.get_view_index(view)
+        # An empty group is a legitimate target: a sheet is often alone in its
+        # own split, so its remembered slot is the only one. A view already in
+        # the group is one of its n_in tabs; from another group the slot after
+        # every current tab is n_in itself.
+        last = n_in - 1 if cur_group == group else n_in
+        index = max(0, min(index, last)) if n_in > 0 else 0
         if cur_group == group and cur_index == index:
             return False
         window.set_view_index(view, group, index)

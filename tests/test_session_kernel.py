@@ -354,6 +354,76 @@ class TestInitializeParams(unittest.TestCase):
         self.assertFalse(hasattr(s, "parent_view_id"))
 
 
+class TestInitErrorDropsClient(unittest.TestCase):
+    """A failed handshake must not leave the client installed.
+
+    The bridge answers initialize with an error (codex: app-server never
+    answered). With the client still attached, sleep() refused cleanup and
+    restart() could never recover the session.
+    """
+
+    def _fail_init(self, s, client):
+        s.start()
+        inits = [t for t in client.sent if t[0] == "initialize"]
+        self.assertTrue(inits)
+        inits[0][2]({"error": {"message": "Codex initialize timed out"}})
+
+    def test_client_is_shut_down_and_cleared(self):
+        client = FakeClient()
+        s = make_session(client=client, resume_id="sid-init", cwd="/tmp/proj")
+        self._fail_init(s, client)
+        self.assertIsNone(s.client)
+        self.assertFalse(s.initialized)
+        # The dead bridge is told to go, and stop() runs when it answers.
+        shut = [t for t in client.sent if t[0] == "shutdown"]
+        self.assertEqual(len(shut), 1)
+        shut[0][2]({})
+        self.assertTrue(client.stopped)
+        # The existing error surface is kept.
+        self.assertTrue(s.error_halted)
+        self.assertIn("timed out", s.error_halt_message)
+        self.assertTrue(any("Failed to connect" in t for t in s.output.texts))
+
+    def test_a_dead_bridge_is_reaped_at_once(self):
+        class _Dead(FakeClient):
+            def send(self, method, params, callback=None):
+                super().send(method, params, callback)
+                return False    # the process already exited
+
+        client = _Dead()
+        s = make_session(client=client, resume_id="sid-init", cwd="/tmp/proj")
+        s.start()
+        inits = [t for t in client.sent if t[0] == "initialize"]
+        inits[0][2]({"error": {"message": "Bridge process died"}})
+        self.assertIsNone(s.client)
+        self.assertTrue(client.stopped)
+
+    def test_session_can_wake_afterwards(self):
+        """wake() used to return early because the dead client was still set."""
+        client = FakeClient()
+        s = make_session(client=client, resume_id="sid-init", cwd="/tmp/proj")
+        self._fail_init(s, client)
+        self.assertTrue(s.is_sleeping)
+        fresh = FakeClient()
+        s.rpc_factory = lambda on_n, _c=fresh: _c
+        s.wake()
+        self.assertIs(s.client, fresh)
+        self.assertTrue([t for t in fresh.sent if t[0] == "initialize"])
+
+    def test_session_can_sleep_and_restart_afterwards(self):
+        client = FakeClient()
+        s = make_session(client=client, resume_id="sid-init", cwd="/tmp/proj")
+        self._fail_init(s, client)
+        self.assertTrue(s.sleep())
+        self.assertTrue(s.is_sleeping)
+        fresh = FakeClient()
+        s.rpc_factory = lambda on_n, _c=fresh: _c
+        s.restart()
+        s.scheduler.fire_all()
+        self.assertIs(s.client, fresh)
+        self.assertTrue([t for t in fresh.sent if t[0] == "initialize"])
+
+
 class TestSessionStore(unittest.TestCase):
     def test_mru_cap_and_schema(self):
         fd, path = tempfile.mkstemp(suffix=".json")

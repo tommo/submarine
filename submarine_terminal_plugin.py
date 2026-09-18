@@ -65,3 +65,43 @@ def plugin_loaded():
         print("[Submarine] terminal color scheme: %s" % path)
     except Exception as e:
         print("[Submarine] terminal color scheme failed: %s" % e)
+
+
+def plugin_unloaded():
+    """End every terminal session when the package unloads.
+
+    A reload replaces ``Terminal._terminals`` while the old PTY's reader and
+    renderer threads keep running; the next activation of that view finds no
+    terminal for it and starts a second shell in the same buffer. Close each
+    live terminal here and mark its view finished / not reactivable, so a
+    reload ends terminal sessions instead of leaking one and forking another.
+    """
+    try:
+        from terminal.terminal import Terminal
+    except Exception:
+        return
+    seen = []
+    for t in list(Terminal._terminals.values()) + list(Terminal._detached_terminals):
+        if any(t is s for s in seen):
+            continue
+        seen.append(t)
+        view = getattr(t, "view", None)
+        try:
+            if view is not None and view.is_valid():
+                view.settings().set("submarine_terminal.finished", True)
+                view.settings().set("submarine_terminal.reactivable", False)
+        except Exception:
+            pass
+        try:
+            t._done[0] = True   # stop the reader/renderer threads
+        except Exception:
+            pass
+        try:
+            if getattr(t, "_adopted", False):
+                t.release()     # borrowed pty: never kill it
+            else:
+                t.kill()
+        except Exception:
+            pass
+    Terminal._terminals.clear()
+    del Terminal._detached_terminals[:]

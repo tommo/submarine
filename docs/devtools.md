@@ -112,17 +112,21 @@ __result__ = list(sublime._submarine_sessions.keys())
 
 (`settle_startup_claude_views` is kept as an alias.)
 
-4. Wake a sheet before agent turns / goals that need a live bridge:
+4. Wake a sheet before agent turns / goals that need a live bridge.
+   `sublime._submarine_sessions` is keyed by `agent_id`, not view id — resolve
+   a view id through the registry:
 
 ```bash
 python3 submarine_devtools.py eval '
-s = sublime._submarine_sessions.get(28)
+from core.registry import default_registry
+s = default_registry.for_view_id(28)   # or default_registry.by_agent_id("agent-…")
 s.wake()
-__result__ = {"wake": True, "session_id": s.session_id}
+__result__ = {"wake": True, "session_id": s.session_id, "agent_id": s.agent_id}
 '
 # poll until initialized
 python3 submarine_devtools.py eval '
-s = sublime._submarine_sessions.get(28)
+from core.registry import default_registry
+s = default_registry.for_view_id(28)
 __result__ = {"initialized": s.initialized, "working": s.working, "sleeping": s.is_sleeping}
 '
 ```

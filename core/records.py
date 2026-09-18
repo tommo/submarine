@@ -209,7 +209,7 @@ class SessionRecord:
 
 
 class SessionStore:
-    """`.sessions.json` — plugin dir, cap 200, MRU-front."""
+    """`.sessions.json` — plugin dir, cap SESSIONS_CAP (400), MRU-front."""
 
     def __init__(self, path: Optional[str] = None) -> None:
         self.path = path or default_sessions_path()
@@ -271,7 +271,7 @@ class SessionStore:
                 hit = True
                 break
         if hit:
-            self.save(sessions)
+            return bool(self.save(sessions))
         return hit
 
     def remove(self, session_id: str) -> bool:
@@ -281,8 +281,7 @@ class SessionStore:
         nxt = [s for s in sessions if s.get("session_id") != session_id]
         if len(nxt) == len(sessions):
             return False
-        self.save(nxt)
-        return True
+        return bool(self.save(nxt))
 
 
 def _bookmarks_path(project_path: Optional[str] = None) -> str:
@@ -310,17 +309,20 @@ def load_bookmark_records(project_path: Optional[str] = None) -> dict:
     return rec if isinstance(rec, dict) else {}
 
 
-def save_bookmark_state(state: dict, project_path: Optional[str] = None) -> None:
+def save_bookmark_state(state: dict, project_path: Optional[str] = None) -> bool:
     path = _bookmarks_path(project_path)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    safe_json_dump(state or {"starred": []}, path)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    except OSError:
+        return False
+    return bool(safe_json_dump(state or {"starred": []}, path))
 
 
 def save_bookmarks(
     starred: set,
     project_path: Optional[str] = None,
     records: Optional[dict] = None,
-) -> None:
+) -> bool:
     state = load_bookmark_state(project_path)
     ids = set(starred or ())
     state["starred"] = list(ids)
@@ -334,7 +336,7 @@ def save_bookmarks(
         state["records"] = rec
     else:
         state.pop("records", None)
-    save_bookmark_state(state, project_path)
+    return save_bookmark_state(state, project_path)
 
 
 def remember_bookmark_record(
@@ -382,7 +384,8 @@ def toggle_bookmark(
         now_starred = True
         if isinstance(record, dict) and record:
             recs[session_id] = dict(record)
-    save_bookmarks(starred, project_path, records=recs)
+    if not save_bookmarks(starred, project_path, records=recs):
+        return not now_starred   # nothing changed on disk
     return now_starred
 
 

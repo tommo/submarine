@@ -33,10 +33,11 @@ WRITER_ERR = {"code": -32600,
 class _StubBridge(CodexBridge):
     """Init path only: no subprocess, scripted codex responses."""
 
-    def __init__(self, responses):
+    def __init__(self, responses, handshake=True):
         super().__init__()
         self._pending_responses = {}
         self._request_errors = {}
+        self.handshake = handshake      # False: the app-server never answers
         self.script = list(responses)   # [(result, error), …] for thread/* calls
         self._script_i = 0
         self.req_methods = {}
@@ -63,7 +64,7 @@ class _StubBridge(CodexBridge):
 
     async def _wait_for_response(self, req_id, timeout=30):
         if self.req_methods.get(req_id) == "initialize":
-            return {}                   # handshake succeeds
+            return {} if self.handshake else None   # None: timed out
         item = self.script[self._script_i] if self._script_i < len(self.script) else (None, None)
         self._script_i += 1
         result, error = (list(item) + [None, None])[:2]
@@ -200,6 +201,117 @@ class TestInitializeThreadOpening(unittest.TestCase):
         b = self._run({"cwd": "/proj"}, [(None, {"message": "boom"})])
         self.assertFalse(b.results)
         self.assertTrue(b.exited)
+
+    def test_handshake_timeout_exits_the_bridge(self):
+        """An app-server that never answers initialize used to leave the
+        bridge (and the app-server holding the thread writer) running."""
+        b = _StubBridge([({"thread": {"id": THREAD}}, None)], handshake=False)
+        _patch_sends(b)
+        asyncio.run(b.handle_initialize(1, {"cwd": "/proj"}))
+        self.assertEqual([m for m, _p in b.sent], ["initialize"])
+        self.assertFalse(b.results)
+        _rid, code, msg = b.errors[-1]
+        self.assertEqual(code, -32000)
+        self.assertIn("timed out", msg)
+        self.assertTrue(b.exited)
+
+    def test_handshake_error_response_exits_the_bridge(self):
+        b = _StubBridge([], handshake=False)
+        _patch_sends(b)
+        orig = b._wait_for_response
+
+        async def _wait(req_id, timeout=30):
+            if b.req_methods.get(req_id) == "initialize":
+                b._request_errors[req_id] = {"message": "bad client"}
+            return await orig(req_id, timeout)
+
+        b._wait_for_response = _wait
+        asyncio.run(b.handle_initialize(1, {"cwd": "/proj"}))
+        self.assertIn("bad client", b.errors[-1][2])
+        self.assertTrue(b.exited)
+        self.assertEqual(b._request_errors, {})
+
+    def test_spawn_exception_exits_the_bridge(self):
+        b = _StubBridge([], handshake=False)
+        _patch_sends(b)
+
+        async def _boom(cwd, config_overrides=None):
+            raise FileNotFoundError("codex")
+
+        b.start_codex = _boom
+        asyncio.run(b.handle_initialize(1, {"cwd": "/proj"}))
+        self.assertEqual(b.sent, [])
+        self.assertIn("codex", b.errors[-1][2])
+        self.assertTrue(b.exited)
+
+
+class TestRejectedTurnStart(unittest.TestCase):
+    """An app-server that rejects turn/start must end the host query.
+
+    The turn never starts, so no turn/completed ever resolves the deferred
+    query response; the Sublime session used to stay "working" forever.
+    """
+
+    def setUp(self):
+        self._orig = (codex_main.send_result, codex_main.send_error,
+                      codex_main.send_notification)
+        self._orig_log = codex_main.log
+        codex_main.log = lambda msg: None
+
+    def tearDown(self):
+        (codex_main.send_result, codex_main.send_error,
+         codex_main.send_notification) = self._orig
+        codex_main.log = self._orig_log
+
+    def _bridge(self):
+        b = _StubBridge([])
+        _patch_sends(b)
+        b.thread_id = THREAD
+        return b
+
+    def test_error_response_fails_the_host_query_and_clears_state(self):
+        b = self._bridge()
+        asyncio.run(b.handle_query(41, {"prompt": "hi"}))
+        self.assertEqual(b._query_req_id, 41)
+        start_id = [rid for rid, m in b.req_methods.items() if m == "turn/start"][0]
+        asyncio.run(b.handle_codex_message({
+            "jsonrpc": "2.0", "id": start_id,
+            "error": {"code": -32600, "message": "thread is busy"}}))
+        self.assertEqual(len(b.errors), 1)
+        rid, code, msg = b.errors[0]
+        self.assertEqual(rid, 41)
+        self.assertEqual(code, -32000)
+        self.assertIn("thread is busy", msg)
+        self.assertIsNone(b._query_req_id)
+        self.assertIsNone(b._turn_start_req_id)
+        # Consumed: nothing parked for the rejected request.
+        self.assertEqual(b._request_errors, {})
+        # A late turn/completed for a turn that never started is a no-op.
+        asyncio.run(b.handle_codex_message({
+            "method": "turn/completed", "params": {"turn": {}}}))
+        self.assertEqual(b.results, [])
+
+    def test_other_errors_do_not_touch_the_pending_query(self):
+        b = self._bridge()
+        asyncio.run(b.handle_query(42, {"prompt": "hi"}))
+        asyncio.run(b.handle_codex_message({
+            "jsonrpc": "2.0", "id": 999,
+            "error": {"code": -32000, "message": "unrelated"}}))
+        self.assertEqual(b.errors, [])
+        self.assertEqual(b._query_req_id, 42)
+
+    def test_a_started_turn_still_completes_normally(self):
+        b = self._bridge()
+        asyncio.run(b.handle_query(43, {"prompt": "hi"}))
+        asyncio.run(b.handle_codex_message({
+            "method": "turn/started", "params": {"turn": {"id": "t1"}}}))
+        asyncio.run(b.handle_codex_message({
+            "method": "turn/completed", "params": {"turn": {"id": "t1"}}}))
+        self.assertEqual(b.errors, [])
+        self.assertEqual(b.results[-1][0], 43)
+        self.assertTrue(b.results[-1][1]["ok"])
+        self.assertIsNone(b._query_req_id)
+        self.assertIsNone(b._turn_start_req_id)
 
 
 class TestOrphanReaper(unittest.TestCase):

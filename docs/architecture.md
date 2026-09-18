@@ -237,8 +237,10 @@ turn: idle/live/compacting/interrupting. Sleep is DERIVED:
 
 ## Removal — final decisions (from removal-map report)
 
-- Embedded TTY emulator (`terminal/`) + hidden-PTY engine (`cc_pty_session`)
-  + launch/transcript helpers + pty commands: **all deleted**
+- Embedded TTY emulator (`terminal/`): **re-ported** as the vendored
+  Terminus-derived package (`SubmarineTerminal*` commands via the ROOT shim
+  `submarine_terminal_plugin.py`). The hidden-PTY engine (`cc_pty_session`)
+  + launch/transcript helpers + pty MCP tools stay **deleted**
   (subscription-billing CLI POC is an explicit product decision).
   ACP-protocol terminals in acp_base KEEP (not the emulator).
 - `chatroom` MCP tool: deleted with notalone (broken wiring anyway).

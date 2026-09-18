@@ -264,6 +264,12 @@ class RewindService:
                     resp.get("result") or resp)
                 if not isinstance(result, dict):
                     result = {}
+                if result.get("ok") is False:
+                    # Neither the disk cut nor the ACP rewind happened: the
+                    # history still holds the later turns, so do not restart
+                    # the session as if it were rewound.
+                    _fail(str(result.get("error") or "rewind failed"))
+                    return
                 d = (result.get("draft_prompt") or draft or "").strip()
                 self._grok_busy = False
                 self.on_apply_grok(idx, d)

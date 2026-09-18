@@ -1409,22 +1409,44 @@ def close_row(window, row: dict, remove: Optional[bool] = None) -> bool:
                 except Exception:
                     pass
         if remove and sid:
-            _forget_row_rows(row)
+            _forget_row_rows(row, window)
         return True
     if remove and sid:
-        return _forget_row_rows(row)
+        return _forget_row_rows(row, window)
     return False
 
 
-def _forget_row_rows(row: dict) -> bool:
+def _forget_row_rows(row: dict, window=None) -> bool:
     """Drop a HISTORY row's resume entries — every id the session was resumed
-    under, or the next incarnation would just take its place in the list."""
+    under, or the next incarnation would just take its place in the list.
+
+    A pin goes with them: `_include_starred_saved` rebuilds a starred id from
+    its bookmark snapshot on the next render, so an explicit delete has to
+    clear the window's bookmark state for those ids in the same step.
+    """
+    ids = row_ids(row)
     dropped = False
-    for sid in row_ids(row):
+    for sid in ids:
         try:
             dropped = bool(remove_saved_session(sid)) or dropped
         except Exception:
             pass
+    cwd = ""
+    try:
+        if window and window.folders():
+            cwd = window.folders()[0]
+    except Exception:
+        cwd = ""
+    try:
+        starred = set(load_bookmarks(cwd or None) or ())
+        if starred.intersection(ids):
+            recs = dict(load_bookmark_records(cwd or None) or {})
+            for x in ids:
+                starred.discard(x)
+                recs.pop(x, None)
+            save_bookmarks(starred, cwd or None, records=recs)
+    except Exception:
+        pass
     return dropped
 
 

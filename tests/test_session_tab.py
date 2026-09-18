@@ -1,10 +1,12 @@
 """Session sheet tab position, remembered per window (group + index)."""
 from __future__ import annotations
 
+import ast
 import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -12,6 +14,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 import plat.constants as constants  # noqa: E402
+from core import placement  # noqa: E402
 from core.placement import (  # noqa: E402
     apply_session_tab,
     apply_view_tab,
@@ -121,9 +124,11 @@ class _Store(unittest.TestCase):
         self._td = tempfile.TemporaryDirectory(prefix="submarine-tabs-")
         self._orig = constants.USER_PROFILES_DIR
         constants.USER_PROFILES_DIR = self._td.name
+        placement._LIVE_TABS.clear()
 
     def tearDown(self):
         constants.USER_PROFILES_DIR = self._orig
+        placement._LIVE_TABS.clear()
         self._td.cleanup()
 
     def _path(self):
@@ -249,6 +254,27 @@ class TestApply(_Store):
         self.assertTrue(apply_session_tab(w, v))
         self.assertEqual(w.moves, [("sess", 0, 1)])
 
+    def test_cross_group_move_can_land_last(self):
+        """From another group, the slot after every current tab is n_in: the
+        clamp used to stop at n_in - 1 and drop the sheet second-to-last."""
+        self._seed(1, 2)
+        v = _View("sess")
+        a, b = _View("a"), _View("b")
+        w = _Window([[v], [a, b]], {v: (0, 0), a: (1, 0), b: (1, 1)})
+        self.assertTrue(apply_session_tab(w, v))
+        self.assertEqual(w.moves, [("sess", 1, 2)])
+        self.assertEqual([x.name for x in w.groups[1]], ["a", "b", "sess"])
+
+    def test_same_group_clamp_stays_within_the_tabs(self):
+        # The view is one of the group's n_in tabs: last legal index is n_in - 1.
+        self._seed(0, 5)
+        v = _View("sess")
+        a, b = _View("a"), _View("b")
+        w = _Window([[v, a, b]], {v: (0, 0), a: (0, 1), b: (0, 2)})
+        self.assertTrue(apply_session_tab(w, v))
+        self.assertEqual(w.moves, [("sess", 0, 2)])
+        self.assertEqual([x.name for x in w.groups[0]], ["a", "b", "sess"])
+
     def test_moves_into_an_empty_group(self):
         """The session sheet is usually alone in its own split."""
         self._seed(2, 0)
@@ -272,6 +298,68 @@ class TestApply(_Store):
         v = _View("plain", session=False)
         w = _Window([[v], []], {v: (0, 0)})
         self.assertFalse(apply_session_tab(w, v))
+
+
+class TestTwoWindowsOneFolder(_Store):
+    """Two windows opened on the same folders share one persisted row.
+
+    While both are open each must read back its own slot; the file keeps the
+    last writer for the (best-effort) restart case.
+    """
+
+    def _pair(self):
+        va, vb = _View("sess-a"), _View("sess-b")
+        wa = _Window([[_View("x")], [va]], {va: (1, 0)}, workspace="",
+                     folders=["/p/eb"])
+        wb = _Window([[vb, _View("y")], []], {vb: (0, 0)}, workspace="",
+                     folders=["/p/eb"])
+        wa.id = lambda: 101
+        wb.id = lambda: 102
+        return wa, va, wb, vb
+
+    def test_live_windows_keep_their_own_slot(self):
+        wa, va, wb, vb = self._pair()
+        self.assertEqual(window_tab_key(wa), window_tab_key(wb))
+        self.assertTrue(remember_session_tab(wa, va))   # group 1, index 0
+        self.assertTrue(remember_session_tab(wb, vb))   # group 0, index 0
+        # Neither window's own memory may be the other's.
+        self.assertEqual(placement._tab_layout(wa, "session")["group"], 1)
+        self.assertEqual(placement._tab_layout(wb, "session")["group"], 0)
+        # A fresh sheet in window A goes back to A's split (1), not B's (0).
+        fresh = _View("fresh")
+        wa.groups[0].append(fresh)
+        wa.layout[fresh] = (0, 1)
+        self.assertTrue(apply_session_tab(wa, fresh))
+        self.assertEqual(wa.moves, [("fresh", 1, 0)])
+
+    def test_kept_apart_without_window_settings(self):
+        """The in-process layer alone must tell the windows apart: a window
+        whose settings cannot be read falls straight through to the shared
+        file otherwise."""
+        wa, va, wb, vb = self._pair()
+
+        def _no_settings():
+            raise RuntimeError("settings unavailable")
+
+        wa.settings = _no_settings
+        wb.settings = _no_settings
+        self.assertTrue(remember_session_tab(wa, va))
+        self.assertTrue(remember_session_tab(wb, vb))
+        self.assertEqual(placement._tab_layout(wa, "session")["group"], 1)
+        self.assertEqual(placement._tab_layout(wb, "session")["group"], 0)
+
+    def test_the_file_keeps_the_last_writer(self):
+        wa, va, wb, vb = self._pair()
+        remember_session_tab(wa, va)
+        remember_session_tab(wb, vb)
+        rows = load_window_tabs()
+        self.assertEqual(list(rows), ["folders:/p/eb"])
+        self.assertEqual(rows["folders:/p/eb"]["session"]["group"], 0)
+        # Only the in-process layer told them apart: a window that has not
+        # remembered anything yet reads the shared row.
+        wc = _Window([[]], {}, workspace="", folders=["/p/eb"])
+        wc.id = lambda: 103
+        self.assertEqual(placement._tab_layout(wc, "session")["group"], 0)
 
 
 class TestStore(_Store):
@@ -394,6 +482,147 @@ class TestListAndSessionSlots(_Store):
         self.assertFalse(remember_view_tab(w, plain))
         self.assertFalse(apply_view_tab(w, plain))
         self.assertFalse(os.path.exists(self._path()))
+
+
+# ── terminal shim: a reload must end terminal sessions, not fork a second PTY ──
+#
+# A soft reload replaces ``Terminal._terminals`` while the old PTY's reader and
+# renderer threads keep running; the next activation of the view finds no
+# terminal for it and starts a second shell in the same buffer. The vendored
+# package needs pyte, so the shim's hook is extracted by AST and run against a
+# fake ``terminal.terminal`` module.
+
+_SHIM = os.path.join(_ROOT, "submarine_terminal_plugin.py")
+
+
+class _TermSettings(dict):
+    def get(self, k, d=None):
+        return dict.get(self, k, d)
+
+    def set(self, k, v):
+        self[k] = v
+
+
+class _TermView:
+    def __init__(self, vid, valid=True):
+        self._id = vid
+        self._valid = valid
+        self._settings = _TermSettings({"submarine_terminal.reactivable": True})
+
+    def id(self):
+        return self._id
+
+    def is_valid(self):
+        return self._valid
+
+    def settings(self):
+        return self._settings
+
+
+class _FakeTerminal:
+    _terminals = {}
+    _detached_terminals = []
+
+    def __init__(self, view=None, adopted=False):
+        self.view = view
+        self._done = [False]
+        self._adopted = adopted
+        self.killed = False
+        self.released = False
+        if view is not None:
+            _FakeTerminal._terminals[view.id()] = self
+        else:
+            _FakeTerminal._detached_terminals.append(self)
+
+    def kill(self):
+        self.killed = True
+        if self.view is not None:
+            _FakeTerminal._terminals.pop(self.view.id(), None)
+
+    def release(self):
+        self.released = True
+
+
+def _shim_hook(name):
+    src = open(_SHIM, encoding="utf-8").read()
+    for node in ast.parse(src).body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            ns = {}
+            exec(compile(ast.Module(body=[node], type_ignores=[]),
+                         _SHIM, "exec"), ns)
+            return ns[name]
+    return None
+
+
+class TestTerminalUnload(unittest.TestCase):
+    def setUp(self):
+        self._saved = {k: sys.modules.get(k) for k in ("terminal", "terminal.terminal")}
+        pkg = types.ModuleType("terminal")
+        pkg.__path__ = []
+        mod = types.ModuleType("terminal.terminal")
+        mod.Terminal = _FakeTerminal
+        pkg.terminal = mod
+        sys.modules["terminal"] = pkg
+        sys.modules["terminal.terminal"] = mod
+        _FakeTerminal._terminals.clear()
+        del _FakeTerminal._detached_terminals[:]
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+        _FakeTerminal._terminals.clear()
+        del _FakeTerminal._detached_terminals[:]
+
+    def test_shim_defines_both_lifecycle_hooks(self):
+        src = open(_SHIM, encoding="utf-8").read()
+        names = {n.name for n in ast.parse(src).body if isinstance(n, ast.FunctionDef)}
+        self.assertIn("plugin_loaded", names)
+        self.assertIn("plugin_unloaded", names)
+
+    def test_unload_ends_every_terminal_and_blocks_reactivation(self):
+        hook = _shim_hook("plugin_unloaded")
+        self.assertIsNotNone(hook)
+        va, vb = _TermView(1), _TermView(2)
+        ta, tb = _FakeTerminal(va), _FakeTerminal(vb)
+        detached = _FakeTerminal(None)
+        hook()
+        for t in (ta, tb, detached):
+            self.assertTrue(t.killed, t)
+            self.assertTrue(t._done[0], "reader/renderer threads must be told to stop")
+        for v in (va, vb):
+            self.assertTrue(v.settings().get("submarine_terminal.finished"))
+            self.assertFalse(v.settings().get("submarine_terminal.reactivable"))
+        self.assertEqual(_FakeTerminal._terminals, {})
+        self.assertEqual(_FakeTerminal._detached_terminals, [])
+
+    def test_borrowed_pty_is_released_not_killed(self):
+        hook = _shim_hook("plugin_unloaded")
+        v = _TermView(3)
+        t = _FakeTerminal(v, adopted=True)
+        hook()
+        self.assertTrue(t.released)
+        self.assertFalse(t.killed)
+        self.assertTrue(v.settings().get("submarine_terminal.finished"))
+
+    def test_a_dead_view_or_failing_kill_does_not_stop_the_sweep(self):
+        hook = _shim_hook("plugin_unloaded")
+        gone = _TermView(4, valid=False)
+        t_gone = _FakeTerminal(gone)
+
+        class _Bad(_FakeTerminal):
+            def kill(self):
+                raise RuntimeError("pty already gone")
+
+        bad = _Bad(_TermView(5))
+        ok = _FakeTerminal(_TermView(6))
+        hook()
+        self.assertTrue(t_gone.killed)
+        self.assertTrue(ok.killed)
+        self.assertTrue(bad._done[0])
+        self.assertEqual(_FakeTerminal._terminals, {})
 
 
 if __name__ == "__main__":
