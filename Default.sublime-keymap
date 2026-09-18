@@ -449,7 +449,10 @@
     {
         "keys": ["ctrl+/"],
         "command": "submarine_terminal_open",
-        "args": { "tag": "Terminal" }
+        "args": {
+            "tag": "Terminal",
+            "cwd": "${file_path:${folder}}"
+        }
     },
     {
         "keys": [
