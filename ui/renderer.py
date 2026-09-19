@@ -680,6 +680,12 @@ class TurnRenderer:
         if frames:
             self._spinner_frames = frames
         self._spinner_frame += 1
+        # Question/permission/plan own the tail. A full rewrite here reflows
+        # that block (wrap, caret, checks) every busy-mark frame.
+        if getattr(self.owner, "has_turn_modal_ui", lambda: False)():
+            if self._spinner_frame % 15 == 0:
+                self.owner.sheet.update_title()
+            return
         if not self.owner.sheet.is_following_tail():
             if self._spinner_frame % 15 == 0:
                 self.owner.sheet.update_title()
@@ -1509,13 +1515,16 @@ class TurnRenderer:
             print("[Submarine] turn context phantoms: %s" % e)
 
         if self.owner.pending_question and self.owner.pending_question.callback:
-            qreg = view.get_regions(keys.QUESTION_BLOCK)
-            need_q = (
-                not qreg or qreg[0].size() == 0
-                or qreg[0].begin() != new_end
-            )
-            if need_q:
-                self.owner.modals.render_question()
+            # Free-text Other... owns the caret; rebuilding the block steals it
+            # and reflows the question on every busy-mark rewrite.
+            if not c._question_input_mode:
+                qreg = view.get_regions(keys.QUESTION_BLOCK)
+                need_q = (
+                    not qreg or qreg[0].size() == 0
+                    or qreg[0].begin() != new_end
+                )
+                if need_q:
+                    self.owner.modals.render_question()
 
         if was_input:
             view.set_read_only(False)

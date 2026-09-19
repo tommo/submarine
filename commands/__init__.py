@@ -28,6 +28,7 @@ from .session_cmds import (  # noqa: F401
     SubmarineForkCommand,
     SubmarineForkFromCommand,
     SubmarineSessionListCommand,
+    SubmarineToggleListCommand,
     SubmarineSessionListRefreshCommand,
     SubmarineSessionListOpenCommand,
 )
@@ -99,14 +100,6 @@ from .text_cmds import (  # noqa: F401
     SubmarineOpenLinkCommand,
     SubmarineRetainCommand,
     SubmarineProjectRetainCommand,
-)
-
-# Quick Agent host (defined in features/)
-from features.quick import (  # noqa: F401
-    SubmarineQuickAgentCommand,
-    SubmarineQuickAgentConfigCommand,
-    SubmarineQuickAgentStopCommand,
-    SubmarineQuickAgentNewSlotCommand,
 )
 
 # Session-list extras (defined in ui/)

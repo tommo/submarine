@@ -22,6 +22,7 @@ _LEGACY_GROUP = "claude_active_group"
 # splits, so they are tracked independently.
 TAB_SESSION = "session"
 TAB_LIST = "list"
+TAB_PLAN = "plan"
 _TABS = "submarine_tabs"
 _LEGACY_TABS = "claude_tabs"
 _LEGACY_SESSION_TAB = "claude_session_tab"
@@ -33,11 +34,26 @@ _WINDOW_TABS_CAP = 40
 _LIVE_TABS = {}  # type: dict
 
 
+def is_plan_path(path) -> bool:
+    # type: (Any) -> bool
+    """True for on-disk agent plan files (plan.md, Kimi /plans/*.md)."""
+    if not path:
+        return False
+    p = str(path).replace("\\", "/")
+    name = os.path.basename(p).lower()
+    if name == "plan.md":
+        return True
+    if name.endswith(".md") and "/plans/" in p.lower():
+        return True
+    return False
+
+
 def view_tab_kind(view) -> Optional[str]:
     # type: (Any) -> Optional[str]
     """Which remembered slot this view owns, if any.
 
-    `session` is the agent output sheet, `list` the Sessions scratch view.
+    `session` is the agent output sheet, `list` the Sessions scratch view,
+    `plan` the plan.md (or Kimi /plans/*.md) the user opens from plan mode.
     """
     try:
         st = view.settings()
@@ -47,7 +63,25 @@ def view_tab_kind(view) -> Optional[str]:
         return TAB_SESSION
     if st.get("submarine_session_list") or st.get("claude_session_list"):
         return TAB_LIST
+    if st.get("submarine_plan") or st.get("claude_plan"):
+        return TAB_PLAN
+    try:
+        fn = view.file_name()
+    except Exception:
+        fn = None
+    if is_plan_path(fn):
+        return TAB_PLAN
     return None
+
+
+def mark_plan_view(view) -> None:
+    # type: (Any) -> None
+    if view is None:
+        return
+    try:
+        view.settings().set("submarine_plan", True)
+    except Exception:
+        pass
 
 
 def _window_tabs_path() -> str:
@@ -384,14 +418,81 @@ def last_session_group(window) -> Optional[int]:
     return group
 
 
+def _enable_wrap_when_loaded(view):
+    # type: (Any) -> None
+    if view is None:
+        return
+    try:
+        import sublime
+    except ImportError:
+        sublime = None  # type: ignore
+    try:
+        view.settings().set("word_wrap", True)
+    except Exception:
+        pass
+    if sublime is None or not getattr(view, "is_loading", None):
+        return
+
+    def enable_wrap(v=view):
+        try:
+            if v.is_loading():
+                sublime.set_timeout(lambda: enable_wrap(v), 100)
+                return
+            v.settings().set("word_wrap", True)
+        except Exception:
+            pass
+
+    try:
+        sublime.set_timeout(enable_wrap, 0)
+    except Exception:
+        pass
+
+
+def open_plan_file(window, path: str):
+    # type: (Any, str) -> Any
+    """Open plan.md in this window's remembered plan slot, word-wrapped."""
+    if not window or not path:
+        return None
+    view = None
+    try:
+        view = window.open_file(path)
+    except Exception:
+        view = None
+    if view is None:
+        return None
+    mark_plan_view(view)
+
+    def _place(v=view):
+        try:
+            if getattr(v, "is_loading", lambda: False)():
+                import sublime
+                sublime.set_timeout(lambda: _place(v), 100)
+                return
+        except Exception:
+            pass
+        try:
+            apply_view_tab(window, v, TAB_PLAN)
+        except Exception:
+            pass
+        try:
+            v.settings().set("word_wrap", True)
+        except Exception:
+            pass
+
+    _place()
+    return view
+
+
 def open_file_in_last_session_split(window, path: str):
     """Open a file read-write in the last session split, word-wrapped.
 
-    Mirrors ui/modals._open_plan_file. Safe when sublime is missing
-    (tests): uses window.open_file if present.
+    Plan files use their own remembered slot (`open_plan_file`).
+    Safe when sublime is missing (tests): uses window.open_file if present.
     """
     if not window or not path:
         return None
+    if is_plan_path(path):
+        return open_plan_file(window, path)
     view = None
     try:
         view = window.open_file(path)
@@ -402,30 +503,7 @@ def open_file_in_last_session_split(window, path: str):
             place_in_last_session_split(window, view)
         except Exception:
             pass
-        try:
-            st = view.settings()
-            st.set("word_wrap", True)
-        except Exception:
-            pass
-        try:
-            import sublime
-        except ImportError:
-            sublime = None  # type: ignore
-        if sublime is not None and getattr(view, "is_loading", None):
-
-            def enable_wrap(v=view):
-                try:
-                    if v.is_loading():
-                        sublime.set_timeout(lambda: enable_wrap(v), 100)
-                        return
-                    v.settings().set("word_wrap", True)
-                except Exception:
-                    pass
-
-            try:
-                sublime.set_timeout(enable_wrap, 0)
-            except Exception:
-                pass
+        _enable_wrap_when_loaded(view)
     return view
 
 

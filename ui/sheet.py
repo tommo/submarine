@@ -180,21 +180,7 @@ class OutputSheet:
             st.set("color_scheme", keys.THEME_DEFAULT)
 
     def apply_output_settings(self) -> None:
-        if not self.view:
-            return
-        if sublime is None:
-            self.view.settings().set("scroll_past_end", False)
-            return
-        s = sublime.load_settings(keys.OUTPUT_SETTINGS)
-        for key in (
-            "font_size", "line_numbers", "gutter", "word_wrap", "margin",
-            "draw_indent_guides", "highlight_line", "fold_buttons",
-            "fade_fold_buttons",
-        ):
-            val = s.get(key)
-            if val is not None:
-                self.view.settings().set(key, val)
-        self.view.settings().set("scroll_past_end", False)
+        apply_output_settings_to_view(self.view)
 
     def _valid(self) -> bool:
         return bool(self.view and self.view.is_valid())
@@ -533,3 +519,45 @@ class OutputSheet:
             return bool(av and av.id() == self.view.id())
         except Exception:
             return False
+
+
+def apply_output_settings_to_view(view) -> None:
+    if not view:
+        return
+    try:
+        if not view.is_valid():
+            return
+    except Exception:
+        return
+    st = view.settings()
+    if sublime is None:
+        st.set("scroll_past_end", False)
+        return
+    s = sublime.load_settings(keys.OUTPUT_SETTINGS)
+    for key in (
+        "font_size", "line_numbers", "gutter", "word_wrap", "margin",
+        "draw_indent_guides", "highlight_line", "fold_buttons",
+        "fade_fold_buttons",
+    ):
+        val = s.get(key)
+        if val is not None:
+            st.set(key, val)
+    st.set("scroll_past_end", False)
+
+
+def apply_output_settings_to_all_output_views() -> None:
+    """Re-chrome every session sheet (settings file and restored views)."""
+    if sublime is None:
+        return
+    for w in sublime.windows():
+        for v in w.views():
+            try:
+                if not keys.is_output_view(v):
+                    continue
+                if keys.read_setting(v.settings(), keys.SESSION_LIST):
+                    continue
+                if keys.read_setting(v.settings(), keys.QUICK):
+                    continue
+            except Exception:
+                continue
+            apply_output_settings_to_view(v)

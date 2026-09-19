@@ -1075,6 +1075,24 @@ class SubmarineSessionListCommand(sublime_plugin.WindowCommand):
         show_session_list(self.window)
 
 
+class SubmarineToggleListCommand(sublime_plugin.WindowCommand):
+    """⌘⇧\\ — session list ↔ session view; reveal the target if it is hidden."""
+
+    def run(self):
+        av = self.window.active_view() if self.window else None
+        on_list = False
+        if av is not None:
+            try:
+                on_list = bool(keys.read_setting(av.settings(), keys.SESSION_LIST))
+            except Exception:
+                on_list = False
+        if on_list:
+            self.window.run_command("submarine_reveal_session")
+            return
+        from ui.session_list import show_session_list
+        show_session_list(self.window)
+
+
 class SubmarineSessionListRefreshCommand(sublime_plugin.TextCommand):
     def run(self, edit):
         from ui.session_list import SETTING, refresh_session_list

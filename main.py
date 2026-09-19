@@ -740,6 +740,13 @@ def plugin_loaded():
             "submarine_ui_mode", _on_ui_mode_change)
     except Exception as e:
         log_plugin("ui_mode watch: %s" % e)
+    try:
+        from ui.sheet import apply_output_settings_to_all_output_views
+        sublime.load_settings(keys.OUTPUT_SETTINGS).add_on_change(
+            "submarine_output_all", apply_output_settings_to_all_output_views)
+        apply_output_settings_to_all_output_views()
+    except Exception as e:
+        log_plugin("output settings watch: %s" % e)
     sublime.set_timeout(_startup_strip_composers, 0)
     sublime.set_timeout(_startup_strip_composers, 100)
     # Quiet covers settle so on_activated cannot restore+enter ◎ in the

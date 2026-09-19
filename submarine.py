@@ -23,6 +23,7 @@ from main import (  # noqa: F401
     schedule_auto_sleep,
 )
 
+from commands.session_cmds import SubmarineToggleListCommand  # noqa: F401
 from commands import (  # noqa: F401
     SubmarineStartCommand,
     CodexStartCommand,
@@ -115,10 +116,6 @@ from commands import (  # noqa: F401
     SubmarineOpenLinkCommand,
     SubmarineRetainCommand,
     SubmarineProjectRetainCommand,
-    SubmarineQuickAgentCommand,
-    SubmarineQuickAgentConfigCommand,
-    SubmarineQuickAgentStopCommand,
-    SubmarineQuickAgentNewSlotCommand,
     SubmarineSessionJsonlCommand,
     SubmarineSessionListSetTextCommand,
     SubmarineSessionListCloseCommand,

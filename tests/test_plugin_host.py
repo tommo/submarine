@@ -85,6 +85,23 @@ class TestPluginHost(unittest.TestCase):
             "commands/__init__.py missing command re-exports: %s" % missing,
         )
 
+    def test_output_syntax_has_turn_fold_markers(self):
+        prefs = open(os.path.join(ROOT, "Fold.tmPreferences"), encoding="utf-8").read()
+        self.assertIn("text.submarine", prefs)
+        self.assertIn("foldScopes", prefs)
+        self.assertIn("meta.fold.turn.begin.submarine", prefs)
+        syn = open(
+            os.path.join(ROOT, "SubmarineOutput.sublime-syntax"),
+            encoding="utf-8",
+        ).read()
+        self.assertIn("meta.fold.turn.begin.submarine", syn)
+        settings = open(
+            os.path.join(ROOT, "SubmarineOutput.sublime-settings"),
+            encoding="utf-8",
+        ).read()
+        self.assertIn('"gutter": true', settings)
+        self.assertIn('"fold_buttons": true', settings)
+
     def test_root_reexports_all_command_classes(self):
         # ST only discovers Command subclasses on ROOT plugin modules.
         # sublime-claude keeps session_list.py at package root so SetText is

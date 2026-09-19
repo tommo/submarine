@@ -105,7 +105,7 @@
         "command": "submarine_switch"
     },
     {
-        "caption": "Submarine: Session List (⌃⌘\\)",
+        "caption": "Submarine: Session List",
         "command": "submarine_session_list"
     },
     {
@@ -142,24 +142,12 @@
         "command": "submarine_hide_session"
     },
     {
-        "caption": "Submarine: Reveal Session View (⌥⌘\\)",
+        "caption": "Submarine: Reveal Session View",
         "command": "submarine_reveal_session"
     },
     {
-        "caption": "Submarine: Quick Agent (⌘⇧\\ toggle show/hide)",
-        "command": "submarine_quick_agent"
-    },
-    {
-        "caption": "Submarine: Quick Agent New Slot",
-        "command": "submarine_quick_agent_new_slot"
-    },
-    {
-        "caption": "Submarine: Quick Agent Config…",
-        "command": "submarine_quick_agent_config"
-    },
-    {
-        "caption": "Submarine: Quick Agent Stop",
-        "command": "submarine_quick_agent_stop"
+        "caption": "Submarine: Toggle Session List / View (⌘⇧\\)",
+        "command": "submarine_toggle_list"
     },
     {
         "caption": "Submarine: Fork Session",

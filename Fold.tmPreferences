@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>scope</key>
+    <string>text.submarine</string>
+    <key>settings</key>
+    <dict>
+        <key>foldScopes</key>
+        <array>
+            <dict>
+                <key>begin</key>
+                <string>meta.fold.turn.begin.submarine</string>
+                <key>end</key>
+                <string>punctuation.definition.prompt.begin</string>
+                <key>excludeTrailingNewlines</key>
+                <true/>
+            </dict>
+            <dict>
+                <key>begin</key>
+                <string>punctuation.definition.code.begin.markdown</string>
+                <key>end</key>
+                <string>punctuation.definition.code.end.markdown</string>
+                <key>excludeTrailingNewlines</key>
+                <true/>
+            </dict>
+        </array>
+    </dict>
+</dict>
+</plist>

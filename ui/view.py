@@ -60,6 +60,35 @@ def _keyed_phantom_set(view, key):
     return ps
 
 
+def format_sleep_banner_html(text: str, color: str = "#ffcc66",
+                             width_px: int = 400) -> str:
+    """Paused banner. Minihtml phantoms ignore CSS margin — use padding +
+    explicit-height spacers so the inset actually shows."""
+    body = _html.escape(text or "")
+    w = max(80, int(width_px or 400))
+    fill = "color-mix(in srgb, %s 18%%, transparent)" % color
+    gap = (
+        '<div style="padding:0;margin:0;line-height:1;height:10px;'
+        'font-size:1px;">&nbsp;</div>'
+    )
+    rule = (
+        '<div style="padding:0;margin:0;line-height:1;height:2px;'
+        'font-size:1px;max-width:%dpx;background-color:%s;">&nbsp;</div>'
+        % (w, color)
+    )
+    return (
+        '<body id="submarine-overlay" style="margin:0;padding:12px 10px 14px 10px;'
+        'max-width:%dpx;">'
+        '%s%s%s'
+        '<div style="padding:8px 14px;font-size:13px;font-weight:bold;'
+        'letter-spacing:0.02em;color:%s;background-color:%s;'
+        'border-left:3px solid %s;">%s</div>'
+        '%s'
+        '</body>'
+        % (w, gap, rule, gap, color, fill, color, body, gap)
+    )
+
+
 def format_queue_phantom_html(prompts: Sequence[str],
                               send_now_hint: str = "Ctrl+↵ send now") -> str:
     """Composer chrome *above* ◎: optional queue chips + a hairline split.
@@ -828,13 +857,14 @@ class SubmarineOutputView(FormatHelpers):
 
     def sleep_banner(self, show=True, text=""):
         """Sleep phantom. Viewless: no-op."""
-        self._set_banner("_sleep_phantom", keys.PHANTOM_SLEEP, text, show)
+        self._set_banner(
+            "_sleep_phantom", keys.PHANTOM_SLEEP, text, show, strong=True)
 
     def connecting_banner(self, show=True):
         """Connecting phantom. Viewless: no-op."""
         self._set_banner(
             "_sleep_phantom", keys.PHANTOM_SLEEP,
-            "↻ connecting…" if show else "", show)
+            "↻ connecting…" if show else "", show, strong=False)
 
     def queue_chips(self, prompts=None):
         """Queued-prompt chrome above ◎. Viewless: no-op."""
@@ -1044,30 +1074,57 @@ class SubmarineOutputView(FormatHelpers):
         if not self._has_view():
             self._drop_phantom_set_refs()
 
-    def _set_banner(self, attr, name, text, on):
+    def _set_banner(self, attr, name, text, on, strong=False):
         view = self.view
         if not self._has_view() or sublime is None:
             return
-        ps = getattr(self, attr, None)
+        ps = _keyed_phantom_set(view, name) or getattr(self, attr, None)
         if ps is None:
             try:
                 ps = sublime.PhantomSet(view, name)
-                setattr(self, attr, ps)
             except Exception:
                 return
+        setattr(self, attr, ps)
         if not on or not text:
             try:
+                if hasattr(view, "erase_phantoms"):
+                    view.erase_phantoms(name)
                 ps.update([])
             except Exception:
                 pass
             return
-        html = (
-            '<body id="submarine-chrome" style="margin:0;padding:2px 8px;'
-            'font-size:11px;color:color(var(--foreground) alpha(0.7))">'
-            "%s</body>" % text
-        )
+        if strong:
+            try:
+                vw = int(float(view.viewport_extent()[0])) - 8
+                width = max(80, vw)
+            except Exception:
+                width = 400
+            html = format_sleep_banner_html(text, width_px=width)
+        else:
+            html = (
+                '<body id="submarine-chrome" style="margin:0;padding:2px 8px;'
+                'font-size:11px;color:color(var(--foreground) alpha(0.7))">'
+                "%s</body>" % _html.escape(text)
+            )
+        content = ""
+        try:
+            content = view.substr(sublime.Region(0, view.size()))
+        except Exception:
+            content = ""
         pt = max(0, view.size() - 1)
         try:
+            stripped = content.rstrip("\n")
+            if stripped:
+                pt = view.line(len(stripped) - 1).begin()
+            else:
+                pt = 0
+        except Exception:
+            last_nl = content.rfind("\n")
+            pt = last_nl if last_nl >= 0 else 0
+        try:
+            if hasattr(view, "erase_phantoms"):
+                view.erase_phantoms(name)
+            ps.update([])
             ps.update([sublime.Phantom(
                 sublime.Region(pt, pt), html, sublime.LAYOUT_BLOCK)])
         except Exception:

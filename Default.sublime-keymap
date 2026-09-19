@@ -5,15 +5,12 @@
     },
     {
         "keys": ["super+shift+\\"],
-        "command": "submarine_quick_agent"
+        "command": "submarine_toggle_list"
     },
     {
-        "keys": ["super+alt+\\"],
-        "command": "submarine_reveal_session"
-    },
-    {
-        "keys": ["super+ctrl+\\"],
-        "command": "submarine_session_list"
+        // US layout: Shift+\ is |. ST often reports ⌘⇧\ as this, not shift+\\.
+        "keys": ["super+|"],
+        "command": "submarine_toggle_list"
     },
     {
         "keys": ["super+shift+escape"],

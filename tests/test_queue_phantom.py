@@ -8,7 +8,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.fakes import FakeClient, FakeChrome, make_session
-from ui.view import format_queue_phantom_html
+from ui.view import format_queue_phantom_html, format_sleep_banner_html
 
 
 class TestQueuePhantomHtml(unittest.TestCase):
@@ -35,6 +35,23 @@ class TestQueuePhantomHtml(unittest.TestCase):
         html = format_queue_phantom_html(["x" * 80])
         self.assertIn("…", html)
         self.assertNotIn("x" * 80, html)
+
+
+class TestSleepBannerHtml(unittest.TestCase):
+    def test_paused_hint_is_strong(self):
+        html = format_sleep_banner_html("⏸ Session paused — press Enter to wake")
+        self.assertIn("Session paused", html)
+        self.assertIn("font-weight:bold", html)
+        self.assertIn("border-left:3px solid", html)
+        self.assertIn("padding:12px 10px 14px 10px", html)
+        self.assertIn("height:10px", html)
+        self.assertIn("height:2px", html)
+        self.assertNotIn("margin:10px", html)
+
+    def test_html_is_escaped(self):
+        html = format_sleep_banner_html("<script>x</script>")
+        self.assertIn("&lt;script&gt;", html)
+        self.assertNotIn("<script>", html)
 
 
 class TestQueuePhantomNavigate(unittest.TestCase):

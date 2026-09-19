@@ -303,6 +303,8 @@ class TestModalDescriptor(unittest.TestCase):
         self.assertEqual(answers, ["allow"])
         self.assertIsNone(out.pending_permission)
         self.assertEqual(out.modals.descriptors(), [])
+        self.assertTrue(out.is_input_mode())
+        self.assertIn("◎", v2._content)
 
     def test_plan_and_question_descriptors(self):
         win = RecordingWindow()
@@ -325,6 +327,51 @@ class TestModalDescriptor(unittest.TestCase):
         out2.view = None
         self.assertEqual(out2.modals.descriptors()[0]["kind"], "question")
         self.assertIsNone(out2.pending_question.region)
+
+    def test_approving_plan_reopens_composer(self):
+        win = RecordingWindow()
+        out = SubmarineOutputView(win)
+        v = _bind(out, 1)
+        out.prompt("plan?")
+        answers = []
+        out.plan_approval_request(1, "/tmp/plan.md", [], answers.append)
+        self.assertFalse(out.is_input_mode())
+        self.assertTrue(out.handle_plan_key("y"))
+        self.assertEqual(answers, ["approve"])
+        self.assertIsNone(out.pending_plan)
+        self.assertTrue(out.is_input_mode())
+        self.assertIn("◎", v._content)
+        marker = v._content.rfind("◎")
+        self.assertGreaterEqual(int(out.composer._input_start or 0), marker)
+
+    def test_rejecting_plan_reopens_composer(self):
+        win = RecordingWindow()
+        out = SubmarineOutputView(win)
+        v = _bind(out, 1)
+        out.prompt("plan?")
+        answers = []
+        out.plan_approval_request(1, "/tmp/plan.md", [], answers.append)
+        self.assertTrue(out.handle_plan_key("n"))
+        self.assertEqual(answers, ["reject"])
+        self.assertTrue(out.is_input_mode())
+        self.assertIn("◎", v._content)
+
+    def test_answering_last_question_reopens_composer(self):
+        win = RecordingWindow()
+        out = SubmarineOutputView(win)
+        v = _bind(out, 1)
+        out.prompt("ask")
+        answers = []
+        out.question_request(
+            1, [{"question": "Pick?", "options": [{"label": "A"}]}],
+            answers.append)
+        self.assertTrue(out.handle_question_key("1"))
+        self.assertEqual(answers, [{"Pick?": "A"}])
+        self.assertIsNone(out.pending_question)
+        self.assertTrue(out.is_input_mode())
+        self.assertIn("◎", v._content)
+        marker = v._content.rfind("◎")
+        self.assertGreaterEqual(int(out.composer._input_start or 0), marker)
 
 
 if __name__ == "__main__":

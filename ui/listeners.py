@@ -587,9 +587,13 @@ class SubmarineEventListener(sublime_plugin.EventListener):
         fname = view.file_name() or ""
         if os.path.basename(fname) in (
                 "SubmarineOutput.sublime-settings", "ClaudeOutput.sublime-settings"):
-            for session in sessions_map().values():
-                if session.output:
-                    session.output._apply_output_settings()
+            try:
+                from ui.sheet import apply_output_settings_to_all_output_views
+                apply_output_settings_to_all_output_views()
+            except Exception:
+                for session in sessions_map().values():
+                    if session.output:
+                        session.output._apply_output_settings()
         if fname:
             try:
                 from core.artifacts import handle_external_save

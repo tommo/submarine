@@ -651,9 +651,9 @@ class ModalUI:
             response = PERM_ALLOW
         self._clear_permission()
         self.pending_permission = None
-        self.owner._move_cursor_to_end()
         callback(response)
         self._process_permission_queue()
+        self._restore_composer_after_modal()
 
     def _save_auto_allowed_tool(self, tool):
         import json
@@ -823,13 +823,14 @@ class ModalUI:
         plan.callback = None
         self.clear_plan_approval()
         self.pending_plan = None  # descriptor clears with the live object
-        self.owner._move_cursor_to_end()
-        callback(response)
+        if callback:
+            callback(response)
+        self._restore_composer_after_modal()
         return True
 
     def _open_plan_file(self, path):
-        """Read the plan from the SAVED file and open it."""
-        if not path or sublime is None:
+        """Read the plan from the SAVED file and open it in its remembered slot."""
+        if not path:
             return
         # Prefer the on-disk saved file (not any unsaved buffer).
         if os.path.isfile(path):
@@ -838,18 +839,18 @@ class ModalUI:
                     f.read(1)
             except Exception:
                 pass
-        win = sublime.active_window()
+        win = None
+        if sublime is not None:
+            try:
+                win = sublime.active_window()
+            except Exception:
+                win = None
+        if not win:
+            win = getattr(self.owner, "window", None)
         if not win:
             return
-        view = win.open_file(path)
-
-        def enable_wrap(v=view):
-            if v.is_loading():
-                sublime.set_timeout(lambda: enable_wrap(v), 100)
-                return
-            v.settings().set("word_wrap", True)
-
-        enable_wrap()
+        from core.placement import open_plan_file
+        open_plan_file(win, path)
 
     # --- question ----------------------------------------------------------
 
@@ -1053,12 +1054,61 @@ class ModalUI:
             callback = q_req.callback
             answers = q_req.answers
             self.pending_question = None
-            self.owner._move_cursor_to_end()
             if callback:
                 callback(answers)
+            self._restore_composer_after_modal()
         else:
             self.render_question()
             self.owner.composer.scroll_to_end()
+
+    def _restore_composer_after_modal(self):
+        """After plan / question / permission, put the caret back in ◎ — not EOF."""
+        def _go():
+            try:
+                if self.owner.has_turn_modal_ui():
+                    return
+            except Exception:
+                if (
+                    (self.pending_question and self.pending_question.callback)
+                    or (self.pending_permission and self.pending_permission.callback)
+                    or (self.pending_plan and self.pending_plan.callback)
+                ):
+                    return
+            view = getattr(self.owner, "view", None)
+            session = None
+            try:
+                from .session_api import get_session_for_view
+                session = get_session_for_view(view)
+            except Exception:
+                session = None
+            entered = False
+            if session is not None:
+                enter = getattr(session, "_enter_input_with_draft", None)
+                if callable(enter):
+                    try:
+                        enter()
+                        entered = True
+                    except Exception:
+                        entered = False
+            if not entered:
+                try:
+                    self.owner.composer.enter_input_mode()
+                except Exception:
+                    pass
+            try:
+                self.owner.composer.focus(
+                    force_show=True, steal_focus=True, park_at_end=True)
+            except Exception:
+                pass
+            try:
+                self.owner._move_cursor_to_end()
+            except Exception:
+                pass
+
+        if sublime is not None:
+            sublime.set_timeout(_go, 30)
+        else:
+            _go()
 
     def handle_question_key(self, key):
         """Answer the visible question. Viewless: updates answers, no chrome."""

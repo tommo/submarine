@@ -174,6 +174,19 @@ class TestDerivedSleep(unittest.TestCase):
         self.assertFalse(s.initialized)
         self.assertTrue(s.is_sleeping)
 
+    def test_state_changes_notify_the_session_list(self):
+        hits = []
+        s = make_session(initialized=True, client=FakeClient())
+        s.session_id = "sess-z"
+        s._notify_session_list = lambda h=hits: h.append("n")
+        s._set_turn_phase("waiting")
+        s._set_turn_phase("waiting")
+        s._set_turn_phase("idle")
+        self.assertEqual(hits, ["n", "n"])
+        hits[:] = []
+        self.assertTrue(s.sleep())
+        self.assertGreaterEqual(len(hits), 1)
+
 
 class TestOneLiveSession(unittest.TestCase):
     def test_create_session_dedupes_live_resume(self):

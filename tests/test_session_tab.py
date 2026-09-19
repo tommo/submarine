@@ -18,6 +18,7 @@ from core import placement  # noqa: E402
 from core.placement import (  # noqa: E402
     apply_session_tab,
     apply_view_tab,
+    is_plan_path,
     remember_view_tab,
     view_tab_kind,
     load_window_tabs,
@@ -45,18 +46,23 @@ class _View(object):
             kind = "session" if session else None
         self.kind = kind
         self.name = name
+        self._s = _Settings()
         if kind == "session":
-            self._s = {"submarine_output": True}
+            self._s.set("submarine_output", True)
         elif kind == "list":
-            self._s = {"submarine_session_list": True}
-        else:
-            self._s = {}
+            self._s.set("submarine_session_list", True)
+        elif kind == "plan":
+            self._s.set("submarine_plan", True)
+        self._file_name = None
 
     def is_valid(self):
         return True
 
     def settings(self):
         return self._s
+
+    def file_name(self):
+        return self._file_name
 
     def id(self):
         return id(self)
@@ -399,8 +405,28 @@ class TestViewKind(_Store):
     def test_kinds(self):
         self.assertEqual(view_tab_kind(_View("s")), "session")
         self.assertEqual(view_tab_kind(_View("l", kind="list")), "list")
+        self.assertEqual(view_tab_kind(_View("plan", kind="plan")), "plan")
         self.assertIsNone(view_tab_kind(_View("p", kind=None)))
         self.assertIsNone(view_tab_kind(None))
+
+    def test_plan_md_path_is_a_plan_kind(self):
+        v = _View("disk", kind=None)
+        v._file_name = "/tmp/.claude/goals/g1/plan.md"
+        self.assertEqual(view_tab_kind(v), "plan")
+        kimi = _View("kimi", kind=None)
+        kimi._file_name = (
+            "/Users/x/.kimi-code/sessions/wd/sid/agents/a/plans/fancy.md")
+        self.assertEqual(view_tab_kind(kimi), "plan")
+        other = _View("readme", kind=None)
+        other._file_name = "/tmp/README.md"
+        self.assertIsNone(view_tab_kind(other))
+
+    def test_is_plan_path(self):
+        self.assertTrue(is_plan_path("/p/.claude/goals/x/plan.md"))
+        self.assertTrue(is_plan_path("/p/agents/a/plans/foo.md"))
+        self.assertFalse(is_plan_path("/p/README.md"))
+        self.assertFalse(is_plan_path(""))
+        self.assertFalse(is_plan_path(None))
 
     def test_legacy_settings_are_recognised(self):
         old_list = _View("l", kind=None)
@@ -482,6 +508,56 @@ class TestListAndSessionSlots(_Store):
         self.assertFalse(remember_view_tab(w, plain))
         self.assertFalse(apply_view_tab(w, plain))
         self.assertFalse(os.path.exists(self._path()))
+
+    def test_plan_slot_is_independent_of_session_and_list(self):
+        sess = _View("sess")
+        listing = _View("list", kind="list")
+        plan = _View("plan", kind="plan")
+        w = _Window(
+            [[sess], [listing], [plan]],
+            {sess: (0, 0), listing: (1, 0), plan: (2, 0)},
+        )
+        self.assertTrue(remember_view_tab(w, sess))
+        self.assertTrue(remember_view_tab(w, listing))
+        self.assertTrue(remember_view_tab(w, plan))
+        mem = w.settings().get("submarine_tabs")
+        self.assertEqual(mem["session"]["group"], 0)
+        self.assertEqual(mem["list"]["group"], 1)
+        self.assertEqual(mem["plan"]["group"], 2)
+        rows = json.load(open(self._path(), encoding="utf-8"))
+        entry = rows["/p/eb.sublime-workspace"]
+        self.assertEqual(entry["plan"]["group"], 2)
+
+    def test_plan_slot_is_applied_on_its_own(self):
+        save_window_tabs({"/p/eb.sublime-workspace": {
+            "session": {"group": 0, "index": 0, "ts": 2.0},
+            "plan": {"group": 1, "index": 0, "ts": 2.0},
+            "ts": 2.0}})
+        plan = _View("plan", kind="plan")
+        w = _Window([[_View("code"), plan], []], {plan: (0, 1)})
+        self.assertTrue(apply_view_tab(w, plan))
+        self.assertEqual(w.moves, [("plan", 1, 0)])
+
+    def test_open_plan_file_lands_in_the_remembered_slot(self):
+        from core.placement import open_plan_file
+
+        save_window_tabs({"/p/eb.sublime-workspace": {
+            "plan": {"group": 1, "index": 0, "ts": 2.0}, "ts": 2.0}})
+        w = _Window([[], []], {})
+
+        def _open(path, flags=0):
+            v = _View("opened", kind="plan")
+            v._file_name = path
+            w.groups[0].append(v)
+            w.layout[v] = (0, 0)
+            return v
+
+        w.open_file = _open
+        view = open_plan_file(w, "/tmp/x/plan.md")
+        self.assertIsNotNone(view)
+        self.assertTrue(view.settings().get("submarine_plan"))
+        self.assertTrue(view.settings().get("word_wrap"))
+        self.assertEqual(w.moves, [("opened", 1, 0)])
 
 
 # ── terminal shim: a reload must end terminal sessions, not fork a second PTY ──

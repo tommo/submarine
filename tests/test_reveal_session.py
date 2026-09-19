@@ -38,9 +38,9 @@ class KeymapTest(unittest.TestCase):
     def _entries(self, command):
         return [e for e in self.keymap if e.get("command") == command]
 
-    def test_cmd_alt_backslash_reveals_the_session(self):
+    def test_cmd_alt_backslash_no_longer_reveals(self):
         hits = [e for e in self._entries(REVEAL) if e.get("keys") == ["super+alt+\\"]]
-        self.assertEqual(len(hits), 1, "exactly one ⌥⌘\\ binding")
+        self.assertEqual(hits, [], "⌥⌘\\ is not a session-view chord")
 
     def test_it_carries_no_context(self):
         """Every context that could gate it names something the hidden state
@@ -85,6 +85,78 @@ class KeymapTest(unittest.TestCase):
         root_src = open(os.path.join(ROOT, "submarine.py"), encoding="utf-8").read()
         self.assertIn("SubmarineRevealSessionCommand", init_src)
         self.assertIn("SubmarineRevealSessionCommand", root_src)
+
+
+TOGGLE = "submarine_toggle_list"
+
+
+class ToggleListKeymapTest(unittest.TestCase):
+    def setUp(self):
+        self.keymap = _json_file("Default.sublime-keymap")
+
+    def test_cmd_shift_backslash_toggles_list_and_session(self):
+        chords = [tuple(e.get("keys") or []) for e in self.keymap
+                  if e.get("command") == TOGGLE]
+        self.assertIn(("super+shift+\\",), chords)
+        self.assertIn(("super+|",), chords)
+        for e in self.keymap:
+            if e.get("command") == TOGGLE:
+                self.assertFalse(e.get("context"))
+
+    def test_quick_agent_no_longer_owns_the_chord(self):
+        cmds = [e.get("command") for e in self.keymap
+                if e.get("keys") == ["super+shift+\\"]]
+        self.assertNotIn("submarine_quick_agent", cmds)
+        palette = [e.get("command")
+                   for e in _json_file("Default.sublime-commands")]
+        self.assertNotIn("submarine_quick_agent", palette)
+        self.assertIn(TOGGLE, palette)
+
+    def test_the_command_is_reexported_for_st(self):
+        init_src = open(os.path.join(ROOT, "commands", "__init__.py"),
+                        encoding="utf-8").read()
+        root_src = open(os.path.join(ROOT, "submarine.py"), encoding="utf-8").read()
+        self.assertIn("SubmarineToggleListCommand", init_src)
+        self.assertIn("SubmarineToggleListCommand", root_src)
+
+
+class ToggleListCommandTest(unittest.TestCase):
+    def test_from_the_list_reveals_the_session(self):
+        install_sublime()
+        import commands.session_cmds as sc
+        from ui import keys
+
+        ran = []
+        listing = _View(vid=3, output=False)
+        listing.settings().set(keys.SESSION_LIST, True)
+        win = _Window([listing])
+        win.active_view = lambda: listing
+        win.run_command = lambda name, args=None: ran.append(name)
+        cmd = sc.SubmarineToggleListCommand()
+        cmd.window = win
+        cmd.run()
+        self.assertEqual(ran, ["submarine_reveal_session"])
+
+    def test_from_the_session_shows_the_list(self):
+        install_sublime()
+        import commands.session_cmds as sc
+        import ui.session_list as sl
+        from ui import keys
+
+        shown = []
+        sheet = _View(vid=8, output=True)
+        sheet.settings().set(keys.SESSION_LIST, False)
+        win = _Window([sheet])
+        win.active_view = lambda: sheet
+        orig = sl.show_session_list
+        sl.show_session_list = lambda w: shown.append(w)
+        try:
+            cmd = sc.SubmarineToggleListCommand()
+            cmd.window = win
+            cmd.run()
+        finally:
+            sl.show_session_list = orig
+        self.assertEqual(shown, [win])
 
 
 class _View(object):

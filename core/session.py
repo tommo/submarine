@@ -548,6 +548,7 @@ class Session:
             self._on_init({"error": {"message": str(e)}})
             return
         self.chrome.set_status("connecting...")
+        self._notify_session_list()
 
         init_params = self._build_init_params(
             spec, chosen_raw, saved_entry, resume_session_at)
@@ -1290,6 +1291,7 @@ class Session:
         self._clear_asking_state()
         self._persist_state("sleeping")
         self._apply_sleep_ui()
+        self._notify_session_list()
         return True
 
     def wake(self):
@@ -1320,6 +1322,7 @@ class Session:
         self.current_tool = "waking..."
         self.start(resume_session_at=resume_at)
         self._persist_state("open")
+        self._notify_session_list()
 
     def restart(self):
         # type: () -> None
@@ -1334,6 +1337,7 @@ class Session:
         # type: () -> None
         self.bg.abort()
         self._persist_state("closed")
+        self._notify_session_list()
         if self.client:
             client = self.client
             self.client = None
@@ -1453,6 +1457,7 @@ class Session:
     def touch_access(self):
         # type: () -> None
         self.last_access = time.time()
+        self._notify_session_list()
 
     # ── undo ──────────────────────────────────────────────────────────
 
@@ -2044,13 +2049,26 @@ class Session:
         except Exception:
             return bool(getattr(self, "backgrounded", False))
 
+    def _notify_session_list(self):
+        # type: () -> None
+        """Sessions scratch is event-driven; the poll is only the clock column."""
+        try:
+            from ui.session_list import schedule_session_list_refresh
+            schedule_session_list_refresh()
+        except Exception:
+            pass
+
     def _set_unread(self, on):
         # type: (bool) -> None
-        self.unread = bool(on)
+        on = bool(on)
+        if bool(getattr(self, "unread", False)) == on:
+            return
+        self.unread = on
         try:
             self.chrome.set_unread(self.unread)
         except Exception:
             pass
+        self._notify_session_list()
 
     def _set_turn_phase(self, phase):
         # type: (str) -> None
@@ -2070,6 +2088,7 @@ class Session:
         # A phase change is a turn moving: make sure the busy mark is ticking.
         # Only on change — the event port reports "responding" per chunk.
         self._kick_animation()
+        self._notify_session_list()
 
     # ─── busy mark ──────────────────────────────────────────────────────────
 

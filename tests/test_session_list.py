@@ -179,6 +179,17 @@ class TestIdlePoll(unittest.TestCase):
         sl.load_bookmark_records = lambda project_path=None: {"s1": {"name": "n"}}
         self.assertNotEqual(key, sl.list_state_key(win, 80))
 
+    def test_schedule_resets_backoff_and_is_snappy(self):
+        self._fake_list_window()
+        sl._poll_delay = sl._POLL_MAX_MS
+        sl._poll_armed = True
+        sl._refresh_pending = False
+        sl.schedule_session_list_refresh()
+        self.assertEqual(sl._poll_delay, sl._POLL_MIN_MS)
+        self.assertEqual(self._timeouts, [50])
+        sl.schedule_session_list_refresh()
+        self.assertEqual(self._timeouts, [50], "debounce coalesces")
+
     def test_idle_tick_rebuilds_nothing_and_backs_off(self):
         _win, view = self._fake_list_window()
         sl._stamps.clear()
@@ -352,7 +363,7 @@ class TestCloseRefreshesTheList(unittest.TestCase):
         sl._poll_armed = False
         SubmarineEventListener().on_close(FakeView(9))
         self.assertTrue(sl._refresh_pending)
-        self.assertIn(250, self._timeouts)
+        self.assertIn(50, self._timeouts)
         self.assertTrue(sl._poll_armed, "the refresh must keep the poll armed")
 
     def test_focusing_a_list_arms_the_poll_and_renders(self):
@@ -591,6 +602,61 @@ class TestSessionChains(unittest.TestCase):
             sl.load_bookmarks = lambda project=None: {"new"}
             cmd.run(None)
             self.assertEqual(saved[-1], set())
+        finally:
+            (sl.sublime, sl.load_bookmarks, sl.load_bookmark_records,
+             sl.save_bookmarks, sl.refresh_session_list) = prev
+
+    def test_starring_keeps_the_caret_on_that_row(self):
+        import json
+        from tests.stubs import FakeView, install
+        sublime = install()
+        prev = (sl.sublime, sl.load_bookmarks, sl.load_bookmark_records,
+                sl.save_bookmarks, sl.refresh_session_list)
+        row = self._rec("sess", "a1", section="HISTORY")
+        row["line"] = 6
+
+        class _Sel(list):
+            def clear(self):
+                del self[:]
+
+            def add(self, region):
+                self.append(region)
+
+        class _R(object):
+            def __init__(self, a, b=None):
+                self.a = a
+                self.b = a if b is None else b
+
+            def begin(self):
+                return self.a
+
+        view = FakeView(3)
+        view._content = "\n" * 12
+        view.size = lambda: 12
+        view.settings().set(sl.SETTING, True)
+        view.settings().set(sl.ROWS_KEY, json.dumps([row]))
+        view._sel = _Sel([_R(5)])
+        view.sel = lambda: view._sel
+        view.rowcol = lambda pt: (5, 0)
+        view.text_point = lambda r, c: r
+        view.window = lambda: types.SimpleNamespace(folders=lambda: ["/p"])
+        sl.sublime = sublime
+        sl.load_bookmarks = lambda project=None: set()
+        sl.load_bookmark_records = lambda project=None: {}
+        sl.save_bookmarks = lambda *a, **k: True
+
+        def _refresh(w):
+            view.sel().clear()
+            view.sel().add(_R(0))
+
+        sl.refresh_session_list = _refresh
+        try:
+            cmd = sl.SubmarineSessionListStarCommand()
+            cmd.view = view
+            cmd.run(None)
+            caret = view.sel()[0]
+            pt = caret.begin() if hasattr(caret, "begin") else caret.a
+            self.assertEqual(pt, 5)
         finally:
             (sl.sublime, sl.load_bookmarks, sl.load_bookmark_records,
              sl.save_bookmarks, sl.refresh_session_list) = prev
@@ -1848,13 +1914,11 @@ class TestSessionListKeymap(unittest.TestCase):
             kept.append(re.sub(r"\s+//.*$", "", line))
         self.keymap = json.loads("\n".join(kept))
 
-    def test_cmd_ctrl_backslash_opens_the_list(self):
+    def test_cmd_ctrl_backslash_no_longer_opens_the_list(self):
         hits = [e for e in self.keymap
                 if e.get("command") == "submarine_session_list"
                 and e.get("keys") == ["super+ctrl+\\"]]
-        self.assertEqual(len(hits), 1)
-        self.assertFalse(hits[0].get("context"),
-                         "must work from any view, including a hidden sheet")
+        self.assertEqual(hits, [], "⌃⌘\\ is not a session-list chord")
 
 
 if __name__ == "__main__":

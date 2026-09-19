@@ -17,8 +17,14 @@ contexts:
       push: prompt
 
   prompt:
-    # Prompt text until closing ▶
+    # Prompt text until closing ▶. The newline after ▶ is the fold-begin
+    # marker (Fold.tmPreferences) so each ◎ turn gets a gutter triangle.
     - meta_scope: submarine.prompt entity.name.section
+    - match: ' ▶(\n)'
+      captures:
+        1: meta.fold.turn.begin.submarine
+      scope: submarine.prompt.marker punctuation.definition.prompt.end
+      set: conversation
     - match: ' ▶$'
       scope: submarine.prompt.marker punctuation.definition.prompt.end
       set: conversation

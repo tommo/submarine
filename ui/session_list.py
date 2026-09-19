@@ -2003,6 +2003,23 @@ def _list_changed(window, view) -> bool:
     return _stamp_due(view.id())
 
 
+def _restore_caret_row(view, row) -> None:
+    """Keep the caret on the same visual line after a list rewrite."""
+    if view is None:
+        return
+    try:
+        last = view.rowcol(max(0, view.size() - 1))[0]
+        row = max(0, min(int(row), int(last)))
+        pt = view.text_point(row, 0)
+        view.sel().clear()
+        if sublime is not None:
+            view.sel().add(sublime.Region(pt, pt))
+        else:
+            view.sel().add(pt)
+    except Exception:
+        pass
+
+
 def refresh_session_list(window, force: bool = True) -> bool:
     """Re-render this window's Sessions view; True when it ran.
 
@@ -2051,20 +2068,24 @@ _poll_armed = False
 
 
 def schedule_session_list_refresh() -> None:
-    """Debounced refresh of every open Sessions scratch view."""
-    global _refresh_pending
+    """Debounced refresh of every open Sessions scratch view.
+
+    State changes (busy/idle/sleep) call this; the poll is only the clock.
+    """
+    global _refresh_pending, _poll_delay
     if _refresh_pending:
         return
     if not _session_list_open():
         return
     _refresh_pending = True
+    _poll_delay = _POLL_MIN_MS
 
     def _go():
         global _refresh_pending
         _refresh_pending = False
         refresh_all_session_lists()
 
-    sublime.set_timeout(_go, 250)
+    sublime.set_timeout(_go, 50)
     _arm_session_list_poll()
 
 
@@ -2332,7 +2353,8 @@ class SubmarineSessionListStarCommand(sublime_plugin.TextCommand):
         sel = self.view.sel()
         if not sel:
             return
-        line = self.view.rowcol(sel[0].begin())[0] + 1
+        caret_row = self.view.rowcol(sel[0].begin())[0]
+        line = caret_row + 1
         row = row_at_line(index, line)
         win = self.view.window()
         sid = (row or {}).get("session_id")
@@ -2376,6 +2398,7 @@ class SubmarineSessionListStarCommand(sublime_plugin.TextCommand):
         now = not pinned
         name = (row.get("name") or "").strip() or sid
         refresh_session_list(win)
+        _restore_caret_row(self.view, caret_row)
         sublime.status_message(
             ("★ Starred: {}" if now else "☆ Unstarred: {}").format(name))
 

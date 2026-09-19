@@ -118,6 +118,45 @@ class SpinnerTest(unittest.TestCase):
         self.assertEqual(out.spinner_frames, [])
         self.assertEqual(s.scheduler.pending, [])
 
+    def test_spinner_does_not_rewrite_while_a_question_is_up(self):
+        """AskUserQuestion lives at the tail. Busy-mark ticks must not
+        `_render_current` or the question reflows (wrap, caret, checks)."""
+        from ui.renderer import TurnRenderer
+        from ui.models import Conversation
+
+        rendered = []
+        titles = []
+
+        class _View(object):
+            def is_valid(self):
+                return True
+
+        class _Sheet(object):
+            def is_following_tail(self, slack=120):
+                return True
+
+            def update_title(self):
+                titles.append(1)
+
+        class _Owner(object):
+            def __init__(self):
+                self.view = _View()
+                self.sheet = _Sheet()
+                self._modal = True
+
+            def has_turn_modal_ui(self):
+                return self._modal
+
+        owner = _Owner()
+        r = TurnRenderer(owner)
+        r._render_current = lambda auto_scroll=True: rendered.append(auto_scroll)
+        r.current = Conversation(prompt="q", working=True)
+        r.advance_spinner()
+        self.assertEqual(rendered, [])
+        owner._modal = False
+        r.advance_spinner()
+        self.assertEqual(rendered, [False])
+
     def test_a_viewless_sheet_still_counts_as_chrome_only(self):
         """The renderer guards on the view; the driver must not care, so a
         background turn keeps ticking (and paints nothing)."""
