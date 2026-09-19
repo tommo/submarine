@@ -183,8 +183,6 @@ class TestSubmitKeepsUserLine(unittest.TestCase):
         self.assertTrue(out.is_input_mode())
         out.set_composer_text("hello")
         marker = out.composer._input_start - len(out.composer._input_marker)
-        y_before = v.text_to_layout(marker)[1]
-        y_in_view = y_before - v.viewport_position()[1]
         self.assertEqual(v._content[marker:marker + 1], "◎")
 
         out.prompt("hello")
@@ -192,26 +190,22 @@ class TestSubmitKeepsUserLine(unittest.TestCase):
         self.assertFalse(out.is_input_mode())
         idx = v._content.find("◎ hello ▶")
         self.assertGreaterEqual(idx, 0)
+        # Same ◎ offset — not wiped and rewritten further down the buffer.
         self.assertEqual(idx, marker)
-        y_after = v.text_to_layout(idx)[1]
-        y_in_view_after = y_after - v.viewport_position()[1]
-        self.assertEqual(y_in_view_after, y_in_view)
         self.assertEqual(out.current.prompt, "hello")
         self.assertIsNotNone(out.current.region)
 
-    def test_sticky_reopen_does_not_scroll_the_submitted_line(self):
+    def test_sticky_reopen_keeps_the_prompt_and_adds_a_new_composer(self):
         out, v = self._bound("old turn\n")
         out.enter_input_mode()
         out.set_composer_text("hello")
         marker = out.composer._input_start - len(out.composer._input_marker)
-        y_in_view = v.text_to_layout(marker)[1] - v.viewport_position()[1]
         out.prompt("hello")
-        idx = v._content.find("◎ hello ▶")
         out.enter_input_mode()
         self.assertTrue(out.is_input_mode())
-        self.assertEqual(v._content.find("◎ hello ▶"), idx)
-        y_after = v.text_to_layout(idx)[1] - v.viewport_position()[1]
-        self.assertEqual(y_after, y_in_view)
+        self.assertEqual(v._content.find("◎ hello ▶"), marker)
+        # New empty ◎ is after the submitted line, not a rewrite of it.
+        self.assertGreater(out.composer._input_start, marker)
 
     def test_query_consumes_matching_draft(self):
         out = FakeOutput()
@@ -220,6 +214,32 @@ class TestSubmitKeepsUserLine(unittest.TestCase):
         s = make_session(initialized=True, client=FakeClient(), output=out)
         s.query("hello", display_prompt="hello")
         self.assertEqual(s.draft_prompt, "")
+
+    def test_prompt_does_not_stash_submitted_text_as_draft(self):
+        out, v = self._bound("old turn\n")
+        sess = type("S", (), {"draft_prompt": "keep?", "pending_context": None})()
+        out.enter_input_mode()
+        out.set_composer_text("hello")
+        import ui.renderer as R
+        import ui.composer as C
+        orig_r, orig_c = R.get_session_for_view, C.get_session_for_view
+        R.get_session_for_view = lambda view, s=sess: s
+        C.get_session_for_view = lambda view, s=sess: s
+        try:
+            out.prompt("hello")
+        finally:
+            R.get_session_for_view = orig_r
+            C.get_session_for_view = orig_c
+        self.assertEqual(sess.draft_prompt, "")
+
+    def test_enter_draft_does_not_restore_the_current_prompt(self):
+        out = FakeOutput()
+        out.current = type("T", (), {"prompt": "hello"})()
+        s = make_session(initialized=True, client=FakeClient(), output=out)
+        s.draft_prompt = "hello"
+        s._enter_input_with_draft()
+        self.assertEqual(s.draft_prompt, "")
+        self.assertEqual(out.composer_text, "")
 
 
 if __name__ == "__main__":

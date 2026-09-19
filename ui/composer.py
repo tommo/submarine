@@ -40,7 +40,6 @@ class Composer:
         self._pad_phantom_set = None
         self._context_phantom_set = None
         self._detached_draft = ""
-        self._submit_pin = None  # type: Optional[dict]
 
     def _has_view(self) -> bool:
         view = self.owner.view
@@ -251,12 +250,7 @@ class Composer:
                     session._update_queue_phantom()
             except Exception:
                 pass
-        if self._submit_pin:
-            self.focus(force_show=False, steal_focus=False, preserve_caret=True)
-            self.restore_submit_pin()
-            self._submit_pin = None
-        else:
-            self.focus(force_show=True, steal_focus=False, preserve_caret=True)
+        self.focus(force_show=True, steal_focus=False, preserve_caret=True)
 
     def exit_input_mode(self, keep_text: bool = False) -> str:
         """Close the composer. Viewless: clears the input-mode flag, returns draft."""
@@ -296,51 +290,15 @@ class Composer:
                 pass
         return input_text
 
-    def pin_submit_line(self, pt: int) -> None:
-        """Remember where the ◎ user line sits in the viewport (pre-submit)."""
-        view = self.owner.view
-        if not view:
-            self._submit_pin = None
-            return
-        try:
-            y = float(view.text_to_layout(int(pt))[1])
-            vx, vy = view.viewport_position()
-            vx, vy = float(vx), float(vy)
-        except Exception:
-            self._submit_pin = None
-            return
-        self._submit_pin = {
-            "pt": int(pt),
-            "y": y,
-            "vx": vx,
-            "vy": vy,
-            "y_in_view": y - vy,
-        }
-
-    def restore_submit_pin(self) -> bool:
-        """Keep the ◎ user line at the same viewport Y as pin_submit_line."""
-        pin = self._submit_pin
-        view = self.owner.view
-        if not pin or not view:
-            return False
-        try:
-            pt = max(0, min(int(pin.get("pt") or 0), view.size()))
-            y = float(view.text_to_layout(pt)[1])
-            target_vy = y - float(pin.get("y_in_view") or 0)
-            view.set_viewport_position(
-                (float(pin.get("vx") or 0), max(0.0, target_vy)), False)
-            return True
-        except Exception:
-            return False
-
     def promote_to_prompt(self, text: str, has_context: bool = False
                           ) -> Optional[Tuple[int, int]]:
         """Turn the sticky ◎ strip into the frozen ◎ prompt ▶ line in place.
 
-        One buffer replace from the input-area peel to EOF — the user message
-        does not vanish and reappear, so its layout Y stays put. Returns the
-        conversation region (including the preceding newline when there is
-        one) or None if the composer was not open.
+        The ◎ stays at the same buffer offset — wipe-then-rewrite is what
+        made the user line teleport. Viewport is not frozen: the new empty
+        composer still lands at the foot, so the submitted line only moves
+        up by the chrome that appeared under it. Returns the conversation
+        region (including the preceding newline when there is one).
         """
         from .render_policy import format_user_prompt_block
 
@@ -357,7 +315,6 @@ class Composer:
         except Exception:
             return None
 
-        self.pin_submit_line(marker_start)
         peel = self.peel_start()
         if peel is None:
             peel = marker_start
@@ -394,11 +351,6 @@ class Composer:
         self._pending_context_region = (0, 0)
         self._refresh_context_phantoms([])
         self._update_composer_pad_phantom()
-        # ◎ in the written block: after optional leading newline
-        new_pt = start + (1 if start < peel else 0)
-        if self._submit_pin is not None:
-            self._submit_pin["pt"] = new_pt
-        self.restore_submit_pin()
         return (start, start + len(body))
 
     def reset_input_mode(self, reenter: bool = False) -> None:

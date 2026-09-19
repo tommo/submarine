@@ -15,8 +15,9 @@ Viewless convention (Worker C / HostView):
 """
 from __future__ import annotations
 
+import html as _html
 import os
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional, Sequence
 
 from . import keys
 from .composer import Composer
@@ -32,6 +33,84 @@ try:
     import sublime
 except ImportError:
     sublime = None  # type: ignore
+
+
+def _keyed_phantom_set(view, key):
+    """One long-lived PhantomSet per (view, key) so update() replaces, not stacks."""
+    if sublime is None or not view:
+        return None
+    try:
+        if not view.is_valid() or not key:
+            return None
+    except Exception:
+        return None
+    reg = getattr(sublime, "_submarine_phantom_registry", None)
+    if not isinstance(reg, dict):
+        reg = {}
+        sublime._submarine_phantom_registry = reg
+    k = (view.id(), key)
+    ps = reg.get(k)
+    if ps is not None:
+        return ps
+    try:
+        ps = sublime.PhantomSet(view, key)
+    except Exception:
+        return None
+    reg[k] = ps
+    return ps
+
+
+def format_queue_phantom_html(prompts: Sequence[str],
+                              send_now_hint: str = "Ctrl+↵ send now") -> str:
+    """Composer chrome *above* ◎: optional queue chips + a hairline split.
+
+    Layout (top → bottom, phantoms only):
+      ⏳ queued msg  ↵ ×   (only when queued)
+      ─ hairline ─
+      ◎ input…
+    """
+    rows = []
+    q = [p for p in (prompts or []) if p]
+    if q:
+        rows.append(
+            '<div style="margin:0 0 2px 0;font-size:10px;'
+            'color:color(var(--foreground) alpha(0.4));">'
+            'queue · '
+            '<a href="send_now" style="color:var(--orangish);'
+            'text-decoration:none;" title="Cancel turn and send top now">'
+            'send now</a>'
+            '</div>'
+        )
+        for i, msg in enumerate(q):
+            short = str(msg).replace("\n", " ").strip()
+            if len(short) > 72:
+                short = short[:72] + "…"
+            safe = _html.escape(short)
+            rows.append(
+                '<div style="margin:1px 0;padding:1px 6px;'
+                'background-color:color(var(--foreground) alpha(0.06));'
+                'color:var(--bluish);font-size:11px;">'
+                '⏳ %s'
+                '&nbsp;<a href="send:%d" style="color:var(--orangish);'
+                'text-decoration:none;" title="send now">↵</a>'
+                '&nbsp;<a href="drop:%d" style="color:var(--redish);'
+                'text-decoration:none;" title="remove">×</a>'
+                '</div>' % (safe, i, i)
+            )
+        rows.append(
+            '<div style="margin:2px 0 1px 0;font-size:10px;'
+            'color:color(var(--foreground) alpha(0.35));">%s</div>'
+            % _html.escape(send_now_hint or "")
+        )
+    rows.append(
+        '<div style="margin:0;padding:0;line-height:1;'
+        'font-size:1px;height:0;border-top:1px solid '
+        'color(var(--foreground) alpha(0.14));">&nbsp;</div>'
+    )
+    return (
+        '<body id="submarine-queue" style="margin:0;padding:0;">'
+        '%s</body>' % "".join(rows)
+    )
 
 
 class SubmarineOutputView(FormatHelpers):
@@ -758,33 +837,99 @@ class SubmarineOutputView(FormatHelpers):
             "↻ connecting…" if show else "", show)
 
     def queue_chips(self, prompts=None):
-        """Queued-prompt chips. Viewless: no-op."""
+        """Queued-prompt chrome above ◎. Viewless: no-op."""
         self.mark_dirty()
-        items = list(prompts or [])
-        if not items:
-            self._set_banner("_queue_phantom", keys.PHANTOM_QUEUE, "", False)
-            return
-        labels = []
-        for it in items:
+        items = []
+        for it in list(prompts or []):
             if isinstance(it, dict):
-                labels.append(str(it.get("text") or it.get("name") or ""))
+                items.append(str(it.get("text") or it.get("name") or ""))
             else:
-                labels.append(str(it))
-        html = " · ".join(l for l in labels if l)
+                items.append(str(it))
+        self._paint_queue_phantom(items)
+
+    def clear_queue_phantom(self):
+        """Drop queue chips + hairline even if ◎ is open."""
+        self._clear_queue_phantom_set()
+
+    def _clear_queue_phantom_set(self):
+        view = self.view
+        ps = getattr(self, "_queue_phantom", None)
+        if ps is not None:
+            try:
+                ps.update([])
+            except Exception:
+                pass
+        if view and hasattr(view, "erase_phantoms"):
+            try:
+                view.erase_phantoms(keys.PHANTOM_QUEUE)
+                view.erase_phantoms("claude_queue")
+            except Exception:
+                pass
+
+    def _paint_queue_phantom(self, prompts):
+        """Park queue chips + hairline on the line *above* ◎ (LAYOUT_BLOCK)."""
+        view = self.view
+        if not self._has_view() or sublime is None:
+            return
+        c = self.composer
+        in_input = bool(c.is_input_mode())
+        sleeping = bool(keys.read_setting(view.settings(), keys.SLEEPING))
+        if (
+            not in_input
+            or getattr(c, "_question_input_mode", False)
+            or sleeping
+            or (self.has_turn_modal_ui() and not in_input)
+        ):
+            self._clear_queue_phantom_set()
+            return
+        peel = getattr(c, "_input_area_start", None)
+        if peel is None or peel < 0:
+            peel = getattr(c, "_input_start", None)
+        if peel is None or peel < 0:
+            peel = view.size()
+        peel = min(max(0, int(peel)), view.size())
+        if peel <= 0:
+            self._clear_queue_phantom_set()
+            return
+        pt = peel - 1
         try:
             hint = (
                 "⌘↵ send now"
-                if sublime is not None and sublime.platform() == "osx"
+                if sublime.platform() == "osx"
                 else "Ctrl+↵ send now"
             )
         except Exception:
             hint = "Ctrl+↵ send now"
-        html = (
-            '%s<div style="margin:2px 0 1px 0;font-size:10px;'
-            'color:color(var(--foreground) alpha(0.35));">%s</div>'
-            % (html, hint)
-        )
-        self._set_banner("_queue_phantom", keys.PHANTOM_QUEUE, html, True)
+        html = format_queue_phantom_html(prompts, hint)
+        ps = _keyed_phantom_set(view, keys.PHANTOM_QUEUE)
+        if not ps:
+            return
+        self._queue_phantom = ps
+        # Chips need a real row (LAYOUT_BLOCK). The empty hairline must not:
+        # BLOCK above ◎ is a full text row, and clearing it on submit is what
+        # yanked ◎ hello ▶ up one line from where the user typed.
+        has_rows = any((p or "").strip() for p in prompts)
+        if has_rows:
+            layout = sublime.LAYOUT_BLOCK
+        else:
+            layout = getattr(sublime, "LAYOUT_BELOW", None) or sublime.LAYOUT_INLINE
+        try:
+            ps.update([sublime.Phantom(
+                sublime.Region(pt, pt),
+                html,
+                layout,
+                on_navigate=self._on_queue_phantom_navigate,
+            )])
+        except Exception:
+            self._clear_queue_phantom_set()
+
+    def _on_queue_phantom_navigate(self, href):
+        sess = get_session_for_view(self.view)
+        if sess is None:
+            return
+        fn = getattr(sess, "_on_queue_phantom_navigate", None)
+        if callable(fn):
+            fn(href)
 
     def wakeup_banner(self, fire_at=None):
         """Wake countdown phantom. Viewless: no-op."""

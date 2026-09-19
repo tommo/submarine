@@ -1,7 +1,7 @@
 {
     "font_size": 13,
     "line_numbers": false,
-    "gutter": true,
+    "gutter": false,
     "word_wrap": true,
     "margin": 4,
     "draw_indent_guides": false,

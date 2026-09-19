@@ -886,7 +886,7 @@ class TestRenderSessionList(unittest.TestCase):
                 return types.SimpleNamespace(get=lambda k, d=None: 6 if k == "margin" else d)
 
         cols = sl.view_cols(_V())
-        self.assertEqual(cols, 96)
+        self.assertEqual(cols, 97)
 
     def test_header_fits_view_cols(self):
         wide = sl.format_header(72)
@@ -1297,7 +1297,45 @@ class TestRenderSessionList(unittest.TestCase):
         ]
         kept = sl.drop_empty_sessions(rows, starred={"c"})
         self.assertEqual([r["session_id"] for r in kept], ["b", "c"])
-        # Live / open sheets are not filtered — only unused history.
+
+    def test_window_list_hides_empty_live(self):
+        prev = (sl.collect_live, sl.load_saved_sessions, sl.load_bookmarks)
+        sl.collect_live = lambda w: [
+            {"kind": "live", "session_id": "empty", "view_id": 1,
+             "name": "brand new", "backend": "grok", "status": "sleeping",
+             "query_count": 0, "same_window": True,
+             "last_access": 2, "last_activity": 2},
+            {"kind": "live", "session_id": "used", "view_id": 2,
+             "name": "did work", "backend": "grok", "status": "sleeping",
+             "query_count": 3, "same_window": True,
+             "last_access": 1, "last_activity": 1},
+        ]
+        sl.load_saved_sessions = lambda: []
+        sl.load_bookmarks = lambda project=None: set()
+        try:
+            text, index = sl.build_for_window(_win_for(["/p"]), cols=80)
+        finally:
+            (sl.collect_live, sl.load_saved_sessions, sl.load_bookmarks) = prev
+        self.assertEqual([r["session_id"] for r in index], ["used"])
+        self.assertNotIn("brand new", text)
+        self.assertIn("did work", text)
+
+    def test_window_list_keeps_starred_empty_live(self):
+        prev = (sl.collect_live, sl.load_saved_sessions, sl.load_bookmarks)
+        sl.collect_live = lambda w: [
+            {"kind": "live", "session_id": "empty", "view_id": 1,
+             "name": "pinned new", "backend": "grok", "status": "ready",
+             "query_count": 0, "same_window": True,
+             "last_access": 1, "last_activity": 1},
+        ]
+        sl.load_saved_sessions = lambda: []
+        sl.load_bookmarks = lambda project=None: {"empty"}
+        try:
+            text, index = sl.build_for_window(_win_for(["/p"]), cols=80)
+        finally:
+            (sl.collect_live, sl.load_saved_sessions, sl.load_bookmarks) = prev
+        self.assertEqual([r["session_id"] for r in index], ["empty"])
+        self.assertIn("pinned new", text)
 
     def test_pin_starred_empty(self):
         live = [{"session_id": "a", "kind": "live", "status": "ready"}]

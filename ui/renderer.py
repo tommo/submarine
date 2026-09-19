@@ -325,12 +325,15 @@ class TurnRenderer:
                 live = c.get_input_text()
             except Exception:
                 live = ""
-            if session:
-                session.draft_prompt = live
-            if (text or "").strip() and live.strip() == (text or "").strip():
+            consuming = bool((text or "").strip() and live.strip() == (text or "").strip())
+            if consuming:
                 promoted = c.promote_to_prompt(text, has_context=has_ctx)
             if promoted is None:
                 c.exit_input_mode(keep_text=False)
+            if session:
+                # Consumed draft is this turn's prompt — never feed it back
+                # into the next ◎ (that was "submitted text still in input").
+                session.draft_prompt = "" if consuming else live
         else:
             session = get_session_for_view(self.owner.view)
             try:
@@ -1542,9 +1545,7 @@ class TurnRenderer:
                     and c.caret_owner() == "draft"):
                 c.restore_draft_caret()
 
-        if getattr(c, "_submit_pin", None):
-            c.restore_submit_pin()
-        elif pin is not None:
+        if pin is not None:
             if was_input and caret_in_composer and c.caret_owner() == "draft":
                 pin = dict(pin)
                 pin["sels"] = []
@@ -1680,9 +1681,7 @@ class TurnRenderer:
             except Exception:
                 pass
         following = self.owner.sheet.is_following_tail()
-        if getattr(c, "_submit_pin", None):
-            c.restore_submit_pin()
-        elif following and c.caret_owner() == "draft":
+        if following and c.caret_owner() == "draft":
             c.scroll_to_end(force=False)
         return True
 

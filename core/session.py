@@ -817,7 +817,7 @@ class Session:
         if self._compacting and not compact and not silent and not _auto_retry:
             if raw and raw not in self._queued_prompts:
                 self._queued_prompts.append(prompt)
-                self.chrome.queue_chips(list(self._queued_prompts))
+                self._update_queue_phantom()
             try:
                 self.output.text("\n*Compacting context — message queued.*\n")
             except Exception:
@@ -1084,13 +1084,57 @@ class Session:
                 return
         self.scheduler.call_later(100, self._enter_input_if_idle)
 
+    def _update_queue_phantom(self):
+        # type: () -> None
+        try:
+            self.chrome.queue_chips(list(self._queued_prompts or []))
+        except Exception:
+            pass
+
+    def _clear_queue_phantom(self):
+        # type: () -> None
+        try:
+            clear = getattr(self.chrome, "clear_queue_phantom", None)
+            if callable(clear):
+                clear()
+            else:
+                self.chrome.queue_chips([])
+        except Exception:
+            pass
+
+    def _on_queue_phantom_navigate(self, href):
+        # type: (str) -> None
+        href = href or ""
+        if href == "send_now":
+            self.send_now("")
+            return
+        if href.startswith("send:"):
+            try:
+                idx = int(href.split(":", 1)[1])
+            except (TypeError, ValueError):
+                return
+            q = self._queued_prompts
+            if 0 <= idx < len(q):
+                msg = q.pop(idx)
+                self.send_now(msg)
+            return
+        if not href.startswith("drop:"):
+            return
+        try:
+            idx = int(href.split(":", 1)[1])
+        except (TypeError, ValueError):
+            return
+        if 0 <= idx < len(self._queued_prompts):
+            self._queued_prompts.pop(idx)
+            self._update_queue_phantom()
+
     def queue_prompt(self, prompt):
         # type: (str) -> None
         prompt = (prompt or "").strip()
         if not prompt:
             return
         self._queued_prompts[:] = merge_subsession_queue(self._queued_prompts, prompt)
-        self.chrome.queue_chips(list(self._queued_prompts))
+        self._update_queue_phantom()
         if self.working and self.client and getattr(self.client, "is_alive", lambda: True)():
             if self.backend == "claude" and prompt in self._queued_prompts:
                 def _on_inj(r, p=prompt):
@@ -1104,7 +1148,7 @@ class Session:
                             pass
                         if res.get("status") == "queued":
                             self._inject_pending = True
-                        self.chrome.queue_chips(list(self._queued_prompts))
+                        self._update_queue_phantom()
                 self._send("inject_message", {"message": prompt}, _on_inj)
             return
         if self.client and getattr(self.client, "is_alive", lambda: True)():
@@ -1129,7 +1173,7 @@ class Session:
         if prompt:
             self._queued_prompts = [p for p in self._queued_prompts if p != prompt]
             self._queued_prompts.insert(0, prompt)
-            self.chrome.queue_chips(list(self._queued_prompts))
+            self._update_queue_phantom()
         elif not self._queued_prompts:
             return False
         self._send_now_pending = True
@@ -1175,7 +1219,7 @@ class Session:
         except Exception:
             pass
         self.chrome.set_status("send now…" if send_now else "interrupted")
-        self.chrome.queue_chips(list(self._queued_prompts))
+        self._update_queue_phantom()
         if self.client:
             sent = self._send("interrupt", {})
             if not sent:
@@ -1187,7 +1231,7 @@ class Session:
         if not self._queued_prompts:
             return False
         prompt = self._queued_prompts.pop(0)
-        self.chrome.queue_chips(list(self._queued_prompts))
+        self._update_queue_phantom()
         self._fire_queued_now(prompt)
         return True
 
@@ -1209,7 +1253,7 @@ class Session:
             self._queued_prompts = []
         self._inject_pending = False
         self._pending_retain = None
-        self.chrome.queue_chips(list(self._queued_prompts))
+        self._update_queue_phantom()
 
     # ── sleep / wake / stop ───────────────────────────────────────────
 
@@ -1600,7 +1644,7 @@ class Session:
         self._composer_allowed = False
         try:
             self.chrome.sleep_banner(True, "⏸ Session paused — press Enter to wake")
-            self.chrome.queue_chips([])
+            self._clear_queue_phantom()
             self.chrome.refresh_tab_title()
         except Exception:
             pass
@@ -1936,33 +1980,47 @@ class Session:
             if not str(draft).strip():
                 draft = ""
                 self.draft_prompt = ""
-            try:
-                self.output.set_composer_text(draft)
-            except Exception:
-                if draft and view is not None:
+            else:
+                cur = getattr(self.output, "current", None)
+                cur_prompt = getattr(cur, "prompt", None) if cur is not None else None
+                if cur_prompt and str(draft).strip() == str(cur_prompt).strip():
+                    draft = ""
+                    self.draft_prompt = ""
+            if not draft:
+                collapse = getattr(self.output, "collapse_empty_composer_tail", None)
+                if callable(collapse):
                     try:
-                        view.run_command("append", {"characters": draft})
+                        collapse()
                     except Exception:
                         pass
-                ensure = getattr(self.output, "ensure_composer_spare_line", None)
-                if callable(ensure):
-                    try:
-                        ensure()
-                    except Exception:
-                        pass
-            try:
-                if callable(focused) and focused():
-                    set_owner = getattr(self.output, "set_caret_owner", None)
-                    if callable(set_owner):
-                        set_owner("draft")
-                    scroll = getattr(self.output, "scroll_composer_chrome", None)
-                    restore = getattr(self.output, "restore_draft_caret", None)
-                    if callable(scroll):
-                        scroll(force=True)
-                    if callable(restore):
-                        restore()
-            except Exception:
-                pass
+            else:
+                try:
+                    self.output.set_composer_text(draft)
+                except Exception:
+                    if draft and view is not None:
+                        try:
+                            view.run_command("append", {"characters": draft})
+                        except Exception:
+                            pass
+                    ensure = getattr(self.output, "ensure_composer_spare_line", None)
+                    if callable(ensure):
+                        try:
+                            ensure()
+                        except Exception:
+                            pass
+                try:
+                    if callable(focused) and focused():
+                        set_owner = getattr(self.output, "set_caret_owner", None)
+                        if callable(set_owner):
+                            set_owner("draft")
+                        scroll = getattr(self.output, "scroll_composer_chrome", None)
+                        restore = getattr(self.output, "restore_draft_caret", None)
+                        if callable(scroll):
+                            scroll(force=True)
+                        if callable(restore):
+                            restore()
+                except Exception:
+                    pass
         elif self.output.is_input_mode():
             collapse = getattr(self.output, "collapse_empty_composer_tail", None)
             if callable(collapse):

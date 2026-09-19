@@ -167,10 +167,7 @@ class SubmarineSubmitInputCommand(sublime_plugin.TextCommand):
                     s.output.set_composer_text("")
                     s.draft_prompt = ""
                     try:
-                        if hasattr(s, "_update_queue_phantom"):
-                            s._update_queue_phantom()
-                        elif s.output:
-                            s.output.queue_chips(list(s._queued_prompts or []))
+                        s._update_queue_phantom()
                     except Exception:
                         pass
                     s.output.focus_composer(force_show=True, park_at_end=True)
@@ -198,8 +195,7 @@ class SubmarineSubmitInputCommand(sublime_plugin.TextCommand):
 
                 sublime.set_timeout(_rearm_after_queue, 30)
             try:
-                if hasattr(s, "_update_queue_phantom"):
-                    s._update_queue_phantom()
+                s._update_queue_phantom()
             except Exception:
                 pass
             return

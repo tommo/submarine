@@ -142,6 +142,131 @@ def _find_saved_session_for_view(view, saved_sessions):
     return None
 
 
+def _view_text_head(view, n=8000):
+    if not view:
+        return ""
+    try:
+        size = int(view.size() or 0)
+    except Exception:
+        size = 0
+    limit = min(size, n) if size else n
+    if sublime is not None:
+        try:
+            return view.substr(sublime.Region(0, limit)) or ""
+        except Exception:
+            pass
+    try:
+        return view.substr(None) or ""
+    except Exception:
+        return getattr(view, "_content", None) or ""
+
+
+def _matched_is_unused(matched, view) -> bool:
+    """True when this sheet never sent a turn — do not keep it in the list."""
+    if matched:
+        try:
+            q = int(matched.get("query_count") or 0)
+        except (TypeError, ValueError):
+            q = 0
+        if q > 0:
+            return False
+        if (matched.get("first_prompt") or "").strip():
+            return False
+    content = _view_text_head(view)
+    if " ▶" in content:
+        return False
+    stripped = (content or "").strip()
+    if not stripped:
+        return True
+    try:
+        from ui import idle
+        if idle.is_idle(view):
+            return True
+    except Exception:
+        pass
+    if "◇ Submarine" in content or "Nothing is bound to this sheet" in content:
+        return True
+    if stripped.startswith("◎") and " ▶" not in stripped and len(stripped) < 12:
+        return True
+    return False
+
+
+def _session_is_unused(session) -> bool:
+    if session is None:
+        return True
+    try:
+        q = int(getattr(session, "query_count", 0) or 0)
+    except (TypeError, ValueError):
+        q = 0
+    if q > 0:
+        return False
+    fp = getattr(session, "first_prompt", None)
+    if fp and str(fp).strip():
+        return False
+    return True
+
+
+def _idle_output_view(view, window=None) -> None:
+    if view is None:
+        return
+    try:
+        keys.write_setting(view.settings(), keys.INPUT_MODE, False)
+    except Exception:
+        pass
+    try:
+        Composer.strip_composer_tail(view)
+    except Exception:
+        pass
+    try:
+        from ui import idle
+        idle.render(view, window)
+    except Exception:
+        pass
+
+
+def _discard_unused_startup_session(session) -> None:
+    """Drop an unused restored session so it cannot occupy CURRENT."""
+    if session is None:
+        return
+    session._composer_allowed = False
+    try:
+        client = getattr(session, "client", None)
+        session.client = None
+        session.initialized = False
+        if client is not None:
+            try:
+                client.send("shutdown", {}, lambda _: client.stop())
+            except Exception:
+                try:
+                    client.stop()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    view = None
+    window = getattr(session, "window", None)
+    try:
+        view = session.output.view if getattr(session, "output", None) else None
+    except Exception:
+        view = None
+    if view is not None:
+        try:
+            unregister_view(view.id())
+        except Exception:
+            pass
+        if window is None:
+            try:
+                window = view.window()
+            except Exception:
+                window = None
+        _idle_output_view(view, window)
+    try:
+        if getattr(session, "output", None) is not None:
+            session.output.view = None
+    except Exception:
+        pass
+
+
 def resolve_restore_identity(view_backend, view_model, matched):
     # type: (Optional[str], Optional[str], Optional[dict]) -> tuple
     """(backend, resume_id, model, overrode) for a restored output sheet.
@@ -167,7 +292,77 @@ def resolve_restore_identity(view_backend, view_model, matched):
     return backend, resume_id, model, overrode
 
 
-def settle_active_output_view(window) -> None:
+def _park_startup_session_asleep(session, paint=False) -> None:
+    """Force a restored/bound session into the sleep triple. Never enter ◎.
+
+    Sublime restart must not reconnect bridges or flash the composer. A live
+    client (restore accidentally called start(), or a leftover after reload)
+    is shut down; sleep chrome is applied when there is a session_id.
+    """
+    if session is None:
+        return
+    session._composer_allowed = False
+    view = None
+    try:
+        view = session.output.view if getattr(session, "output", None) else None
+    except Exception:
+        view = None
+    if view is not None:
+        try:
+            keys.write_setting(view.settings(), keys.INPUT_MODE, False)
+        except Exception:
+            pass
+        try:
+            Composer.strip_composer_tail(view)
+        except Exception:
+            pass
+    if _session_is_unused(session):
+        _discard_unused_startup_session(session)
+        return
+    sid = getattr(session, "session_id", None) or getattr(session, "resume_id", None)
+    if getattr(session, "is_sleeping", False):
+        if hasattr(session, "_apply_sleep_ui"):
+            try:
+                session._apply_sleep_ui(touch_buffer=paint)
+            except TypeError:
+                session._apply_sleep_ui()
+        return
+    slept = False
+    if sid:
+        try:
+            if hasattr(session, "sleep"):
+                slept = bool(session.sleep(force=True))
+        except Exception:
+            slept = False
+    if slept:
+        return
+    try:
+        client = getattr(session, "client", None)
+        session.client = None
+        if client is not None:
+            try:
+                client.send("shutdown", {}, lambda _: client.stop())
+            except Exception:
+                try:
+                    client.stop()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    try:
+        session.initialized = False
+    except Exception:
+        pass
+    if sid and not getattr(session, "session_id", None):
+        session.session_id = sid
+    if getattr(session, "session_id", None) and hasattr(session, "_apply_sleep_ui"):
+        try:
+            session._apply_sleep_ui(touch_buffer=paint)
+        except TypeError:
+            session._apply_sleep_ui()
+
+
+def settle_active_output_view(window, allow_composer=True) -> None:
     if not window:
         return
     view = window.active_view()
@@ -194,12 +389,18 @@ def settle_active_output_view(window) -> None:
     if getattr(s, "is_sleeping", False):
         if hasattr(s, "_apply_sleep_ui"):
             s._apply_sleep_ui()
-    elif getattr(s, "initialized", False) and not getattr(s, "working", False) and not s.output.is_input_mode():
+    elif (
+        allow_composer
+        and getattr(s, "initialized", False)
+        and not getattr(s, "working", False)
+        and not s.output.is_input_mode()
+    ):
         if hasattr(s, "_enter_input_with_draft"):
             s._enter_input_with_draft()
 
 
 def settle_startup_output_views() -> None:
+    """After quiet: restore every output sheet as sleeping. Never enter ◎."""
     if sublime is None:
         return
     for w in sublime.windows():
@@ -215,13 +416,12 @@ def settle_startup_output_views() -> None:
             keys.write_setting(view.settings(), keys.INPUT_MODE, False)
             Composer.strip_composer_tail(view)
             is_focused = view.id() == active_id
-            if get_session_for_view(view):
-                s = get_session_for_view(view)
-                if s and getattr(s, "is_sleeping", False) and hasattr(s, "_apply_sleep_ui"):
-                    s._apply_sleep_ui()
-                continue
-            SubmarineOutputEventListener(view)._restore_session(w, paint=is_focused)
-        settle_active_output_view(w)
+            if not get_session_for_view(view):
+                SubmarineOutputEventListener(view)._restore_session(
+                    w, paint=is_focused)
+            _park_startup_session_asleep(
+                get_session_for_view(view), paint=is_focused)
+        settle_active_output_view(w, allow_composer=False)
 
 
 def _forget_host_view(view) -> None:
@@ -559,6 +759,9 @@ class SubmarineOutputEventListener(sublime_plugin.ViewEventListener):
         try:
             saved_sessions = load_saved_sessions()
             matched = _find_saved_session_for_view(view, saved_sessions)
+            if _matched_is_unused(matched, view):
+                _idle_output_view(view, window)
+                return
             resume_id = (matched or {}).get("session_id") if matched else None
             session_name = (matched or {}).get("name") if matched else None
             resume_session_at = (matched or {}).get("resume_session_at") if matched else None
@@ -578,7 +781,15 @@ class SubmarineOutputEventListener(sublime_plugin.ViewEventListener):
                 if raw.endswith("…"):
                     raw = raw[:-1]
                 session_name = strip_title_decoration(raw) or None
-            session = create_session(window, resume_id=resume_id, backend=saved_backend)
+            session = create_session(
+                window,
+                resume_id=resume_id,
+                backend=saved_backend,
+                attach_view=view,
+                start=False,
+                show=False,
+                focus=False,
+            )
             if session is None:
                 # core/ not wired yet — sleep-chrome the leftover buffer only
                 keys.write_setting(view.settings(), keys.SLEEPING, True)

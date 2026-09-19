@@ -136,21 +136,44 @@ def _default_backend():
         return "claude"
 
 
-def _is_restoring(window):
+def _view_is_reconnecting(view):
     # type: (Any) -> bool
-    """Listeners set RECONNECTING before calling create_session to attach."""
-    if window is None:
-        return False
-    try:
-        view = window.active_view()
-    except Exception:
-        view = None
     if view is None:
         return False
     try:
         return bool(keys.read_setting(view.settings(), keys.RECONNECTING))
     except Exception:
         return False
+
+
+def _is_restoring(window, attach_view=None):
+    # type: (Any, Any) -> bool
+    """True when create_session is attaching to a leftover sheet, not a new one.
+
+    Listeners stamp RECONNECTING on the *orphan* view (often a background
+    tab). Checking only the active view made background restores start()
+    the bridge on Sublime restart.
+    """
+    if _view_is_reconnecting(attach_view):
+        return True
+    if window is None:
+        return False
+    views = []
+    try:
+        views = list(window.views() or [])
+    except Exception:
+        views = []
+    if not views:
+        try:
+            active = window.active_view()
+        except Exception:
+            active = None
+        if active is not None:
+            views = [active]
+    for view in views:
+        if _view_is_reconnecting(view):
+            return True
+    return False
 
 
 def _attach_session_shims(session):
@@ -174,6 +197,29 @@ def _attach_session_shims(session):
             session.pending_context = ctx.items
     if not hasattr(session, "_enter_input_with_draft"):
         session._enter_input_with_draft = session._enter_input_if_idle
+    if not hasattr(session, "show_queue_input"):
+        def _show_queue_input(sess=session):
+            if not sess.working:
+                sess._enter_input_with_draft()
+                return
+            win = getattr(sess, "window", None)
+            if win is None:
+                return
+
+            def on_done(text, s=sess):
+                text = (text or "").strip()
+                if text:
+                    s.queue_prompt(text)
+
+            win.show_input_panel(
+                "Queue prompt:",
+                sess.draft_prompt or "",
+                on_done,
+                None,
+                None,
+            )
+
+        session.show_queue_input = _show_queue_input
 
 
 def construct_session(
@@ -292,7 +338,7 @@ def create_session(
     if backend is None:
         backend = _default_backend()
 
-    restoring = attach_view is None and _is_restoring(window)
+    restoring = _is_restoring(window, attach_view)
     if start is None:
         start = not restoring
     if show is None:
@@ -329,7 +375,7 @@ def create_session(
         attach_view=attach_view,
         model=model,
     )
-    session._composer_allowed = True
+    session._composer_allowed = not restoring
 
     keys.write_setting(window.settings(), keys.CREATING_SESSION, True)
     try:
@@ -369,10 +415,11 @@ def create_session(
             except Exception:
                 pass
             register_session(session)
-            try:
-                remember_active_session(window, view)
-            except Exception:
-                pass
+            if not restoring:
+                try:
+                    remember_active_session(window, view)
+                except Exception:
+                    pass
             log_plugin(
                 "create_session: agent_id=%s view_id=%s focus=%s start=%s"
                 % (getattr(session, "agent_id", None), view.id(), focus, start)
@@ -695,8 +742,10 @@ def plugin_loaded():
         log_plugin("ui_mode watch: %s" % e)
     sublime.set_timeout(_startup_strip_composers, 0)
     sublime.set_timeout(_startup_strip_composers, 100)
+    # Quiet covers settle so on_activated cannot restore+enter ◎ in the
+    # gap between the timer and the one-shot park-asleep pass.
     sublime.set_timeout(_startup_settle_views, int(_STARTUP_QUIET_S * 1000) + 50)
-    sublime.set_timeout(_end_startup_quiet, int(_STARTUP_QUIET_S * 1000))
+    sublime.set_timeout(_end_startup_quiet, int(_STARTUP_QUIET_S * 1000) + 150)
 
 
 def _end_startup_quiet():

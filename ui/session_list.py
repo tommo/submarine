@@ -274,8 +274,8 @@ def view_cols(view, fallback: int = 80) -> int:
         except Exception:
             margin = 0
         usable = max(em, vw - 2 * margin)
-        # Two columns of slack: ST's gutter/scrollbar plus wide-glyph overflow.
-        return max(24, int(usable / em) - 2)
+        # One column of slack for gutter/scrollbar / wide-glyph overflow.
+        return max(24, int(usable / em) - 1)
     except Exception:
         return fallback
 
@@ -919,10 +919,10 @@ def build_for_window(window, cols: int = 0) -> Tuple[str, List[dict]]:
     cwd = ""
     if window and window.folders():
         cwd = window.folders()[0]
-    live = collect_live(window)
+    starred = load_bookmarks(cwd or None)
+    live = drop_empty_sessions(collect_live(window), starred)
     live_ids = {r["session_id"] for r in live if r.get("session_id")}
     live_agents = {r.get("agent_id") for r in live if r.get("agent_id")}
-    starred = load_bookmarks(cwd or None)
     saved = load_saved_sessions() if starred else None
     if saved:
         # Only pins need this: a live row's other incarnations matter to a star.
@@ -1601,7 +1601,7 @@ class SessionListView:
         st.set("word_wrap", False)
         st.set("gutter", False)
         st.set("line_numbers", False)
-        st.set("margin", 6)
+        st.set("margin", 4)
         st.set("scroll_past_end", False)
         st.set("highlight_line", True)
         st.set("font_size", 10)
