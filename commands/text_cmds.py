@@ -617,7 +617,7 @@ class SubmarinePasteImageCommand(sublime_plugin.TextCommand):
                 "Image added to context (%s bytes) — send prompt to attach"
                 % len(image_data))
             return
-        text = sublime.get_clipboard()
+        text = self._clipboard_text()
         if text:
             lines = [line.strip() for line in text.split("\n") if line.strip()]
             path_lines = [line for line in lines if os.path.isfile(line) or os.path.isdir(line)]
@@ -648,6 +648,52 @@ class SubmarinePasteImageCommand(sublime_plugin.TextCommand):
         sublime.status_message(
             "Pasted as context: %s:%s" % (os.path.basename(path or ""), region_str))
         return True
+
+    def _clipboard_text(self):
+        """System pasteboard first. sublime.get_clipboard() is ST's own
+        buffer and stays on the last in-app copy when paste is intercepted."""
+        sys_text = self._system_clipboard_text()
+        if sys_text:
+            return sys_text
+        try:
+            return sublime.get_clipboard() or ""
+        except Exception:
+            return ""
+
+    def _system_clipboard_text(self):
+        import platform
+        import subprocess
+        system = platform.system()
+        try:
+            if system == "Darwin":
+                result = subprocess.run(
+                    ["pbpaste"], capture_output=True, timeout=5)
+            elif system == "Linux":
+                result = subprocess.run(
+                    ["xclip", "-selection", "clipboard", "-o"],
+                    capture_output=True, timeout=5)
+                if result.returncode != 0:
+                    result = subprocess.run(
+                        ["wl-paste", "-n"], capture_output=True, timeout=5)
+            elif system == "Windows":
+                result = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", "Get-Clipboard"],
+                    capture_output=True, timeout=5)
+            else:
+                return ""
+        except Exception:
+            return ""
+        raw = result.stdout or b""
+        if not raw:
+            return ""
+        if raw[:8] == b"\x89PNG\r\n\x1a\n" or raw[:2] == b"\xff\xd8":
+            return ""
+        if b"\x00" in raw[:1024]:
+            return ""
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return raw.decode("utf-8", "replace")
 
     def _get_clipboard_image(self):
         import platform

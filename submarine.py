@@ -23,7 +23,18 @@ from main import (  # noqa: F401
     schedule_auto_sleep,
 )
 
+import importlib
+import commands.session_cmds as _session_cmds
+try:
+    importlib.reload(_session_cmds)
+except Exception:
+    pass
 from commands.session_cmds import SubmarineToggleListCommand  # noqa: F401
+try:
+    from commands.session_cmds import SubmarineCycleSessionCommand  # noqa: F401
+except ImportError:
+    SubmarineCycleSessionCommand = getattr(
+        _session_cmds, "SubmarineCycleSessionCommand", None)
 from commands import (  # noqa: F401
     SubmarineStartCommand,
     CodexStartCommand,

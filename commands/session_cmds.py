@@ -1075,6 +1075,112 @@ class SubmarineSessionListCommand(sublime_plugin.WindowCommand):
         show_session_list(self.window)
 
 
+def awake_sessions_for_window(window):
+    """Live, non-sleeping sessions that belong to this window."""
+    from core.registry import default_registry
+    out = []
+    for s in default_registry.iter_sessions():
+        if getattr(s, "quick_mode", False):
+            continue
+        if getattr(s, "is_sleeping", False):
+            continue
+        if window is not None and not _session_in_window(s, window):
+            continue
+        out.append(s)
+    out.sort(key=lambda sess: (
+        -float(getattr(sess, "last_access", 0) or 0),
+        str(getattr(sess, "agent_id", "") or ""),
+    ))
+    return out
+
+
+def _session_in_window(session, window):
+    if window is None:
+        return True
+    view = None
+    try:
+        view = session.output.view if session.output else None
+    except Exception:
+        view = None
+    if view is not None:
+        try:
+            vw = view.window()
+            if vw is window:
+                return True
+            if vw is not None and vw.id() == window.id():
+                return True
+        except Exception:
+            pass
+    try:
+        win = session.window
+        if win is window:
+            return True
+        if win is not None:
+            return win.id() == window.id()
+    except Exception:
+        return False
+    return False
+
+
+class SubmarineCycleSessionCommand(sublime_plugin.WindowCommand):
+    """Ctrl+] / Ctrl+[ — next / previous awake session in this window."""
+
+    def run(self, direction=1):
+        try:
+            step = int(direction)
+        except (TypeError, ValueError):
+            step = 1
+        if step == 0:
+            step = 1
+        sessions = awake_sessions_for_window(self.window)
+        if not sessions:
+            sublime.status_message("Submarine: no active session")
+            return
+        if len(sessions) == 1:
+            target = sessions[0]
+        else:
+            current = get_active_session(self.window)
+            av = self.window.active_view() if self.window else None
+            if av is not None:
+                hit = get_session_for_view(av)
+                if hit is not None:
+                    current = hit
+            idx = -1
+            if current is not None:
+                for i, s in enumerate(sessions):
+                    if s is current:
+                        idx = i
+                        break
+                    if (
+                        getattr(s, "agent_id", None)
+                        and getattr(s, "agent_id", None)
+                        == getattr(current, "agent_id", None)
+                    ):
+                        idx = i
+                        break
+            if idx < 0:
+                idx = 0 if step > 0 else len(sessions) - 1
+            else:
+                idx = (idx + step) % len(sessions)
+            target = sessions[idx]
+        try:
+            reveal = SubmarineRevealSessionCommand(self.window)
+        except TypeError:
+            reveal = SubmarineRevealSessionCommand.__new__(
+                SubmarineRevealSessionCommand)
+            reveal.window = self.window
+        if reveal._reveal(target, self.window):
+            reveal._land(target)
+            name = (
+                getattr(target, "display_name", None)
+                or getattr(target, "name", None)
+                or "session"
+            )
+            sublime.status_message("Submarine: %s" % name)
+        else:
+            sublime.status_message("Submarine: could not switch session")
+
+
 class SubmarineToggleListCommand(sublime_plugin.WindowCommand):
     """⌘⇧\\ — session list ↔ session view; reveal the target if it is hidden."""
 

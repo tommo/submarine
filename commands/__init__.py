@@ -29,6 +29,7 @@ from .session_cmds import (  # noqa: F401
     SubmarineForkFromCommand,
     SubmarineSessionListCommand,
     SubmarineToggleListCommand,
+    SubmarineCycleSessionCommand,
     SubmarineSessionListRefreshCommand,
     SubmarineSessionListOpenCommand,
 )

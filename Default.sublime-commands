@@ -150,6 +150,16 @@
         "command": "submarine_toggle_list"
     },
     {
+        "caption": "Submarine: Next Active Session (Ctrl+])",
+        "command": "submarine_cycle_session",
+        "args": {"direction": 1}
+    },
+    {
+        "caption": "Submarine: Previous Active Session (Ctrl+[)",
+        "command": "submarine_cycle_session",
+        "args": {"direction": -1}
+    },
+    {
         "caption": "Submarine: Fork Session",
         "command": "submarine_fork"
     },

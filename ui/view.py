@@ -60,6 +60,18 @@ def _keyed_phantom_set(view, key):
     return ps
 
 
+def sleep_banner_anchor(content, peel=None):
+    """Start of the last non-empty line. LAYOUT_BLOCK hangs under that line
+    (the paused hint). Visibility is `_scroll_sleep_banner_into_view`.
+    """
+    text = content or ""
+    stripped = text.rstrip("\n")
+    if not stripped:
+        return 0
+    last_nl = stripped.rfind("\n")
+    return 0 if last_nl < 0 else last_nl + 1
+
+
 def format_sleep_banner_html(text: str, color: str = "#ffcc66",
                              width_px: int = 400) -> str:
     """Paused banner. Minihtml phantoms ignore CSS margin — use padding +
@@ -1111,16 +1123,14 @@ class SubmarineOutputView(FormatHelpers):
             content = view.substr(sublime.Region(0, view.size()))
         except Exception:
             content = ""
-        pt = max(0, view.size() - 1)
+        peel = None
         try:
-            stripped = content.rstrip("\n")
-            if stripped:
-                pt = view.line(len(stripped) - 1).begin()
-            else:
-                pt = 0
+            c = getattr(self, "composer", None)
+            if c is not None and c.is_input_mode():
+                peel = c.peel_start()
         except Exception:
-            last_nl = content.rfind("\n")
-            pt = last_nl if last_nl >= 0 else 0
+            peel = None
+        pt = sleep_banner_anchor(content, peel)
         try:
             if hasattr(view, "erase_phantoms"):
                 view.erase_phantoms(name)
@@ -1129,6 +1139,38 @@ class SubmarineOutputView(FormatHelpers):
                 sublime.Region(pt, pt), html, sublime.LAYOUT_BLOCK)])
         except Exception:
             pass
+        if strong:
+            self._scroll_sleep_banner_into_view(view)
+
+    def _scroll_sleep_banner_into_view(self, view):
+        """LAYOUT_BLOCK height is not in the buffer. Follow-tail stops at the
+        caret, so the paused hint sits off-screen unless we scroll layout."""
+        def _go():
+            if not view:
+                return
+            try:
+                if not view.is_valid():
+                    return
+            except Exception:
+                return
+            try:
+                _w, h = view.layout_extent()
+                vh = float(view.viewport_extent()[1] or 0)
+                vx = float(view.viewport_position()[0] or 0)
+                view.set_viewport_position(
+                    (vx, max(0.0, float(h) - vh)), False)
+            except Exception:
+                try:
+                    view.show(max(0, view.size() - 1))
+                except Exception:
+                    pass
+
+        if sublime is not None:
+            sublime.set_timeout(_go, 0)
+            sublime.set_timeout(_go, 40)
+            sublime.set_timeout(_go, 160)
+        else:
+            _go()
 
     # --- persist stamps (PersistPort-shaped helpers on the view) -----------
 

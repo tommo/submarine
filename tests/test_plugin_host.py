@@ -12,7 +12,7 @@ def _command_names_imported(path):
     with open(path, encoding="utf-8") as f:
         tree = ast.parse(f.read(), filename=path)
     names = set()
-    for node in tree.body:
+    for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom):
             continue
         for alias in node.names:
@@ -101,6 +101,21 @@ class TestPluginHost(unittest.TestCase):
         ).read()
         self.assertIn('"gutter": true', settings)
         self.assertIn('"fold_buttons": true', settings)
+
+    def test_only_one_palette_commands_file(self):
+        """ST find_resources loads every Default.sublime-commands under the
+        package, including nested worktrees — that triples the palette."""
+        hits = []
+        skip = {".git", "__pycache__", ".pytest_cache"}
+        for root, dirs, files in os.walk(ROOT):
+            dirs[:] = [d for d in dirs if d not in skip]
+            if "Default.sublime-commands" in files:
+                hits.append(os.path.relpath(
+                    os.path.join(root, "Default.sublime-commands"), ROOT))
+        self.assertEqual(
+            hits, ["Default.sublime-commands"],
+            "extra palette files duplicate every command: %s" % hits,
+        )
 
     def test_root_reexports_all_command_classes(self):
         # ST only discovers Command subclasses on ROOT plugin modules.

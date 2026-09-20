@@ -310,6 +310,7 @@ class Session:
         self.draft_prompt = ""
         self._composer_allowed = True
         self._input_mode_entered = False
+        self._park_composer_after_init = False
         # Resume after interrupt-in-asking: drop leftover question/permission/plan
         # until the user starts a new query.
         self._resume_drop_asking = bool(resume_id) and not fork
@@ -319,6 +320,7 @@ class Session:
         # backend's resume is cwd-scoped (see `_resume_cwd`).
         self._resume_cwd_resolved = ""
         self._queued_prompts = []  # type: List[str]
+        self._queued_ctx = {}  # type: Dict[str, dict]
         self._inject_pending = False
         self._interrupt_stream = False
         self._interrupting = False
@@ -392,7 +394,7 @@ class Session:
             send=self._send,
             on_apply_claude=self._apply_claude_undo,
             on_apply_grok=self._apply_grok_undo,
-            on_fail=lambda m: self.chrome.set_status(m),
+            on_fail=self._rewind_fail,
             scheduler=scheduler,
             jsonl_finder=self._find_jsonl_path,
         )
@@ -727,7 +729,8 @@ class Session:
             return
 
         self.initialized = True
-        if self.turn.kind == "rewinding":
+        was_rewind = self.turn.kind == "rewinding"
+        if was_rewind:
             self.turn.end_live()
         self.current_tool = None
         self.last_activity = time.time()
@@ -768,6 +771,10 @@ class Session:
             except Exception:
                 pass
         self._enter_input_if_idle()
+        if was_rewind or getattr(self, "_park_composer_after_init", False):
+            self._park_composer_after_init = False
+            self._enter_input_with_draft()
+            self._park_undo_caret()
 
     def _on_notification(self, method, params):
         # type: (str, dict) -> None
@@ -1126,7 +1133,11 @@ class Session:
         except (TypeError, ValueError):
             return
         if 0 <= idx < len(self._queued_prompts):
-            self._queued_prompts.pop(idx)
+            dropped = self._queued_prompts.pop(idx)
+            try:
+                (self._queued_ctx or {}).pop(dropped, None)
+            except Exception:
+                pass
             self._update_queue_phantom()
 
     def queue_prompt(self, prompt):
@@ -1134,6 +1145,7 @@ class Session:
         prompt = (prompt or "").strip()
         if not prompt:
             return
+        self._bind_context_to_queued(prompt)
         self._queued_prompts[:] = merge_subsession_queue(self._queued_prompts, prompt)
         self._update_queue_phantom()
         if self.working and self.client and getattr(self.client, "is_alive", lambda: True)():
@@ -1236,13 +1248,47 @@ class Session:
         self._fire_queued_now(prompt)
         return True
 
+    def _bind_context_to_queued(self, display):
+        # type: (str) -> None
+        """Fold pending 📎 into this queued message and drop the chips."""
+        ctx = getattr(self, "context", None)
+        if ctx is None or not getattr(ctx, "items", None):
+            return
+        try:
+            full, images = ctx.build_prompt(display)
+        except Exception:
+            full, images = display, []
+        try:
+            _taken, names, refs = ctx.take()
+        except Exception:
+            names, refs = [], []
+        bag = getattr(self, "_queued_ctx", None)
+        if bag is None:
+            self._queued_ctx = {}
+            bag = self._queued_ctx
+        bag[display] = {
+            "full": full or display,
+            "images": list(images or []),
+            "names": names,
+            "refs": refs,
+        }
+
     def _fire_queued_now(self, prompt):
         # type: (str) -> None
         self._firing_queue = True
         try:
+            meta = (getattr(self, "_queued_ctx", None) or {}).pop(prompt, None)
             if is_synthetic_turn(prompt):
                 first = prompt.lstrip().split("\n", 1)[0][:60]
                 self.query(prompt, display_prompt="⚙ %s" % first, silent=True)
+            elif meta:
+                self.query(
+                    meta.get("full") or prompt,
+                    display_prompt=prompt,
+                    images=meta.get("images") or None,
+                    context_names=meta.get("names"),
+                    context_refs=meta.get("refs"),
+                )
             else:
                 self.query(prompt, display_prompt=prompt)
         finally:
@@ -1307,6 +1353,9 @@ class Session:
             except Exception:
                 pass
             self.touch_access()
+            self._composer_allowed = True
+            self._enter_input_with_draft()
+            self._park_undo_caret()
             return
         if not self.session_id:
             return
@@ -1316,6 +1365,7 @@ class Session:
         except Exception:
             pass
         self._composer_allowed = False
+        self._park_composer_after_init = True
         self.resume_id = self.session_id
         self.fork = False
         resume_at = self._pending_resume_at
@@ -1464,11 +1514,105 @@ class Session:
     def undo_message(self):
         # type: () -> None
         if not self.session_id:
+            self._rewind_fail("no session to undo")
             return
         if self.working and self.current_tool != "rewinding...":
             return
+        if (self.backend or "") == "grok":
+            client = self.client
+            alive = True
+            try:
+                alive = bool(client and client.is_alive())
+            except Exception:
+                alive = bool(client)
+            if not alive:
+                self._rewind_fail("bridge not ready for rewind")
+                return
+            self.turn.begin_rewind()
+            self.current_tool = "rewinding..."
+            try:
+                self._kick_animation()
+            except Exception:
+                pass
+            self.rewind.grok_undo_async()
+            return
         self.rewind.undo_last(
             self.backend, self.session_id, self.cwd or "", self._pending_resume_at)
+
+    def _rewind_fail(self, message):
+        # type: (str) -> None
+        msg = message or "undo failed"
+        if self.turn.kind == "rewinding":
+            try:
+                self.turn.end_live()
+            except Exception:
+                pass
+            self.current_tool = None
+        try:
+            self.chrome.set_status(msg)
+        except Exception:
+            pass
+        try:
+            import sublime
+            sublime.status_message("Submarine: %s" % msg)
+        except Exception:
+            pass
+
+    def _strip_view_from_last_prompt(self):
+        # type: () -> None
+        """Claude path: drop the last ◎ … ▶ block (sublime-claude)."""
+        self._strip_view_prompt_range(None)
+
+    def _strip_view_from_prompt_index(self, prompt_index):
+        # type: (int) -> None
+        """Grok path: drop ◎ turns from prompt_index through EOF."""
+        self._strip_view_prompt_range(prompt_index)
+
+    def _strip_view_prompt_range(self, prompt_index):
+        # type: (Optional[int]) -> None
+        out = self.output
+        if not out:
+            return
+        try:
+            if out.is_input_mode():
+                out.exit_input_mode(keep_text=False)
+        except Exception:
+            pass
+        view = getattr(out, "view", None)
+        if view is None:
+            return
+        try:
+            import sublime
+            content = view.substr(sublime.Region(0, view.size()))
+        except Exception:
+            try:
+                content = view.substr(None)
+            except Exception:
+                return
+        from .rewind import last_prompt_span, prompt_index_span
+        if prompt_index is None:
+            span = last_prompt_span(content)
+        else:
+            span = prompt_index_span(content, prompt_index)
+        if not span:
+            return
+        start, end = span
+        try:
+            out._replace(start, end, "")
+        except Exception:
+            return
+        try:
+            if getattr(out, "renderer", None) is not None:
+                out.renderer.current = None
+            out.current = None
+        except Exception:
+            pass
+        try:
+            import sublime
+            view.erase_regions("submarine_conversation")
+            view.erase_regions("claude_conversation")
+        except Exception:
+            pass
 
     def get_turns_for_undo(self):
         # type: () -> list
@@ -1477,6 +1621,7 @@ class Session:
 
     def _apply_claude_undo(self, rewind_id, undone_prompt):
         # type: (str, str) -> None
+        self._strip_view_from_last_prompt()
         saved_id = self.session_id
         if self.client:
             try:
@@ -1489,14 +1634,21 @@ class Session:
         self.resume_id = saved_id
         self.fork = False
         self.draft_prompt = undone_prompt or ""
+        self._input_mode_entered = True
+        self._park_composer_after_init = True
         self._pending_resume_at = rewind_id
         self._save_session()
         self.turn.begin_rewind()
         self.current_tool = "rewinding..."
+        try:
+            self._kick_animation()
+        except Exception:
+            pass
         self.start(resume_session_at=rewind_id)
 
     def _apply_grok_undo(self, idx, draft):
         # type: (int, str) -> None
+        self._strip_view_from_prompt_index(idx)
         saved_id = self.session_id
         if self.client:
             try:
@@ -1509,10 +1661,16 @@ class Session:
         self.resume_id = saved_id
         self.fork = False
         self.draft_prompt = draft or ""
+        self._input_mode_entered = True
+        self._park_composer_after_init = True
         self._pending_resume_at = None
         self._save_session()
         self.turn.begin_rewind()
         self.current_tool = "rewinding..."
+        try:
+            self._kick_animation()
+        except Exception:
+            pass
         self.start()
 
     def _find_jsonl_path(self):
@@ -1836,6 +1994,45 @@ class Session:
                 pass
         if not self.working:
             self.scheduler.call_later(100, self._enter_input_if_idle)
+
+    def _park_undo_caret(self):
+        # type: () -> None
+        """After undo reconnect: ◎ + caret in the draft (sublime-claude)."""
+        out = self.output
+        if not out:
+            return
+        try:
+            if not out.is_input_mode():
+                out.enter_input_mode()
+        except Exception:
+            pass
+        draft = getattr(self, "draft_prompt", None) or ""
+        if str(draft).strip():
+            try:
+                out.set_composer_text(draft)
+            except Exception:
+                pass
+        try:
+            set_owner = getattr(out, "set_caret_owner", None)
+            if callable(set_owner):
+                set_owner("draft")
+        except Exception:
+            pass
+        parked = False
+        try:
+            focus = getattr(out, "focus_composer", None)
+            if callable(focus):
+                focus(force_show=True, steal_focus=True, park_at_end=True)
+                parked = True
+        except Exception:
+            parked = False
+        if not parked:
+            try:
+                park = getattr(out, "park_composer_caret", None)
+                if callable(park):
+                    park("end")
+            except Exception:
+                pass
 
     def _enter_input_if_idle(self):
         # type: () -> None
@@ -2282,6 +2479,22 @@ class Session:
         self.plan_mode = bool(on)
         if plan_file:
             self.plan_file = plan_file
+        # ExitPlanMode (approval UI): open the saved plan so it can be read
+        # before Y/N. Approving/rejecting must not open it again.
+        if not on:
+            self._reveal_plan_file(plan_file or self.plan_file)
+
+    def _reveal_plan_file(self, path):
+        # type: (Optional[str]) -> None
+        import os
+        if not path or not os.path.isfile(path):
+            return
+        window = getattr(self, "window", None)
+        try:
+            from core.placement import open_plan_file
+            open_plan_file(window, path)
+        except Exception:
+            pass
 
     def _accept_tool_name(self, name):
         # type: (Optional[str]) -> None

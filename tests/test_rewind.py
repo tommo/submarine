@@ -8,9 +8,34 @@ import unittest
 from core.rewind import (
     find_rewind_point,
     is_synthetic_turn,
+    last_prompt_span,
+    prompt_index_span,
+    prompt_spans,
     read_claude_turns,
     turns_for_undo,
 )
+
+
+class TestLastPromptSpan(unittest.TestCase):
+    def test_cuts_from_the_last_submitted_prompt(self):
+        text = "◎ first ▶\nhello\n◎ second ▶\nworld\n◎ \n"
+        span = last_prompt_span(text)
+        self.assertEqual(span, (text.index("\n◎ second"), len(text)))
+        cut = text[: span[0]]
+        self.assertIn("◎ first ▶", cut)
+        self.assertNotIn("second", cut)
+
+    def test_only_prompt_at_file_start(self):
+        text = "◎ only ▶\nreply"
+        self.assertEqual(last_prompt_span(text), (0, len(text)))
+
+    def test_grok_prompt_index_strips_from_that_turn(self):
+        text = "◎ first ▶\na\n◎ second ▶\nb\n◎ third ▶\nc"
+        self.assertEqual(len(prompt_spans(text)), 3)
+        start, end = prompt_index_span(text, 1)
+        self.assertEqual(end, len(text))
+        self.assertIn("first", text[:start])
+        self.assertNotIn("second", text[:start])
 
 
 class TestSyntheticTags(unittest.TestCase):

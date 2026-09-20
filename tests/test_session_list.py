@@ -441,12 +441,36 @@ class TestStarredConfirm(unittest.TestCase):
         self.assertIn("Delete", self.sublime._submarine_dialogs[0])
         self.assertIn("kept around", self.sublime._submarine_dialogs[0])
 
-    def test_live_starred_row_is_closed_not_deleted(self):
+    def test_current_starred_session_is_not_questioned(self):
+        sl.load_bookmarks = lambda path=None: {"s1"}
+        self.sublime._submarine_dialog = False
+        row = self._row(kind="live", section="CURRENT", bound=True)
+        self.assertTrue(sl.starred_confirm(None, row))
+        self.assertEqual(self.sublime._submarine_dialogs, [])
+
+    def test_active_starred_session_is_not_questioned(self):
+        sl.load_bookmarks = lambda path=None: {"s1"}
+        self.sublime._submarine_dialog = False
+        orig = sl._row_is_current_session
+        sl._row_is_current_session = lambda w, r: True
+        try:
+            row = self._row(kind="live", section="CURRENT", bound=False)
+            self.assertTrue(sl.starred_confirm(None, row))
+            self.assertEqual(self.sublime._submarine_dialogs, [])
+        finally:
+            sl._row_is_current_session = orig
+
+    def test_other_live_starred_session_is_questioned(self):
         sl.load_bookmarks = lambda path=None: {"s1"}
         self.sublime._submarine_dialog = True
-        row = self._row(kind="live", section="CURRENT")
-        self.assertTrue(sl.starred_confirm(None, row))
-        self.assertIn("Close", self.sublime._submarine_dialogs[0])
+        orig = sl._row_is_current_session
+        sl._row_is_current_session = lambda w, r: False
+        try:
+            row = self._row(kind="live", section="CURRENT", bound=False)
+            self.assertTrue(sl.starred_confirm(None, row))
+            self.assertIn("Close", self.sublime._submarine_dialogs[0])
+        finally:
+            sl._row_is_current_session = orig
 
     def test_headless_without_sublime_never_blocks(self):
         sl.sublime = None
@@ -606,14 +630,18 @@ class TestSessionChains(unittest.TestCase):
             (sl.sublime, sl.load_bookmarks, sl.load_bookmark_records,
              sl.save_bookmarks, sl.refresh_session_list) = prev
 
-    def test_starring_keeps_the_caret_on_that_row(self):
+    def test_starring_keeps_the_caret_on_that_session(self):
+        """Pinning reorders the list; the caret must follow the starred row
+        so follow-under-caret does not reveal a neighbor."""
         import json
         from tests.stubs import FakeView, install
         sublime = install()
         prev = (sl.sublime, sl.load_bookmarks, sl.load_bookmark_records,
                 sl.save_bookmarks, sl.refresh_session_list)
-        row = self._rec("sess", "a1", section="HISTORY")
-        row["line"] = 6
+        before = self._rec("sess", "a1", section="HISTORY")
+        before["line"] = 6
+        after = dict(before)
+        after["line"] = 3
 
         class _Sel(list):
             def clear(self):
@@ -634,20 +662,24 @@ class TestSessionChains(unittest.TestCase):
         view._content = "\n" * 12
         view.size = lambda: 12
         view.settings().set(sl.SETTING, True)
-        view.settings().set(sl.ROWS_KEY, json.dumps([row]))
+        view.settings().set(sl.ROWS_KEY, json.dumps([before]))
+        view.settings().set(sl.FOLLOW_GEN_KEY, 1)
         view._sel = _Sel([_R(5)])
         view.sel = lambda: view._sel
         view.rowcol = lambda pt: (5, 0)
         view.text_point = lambda r, c: r
+        view.show = lambda pt: shown.append(pt)
         view.window = lambda: types.SimpleNamespace(folders=lambda: ["/p"])
+        shown = []
         sl.sublime = sublime
         sl.load_bookmarks = lambda project=None: set()
         sl.load_bookmark_records = lambda project=None: {}
         sl.save_bookmarks = lambda *a, **k: True
 
         def _refresh(w):
+            view.settings().set(sl.ROWS_KEY, json.dumps([after]))
             view.sel().clear()
-            view.sel().add(_R(0))
+            view.sel().add(_R(99))
 
         sl.refresh_session_list = _refresh
         try:
@@ -656,7 +688,9 @@ class TestSessionChains(unittest.TestCase):
             cmd.run(None)
             caret = view.sel()[0]
             pt = caret.begin() if hasattr(caret, "begin") else caret.a
-            self.assertEqual(pt, 5)
+            self.assertEqual(pt, 2)
+            self.assertEqual(shown, [2])
+            self.assertGreater(int(view.settings().get(sl.FOLLOW_GEN_KEY)), 1)
         finally:
             (sl.sublime, sl.load_bookmarks, sl.load_bookmark_records,
              sl.save_bookmarks, sl.refresh_session_list) = prev
@@ -1364,11 +1398,12 @@ class TestRenderSessionList(unittest.TestCase):
         kept = sl.drop_empty_sessions(rows, starred={"c"})
         self.assertEqual([r["session_id"] for r in kept], ["b", "c"])
 
-    def test_window_list_hides_empty_live(self):
+    def test_window_list_keeps_empty_live(self):
+        """A brand-new sheet must list in CURRENT so you can switch away."""
         prev = (sl.collect_live, sl.load_saved_sessions, sl.load_bookmarks)
         sl.collect_live = lambda w: [
             {"kind": "live", "session_id": "empty", "view_id": 1,
-             "name": "brand new", "backend": "grok", "status": "sleeping",
+             "name": "brand new", "backend": "grok", "status": "ready",
              "query_count": 0, "same_window": True,
              "last_access": 2, "last_activity": 2},
             {"kind": "live", "session_id": "used", "view_id": 2,
@@ -1382,8 +1417,8 @@ class TestRenderSessionList(unittest.TestCase):
             text, index = sl.build_for_window(_win_for(["/p"]), cols=80)
         finally:
             (sl.collect_live, sl.load_saved_sessions, sl.load_bookmarks) = prev
-        self.assertEqual([r["session_id"] for r in index], ["used"])
-        self.assertNotIn("brand new", text)
+        self.assertEqual([r["session_id"] for r in index], ["empty", "used"])
+        self.assertIn("brand new", text)
         self.assertIn("did work", text)
 
     def test_window_list_keeps_starred_empty_live(self):

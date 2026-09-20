@@ -8,7 +8,11 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.fakes import FakeClient, FakeChrome, make_session
-from ui.view import format_queue_phantom_html, format_sleep_banner_html
+from ui.view import (
+    format_queue_phantom_html,
+    format_sleep_banner_html,
+    sleep_banner_anchor,
+)
 
 
 class TestQueuePhantomHtml(unittest.TestCase):
@@ -47,6 +51,10 @@ class TestSleepBannerHtml(unittest.TestCase):
         self.assertIn("height:10px", html)
         self.assertIn("height:2px", html)
         self.assertNotIn("margin:10px", html)
+
+    def test_banner_anchors_on_the_last_nonempty_line(self):
+        self.assertEqual(sleep_banner_anchor("@done(1s)\n◎ "), 10)
+        self.assertEqual(sleep_banner_anchor("hello\n@done(1s)\n"), 6)
 
     def test_html_is_escaped(self):
         html = format_sleep_banner_html("<script>x</script>")

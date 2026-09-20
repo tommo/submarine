@@ -470,8 +470,29 @@ def open_plan_file(window, path: str):
                 return
         except Exception:
             pass
+        layout = None
         try:
-            apply_view_tab(window, v, TAB_PLAN)
+            layout = _tab_layout(window, TAB_PLAN)
+        except Exception:
+            layout = None
+        if isinstance(layout, dict):
+            try:
+                apply_view_tab(window, v, TAB_PLAN)
+            except Exception:
+                pass
+        else:
+            try:
+                place_in_last_session_split(window, v)
+            except Exception:
+                pass
+        try:
+            g, _i = window.get_view_index(v)
+            if g is not None and g >= 0:
+                window.focus_group(g)
+        except Exception:
+            pass
+        try:
+            window.focus_view(v)
         except Exception:
             pass
         try:

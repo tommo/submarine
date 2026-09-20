@@ -83,6 +83,8 @@ class _Window(object):
         self._project = project
         self._folders = folders if folders is not None else ["/p/eb"]
         self.moves = []
+        self.focused = []
+        self.focused_groups = []
 
     # ── sublime.Window surface used by placement ──
     def settings(self):
@@ -108,6 +110,12 @@ class _Window(object):
 
     def active_group(self):
         return 0
+
+    def focus_group(self, group):
+        self.focused_groups.append(group)
+
+    def focus_view(self, view):
+        self.focused.append(getattr(view, "name", view))
 
     def get_view_index(self, view):
         return self.layout.get(view, (0, 0))
@@ -558,6 +566,8 @@ class TestListAndSessionSlots(_Store):
         self.assertTrue(view.settings().get("submarine_plan"))
         self.assertTrue(view.settings().get("word_wrap"))
         self.assertEqual(w.moves, [("opened", 1, 0)])
+        self.assertEqual(w.focused_groups, [1])
+        self.assertEqual(w.focused, ["opened"])
 
 
 # ── terminal shim: a reload must end terminal sessions, not fork a second PTY ──

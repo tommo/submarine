@@ -5,3 +5,4 @@ __pycache__/
 .sessions.json
 .migration.json
 _research/
+.delta/

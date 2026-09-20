@@ -839,14 +839,12 @@ class ModalUI:
                     f.read(1)
             except Exception:
                 pass
-        win = None
-        if sublime is not None:
+        win = getattr(self.owner, "window", None)
+        if not win and sublime is not None:
             try:
                 win = sublime.active_window()
             except Exception:
                 win = None
-        if not win:
-            win = getattr(self.owner, "window", None)
         if not win:
             return
         from core.placement import open_plan_file

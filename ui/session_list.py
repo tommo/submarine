@@ -920,7 +920,9 @@ def build_for_window(window, cols: int = 0) -> Tuple[str, List[dict]]:
     if window and window.folders():
         cwd = window.folders()[0]
     starred = load_bookmarks(cwd or None)
-    live = drop_empty_sessions(collect_live(window), starred)
+    # Unused live sheets stay in CURRENT so you can switch away; close drops
+    # them. Empty HISTORY rows are still omitted (except starred).
+    live = collect_live(window)
     live_ids = {r["session_id"] for r in live if r.get("session_id")}
     live_agents = {r.get("agent_id") for r in live if r.get("agent_id")}
     saved = load_saved_sessions() if starred else None
@@ -1245,7 +1247,7 @@ def follow_current_under_caret(view, force: bool = False) -> bool:
 
 
 def reveal_row(window, row: dict, keep=None) -> bool:
-    """Show the session sheet but keep keyboard focus on the list."""
+    """Bring that session's sheet on screen; keep keyboard focus on the list."""
     if not row or not window:
         return False
     if keep is None:
@@ -1259,33 +1261,48 @@ def reveal_row(window, row: dict, keep=None) -> bool:
                 if session is not None:
                     hv = HostView.for_window(window)
                     if getattr(session, "torn_off", False) or row.get("torn_off"):
-                        ok = reveal_live_session(window, session, focus=False)
+                        ok = reveal_live_session(
+                            window, session, focus=True, force_sheet=True)
                     elif hv.bound_session(window) is session:
+                        host = hv.host_view(window)
+                        if host is not None:
+                            try:
+                                window.focus_view(host)
+                            except Exception:
+                                pass
+                            try:
+                                from core.placement import apply_session_tab
+                                apply_session_tab(window, host)
+                            except Exception:
+                                pass
                         ok = True
                     else:
-                        ok = bool(hv.attach(window, session, focus=False))
+                        ok = bool(hv.attach(window, session, focus=True))
             if not ok:
-                ok = resume_saved(window, row, focus=False)
-            if keep and keep.is_valid() and not _same_view(window.active_view(), keep):
-                try:
-                    window.focus_view(keep)
-                except Exception:
-                    pass
+                ok = resume_saved(window, row, focus=True)
+            _restore_list_focus(window, keep)
             return ok
     except Exception:
         pass
     if row.get("kind") == "live":
         session = _live_session_for_row(row)
         if session is not None:
-            ok = reveal_live_session(window, session, focus=False)
+            ok = reveal_live_session(
+                window, session, focus=True, force_sheet=True)
     if not ok:
-        ok = resume_saved(window, row, focus=False)
-    if keep and keep.is_valid():
-        try:
-            window.focus_view(keep)
-        except Exception:
-            pass
+        ok = resume_saved(window, row, focus=True)
+    _restore_list_focus(window, keep)
     return ok
+
+
+def _restore_list_focus(window, keep) -> None:
+    if not window or keep is None:
+        return
+    try:
+        if keep.is_valid() and not _same_view(window.active_view(), keep):
+            window.focus_view(keep)
+    except Exception:
+        pass
 
 
 def _live_session_for_row(row: dict):
@@ -1312,11 +1329,32 @@ def _live_session_for_row(row: dict):
     return None
 
 
-def starred_confirm(window, row: dict) -> bool:
-    """Ask before closing out a starred row. True when the action may run.
+def _row_is_current_session(window, row: dict) -> bool:
+    """True when this live row is the window's bound / active session."""
+    if row.get("bound"):
+        return True
+    sid = row.get("session_id")
+    aid = row.get("agent_id")
+    try:
+        from main import get_active_session
+        s = get_active_session(window) if window else None
+    except Exception:
+        s = None
+    if s is None:
+        return False
+    if sid and getattr(s, "session_id", None) == sid:
+        return True
+    if aid and getattr(s, "agent_id", None) == aid:
+        return True
+    return False
 
-    Closing a live session stops it, and closing a HISTORY row drops the resume
-    entry — both worth a question when the row is pinned.
+
+def starred_confirm(window, row: dict) -> bool:
+    """Ask before closing a starred row that is not the current session.
+
+    The bound CURRENT sheet closes like any live session (no extra pin
+    dialog). Starred HISTORY and other live sheets still ask, because
+    that drop is easy to miss.
     """
     if not row or sublime is None:
         return True
@@ -1334,6 +1372,8 @@ def starred_confirm(window, row: dict) -> bool:
     except Exception:
         return True
     if not _pinned(row, starred):
+        return True
+    if row.get("kind") == "live" and _row_is_current_session(window, row):
         return True
     name = one_line_title(row.get("name") or "") or sid
     live = row.get("kind") == "live"
@@ -2003,19 +2043,42 @@ def _list_changed(window, view) -> bool:
     return _stamp_due(view.id())
 
 
-def _restore_caret_row(view, row) -> None:
-    """Keep the caret on the same visual line after a list rewrite."""
-    if view is None:
+def _place_caret_on_session(view, sid, kind=None) -> None:
+    """Put the caret on that session's row after a rewrite (star pin, etc.)."""
+    if view is None or not sid:
         return
     try:
-        last = view.rowcol(max(0, view.size() - 1))[0]
-        row = max(0, min(int(row), int(last)))
-        pt = view.text_point(row, 0)
+        index = json.loads(view.settings().get(ROWS_KEY) or "[]")
+    except Exception:
+        return
+    target = None
+    for rec in index:
+        if rec.get("session_id") != sid:
+            continue
+        if kind and rec.get("kind") != kind:
+            continue
+        target = rec
+        break
+    if target is None:
+        for rec in index:
+            if sid in row_ids(rec):
+                target = rec
+                break
+    if not target:
+        return
+    try:
+        pt = view.text_point(max(0, int(target.get("line") or 1) - 1), 0)
         view.sel().clear()
         if sublime is not None:
             view.sel().add(sublime.Region(pt, pt))
         else:
             view.sel().add(pt)
+        view.show(pt)
+    except Exception:
+        pass
+    try:
+        gen = int(view.settings().get(FOLLOW_GEN_KEY) or 0) + 1
+        view.settings().set(FOLLOW_GEN_KEY, gen)
     except Exception:
         pass
 
@@ -2353,8 +2416,7 @@ class SubmarineSessionListStarCommand(sublime_plugin.TextCommand):
         sel = self.view.sel()
         if not sel:
             return
-        caret_row = self.view.rowcol(sel[0].begin())[0]
-        line = caret_row + 1
+        line = self.view.rowcol(sel[0].begin())[0] + 1
         row = row_at_line(index, line)
         win = self.view.window()
         sid = (row or {}).get("session_id")
@@ -2398,7 +2460,7 @@ class SubmarineSessionListStarCommand(sublime_plugin.TextCommand):
         now = not pinned
         name = (row.get("name") or "").strip() or sid
         refresh_session_list(win)
-        _restore_caret_row(self.view, caret_row)
+        _place_caret_on_session(self.view, sid, kind=row.get("kind"))
         sublime.status_message(
             ("★ Starred: {}" if now else "☆ Unstarred: {}").format(name))
 

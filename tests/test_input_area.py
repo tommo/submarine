@@ -22,6 +22,33 @@ class _SheetOwner(object):
     current = None
 
 
+class TestInterruptLeavesComposerClean(unittest.TestCase):
+    def test_interrupted_banner_does_not_land_in_the_composer(self):
+        """Sticky ◎ was open; interrupt used to paint ◎ nterrupted]*."""
+        from tests.test_headless_render import RecordingView, RecordingWindow
+
+        win = RecordingWindow()
+        out = SubmarineOutputView(win)
+        v = RecordingView(view_id=9)
+        v._window = win
+        out.view = v
+        out.prompt("WTF ARE YOU TALKING ABOUT")
+        out.text("nope")
+        out.enter_input_mode()
+        self.assertTrue(out.is_input_mode())
+        self.assertIn("◎", v._content)
+        out.interrupted()
+        text = v._content
+        self.assertIn("*[interrupted]*", text)
+        self.assertNotIn("◎ nterrupted", text)
+        # Banner, then a fresh ◎ on the following line.
+        banner_at = text.rfind("*[interrupted]*")
+        marker_at = text.rfind("◎")
+        self.assertGreater(marker_at, banner_at)
+        after_banner = text[banner_at:]
+        self.assertRegex(after_banner, r"\*\[interrupted\]\*\s*\n◎")
+
+
 class TestEnterInputWithDraft(unittest.TestCase):
     def _session(self, **kwargs):
         client = kwargs.pop("client", FakeClient())

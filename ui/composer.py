@@ -212,8 +212,10 @@ class Composer:
 
         if view.size() == 0:
             view.run_command("append", {"characters": "\n"})
-        elif view.substr(view.size() - 1) != "\n":
-            view.run_command("append", {"characters": "\n"})
+        else:
+            last = view.substr(_region(max(0, view.size() - 1), view.size()))
+            if last != "\n":
+                view.run_command("append", {"characters": "\n"})
         self._input_area_start = view.size()
         self._append_composer_prefix()
         view.run_command("append", {"characters": self._input_marker})
@@ -920,9 +922,31 @@ class Composer:
     # --- pending context ---------------------------------------------------
 
     def set_pending_context(self, context_items: list) -> None:
-        """Show 📎 chips. Viewless: no-op."""
+        """Show 📎 chips. Viewless: no-op.
+
+        Clearing must not rebuild ◎ — submit leaves the composer open so
+        prompt() can promote in place; the chips are already in the message.
+        """
         view = self.owner.view
         if not view or not view.is_valid():
+            return
+        if not context_items:
+            if self._input_mode:
+                try:
+                    self.refresh_background_hints()
+                except Exception:
+                    pass
+            else:
+                start, end = self._pending_context_region
+                if end > start:
+                    self.owner._replace(start, end, "")
+            self._pending_context_region = (0, 0)
+            self._refresh_context_phantoms([])
+            try:
+                if hasattr(view, "erase_phantoms"):
+                    view.erase_phantoms(keys.PHANTOM_CONTEXT)
+            except Exception:
+                pass
             return
         if self._input_mode:
             input_text = self.get_input_text()
@@ -937,13 +961,6 @@ class Composer:
                     end = view.size()
                     view.sel().clear()
                     view.sel().add(sublime.Region(end, end))
-            return
-        start, end = self._pending_context_region
-        if end > start:
-            self.owner._replace(start, end, "")
-        if not context_items:
-            self._pending_context_region = (0, 0)
-            self._refresh_context_phantoms([])
             return
         text = "\n%s\n" % CONTEXT_PREFIX
         start = view.size()

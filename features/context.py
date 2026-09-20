@@ -297,7 +297,8 @@ class ContextManager:
         self._refresh_display()
 
     def clear(self) -> None:
-        self.items = []
+        # Mutate in place: session.pending_context is an alias of this list.
+        self.items[:] = []
         self._refresh_display()
 
     def remove_at(self, index: int) -> bool:
@@ -317,7 +318,7 @@ class ContextManager:
         items = list(self.items)
         names = [it.name for it in items]
         refs = [it.as_ref() for it in items]
-        self.items = []
+        self.items[:] = []
         self._refresh_display()
         return items, names, refs
 

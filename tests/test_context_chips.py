@@ -250,6 +250,58 @@ class ContextChipTest(unittest.TestCase):
 
     # ── removal re-renders the chips ────────────────────────────────────
 
+    def test_queue_prompt_consumes_pending_context(self):
+        self.s.pending_context = self.ctx.items
+        self.ctx.add_file("/tmp/a.py", "a")
+        self.s.queue_prompt("hello")
+        self.assertEqual(list(self.ctx.items), [])
+        self.assertIn("hello", self.s._queued_ctx)
+        self.assertTrue(self.s._queued_ctx["hello"]["names"])
+
+    def test_take_clears_the_pending_context_alias(self):
+        """session.pending_context aliases ctx.items. Replacing the list
+        left 📎 chips on the next ◎ after submit."""
+        self.s.pending_context = self.ctx.items
+        self.ctx.add_file("/tmp/a.py", "a")
+        self.assertTrue(self.s.pending_context)
+        self.ctx.take()
+        self.assertEqual(list(self.s.pending_context), [])
+        self.assertEqual(list(self.ctx.items), [])
+
+    def test_clear_drops_the_paperclip_from_the_composer(self):
+        from tests.test_headless_render import RecordingView, RecordingWindow
+        from ui.view import SubmarineOutputView
+        from plat.constants import CONTEXT_PREFIX
+
+        win = RecordingWindow()
+        out = SubmarineOutputView(win)
+        v = RecordingView(view_id=4)
+        v._window = win
+        out.view = v
+        self.s.output = out
+        out.prompt("hi")
+        out.enter_input_mode()
+        clip = CONTEXT_PREFIX.strip()
+        # Pretend chips were attached: 📎 sits in the composer prefix.
+        peel = out.composer.peel_start() or 0
+        marker = out.composer._input_start - len(out.composer._input_marker)
+        v._content = (
+            v._content[:peel] + clip + "\n" + v._content[peel:])
+        out.composer._input_start += len(clip) + 1
+        out.composer._pending_context_region = (peel, peel + len(clip) + 1)
+        self.assertIn(clip, v._content)
+        self.ctx.clear()
+        self.assertNotIn(clip, v._content)
+        self.assertIn("◎", v._content)
+
+    def test_clear_empties_the_same_list_object(self):
+        self.s.pending_context = self.ctx.items
+        self.ctx.add_file("/tmp/a.py", "a")
+        alias = self.s.pending_context
+        self.ctx.clear()
+        self.assertIs(alias, self.ctx.items)
+        self.assertEqual(list(alias), [])
+
     def test_removal_repaints_the_chip_row(self):
         """`remove_at` must push the shorter list at the composer, or the
         removed chip stays on screen until something else repaints."""

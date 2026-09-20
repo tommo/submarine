@@ -636,11 +636,30 @@ class TurnRenderer:
         if self.owner.pending_question:
             self.owner.modals.clear_question()
             self.owner.pending_question = None
+        # Peel ◎ first. Rewriting the live turn while the composer is open
+        # paints *[interrupted]* into the input strip (◎ nterrupted]*).
+        c = self.owner.composer
+        was_input = False
+        draft = ""
+        try:
+            was_input = bool(c.is_input_mode()) and not c._question_input_mode
+            if was_input:
+                draft = c.get_input_text()
+                c.exit_input_mode(keep_text=False)
+        except Exception:
+            was_input = False
         if show_banner:
             self.current.events.append("\n\n*[interrupted]*\n")
         self._mark_buffer_dirty("interrupted", (), {"show_banner": show_banner})
         self._struct_dirty = True
         self._render_current()
+        if was_input:
+            try:
+                c.enter_input_mode()
+                if draft:
+                    c.set_composer_text(draft)
+            except Exception:
+                pass
 
     def apply_plan_todos(self, entries):
         """Replace live todos. Viewless: records todos, no buffer write."""

@@ -136,6 +136,47 @@ def read_claude_turns(jsonl_path):
     return turns
 
 
+def last_prompt_span(content):
+    # type: (str) -> Optional[Tuple[int, int]]
+    """Buffer range of the last `◎ … ▶` turn through EOF, or None."""
+    spans = prompt_spans(content)
+    if not spans:
+        return None
+    return spans[-1][0], len(content)
+
+
+def prompt_spans(content):
+    # type: (str) -> List[Tuple[int, int]]
+    """Start offsets of each submitted `◎ … ▶` line (leading newline included)."""
+    import re
+    if not content:
+        return []
+    out = []  # type: List[Tuple[int, int]]
+    for m in re.finditer(r"(?m)^◎ .+? ▶", content):
+        start = m.start()
+        if start > 0 and content[start - 1] == "\n":
+            start -= 1
+        out.append((start, m.end()))
+    return out
+
+
+def prompt_index_span(content, prompt_index):
+    # type: (str, int) -> Optional[Tuple[int, int]]
+    """Range from the given ◎ turn through EOF (sublime-claude Grok strip)."""
+    spans = prompt_spans(content)
+    if not spans:
+        return None
+    try:
+        idx = int(prompt_index)
+    except (TypeError, ValueError):
+        idx = -1
+    if idx < 0 or idx >= len(spans):
+        start = spans[-1][0]
+    else:
+        start = spans[idx][0]
+    return start, len(content)
+
+
 def find_rewind_point(turns, pending_resume_at=None):
     # type: (List[Tuple[str, Optional[str]]], Optional[str]) -> Tuple[Optional[str], str]
     """(uuid, undone_prompt) or (None, ''). Skips synthetic turns."""

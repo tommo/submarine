@@ -102,6 +102,31 @@ class ClipboardHelperTest(unittest.TestCase):
         self.assertIn(result.stdout.strip(), ("no_image", "image/png"))
 
 
+class ClipboardTextTest(unittest.TestCase):
+    def test_system_pasteboard_wins_over_sublime_clipboard(self):
+        from tests.stubs import install
+        install()
+        import commands.text_cmds as tc
+        import sublime
+
+        sublime.get_clipboard = lambda: "sublime-stale-copy"
+        cmd = tc.SubmarinePasteImageCommand.__new__(tc.SubmarinePasteImageCommand)
+        cmd._system_clipboard_text = lambda: "SDL_HINT_TRACKPAD_IS_TOUCH_ONLY"
+        self.assertEqual(
+            cmd._clipboard_text(), "SDL_HINT_TRACKPAD_IS_TOUCH_ONLY")
+
+    def test_falls_back_to_sublime_when_the_pasteboard_is_empty(self):
+        from tests.stubs import install
+        install()
+        import commands.text_cmds as tc
+        import sublime
+
+        sublime.get_clipboard = lambda: "from-st"
+        cmd = tc.SubmarinePasteImageCommand.__new__(tc.SubmarinePasteImageCommand)
+        cmd._system_clipboard_text = lambda: ""
+        self.assertEqual(cmd._clipboard_text(), "from-st")
+
+
 class ContextImageTest(unittest.TestCase):
     def _session_with_image(self):
         s = make_session(client=FakeClient(), initialized=True, backend="claude")

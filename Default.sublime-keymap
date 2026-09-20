@@ -13,6 +13,24 @@
         "command": "submarine_toggle_list"
     },
     {
+        "keys": ["ctrl+]"],
+        "command": "submarine_cycle_session",
+        "args": {"direction": 1},
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_session_list", "operator": "not_equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["ctrl+["],
+        "command": "submarine_cycle_session",
+        "args": {"direction": -1},
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_session_list", "operator": "not_equal", "operand": true }
+        ]
+    },
+    {
         "keys": ["super+shift+escape"],
         "command": "submarine_interrupt"
     },
