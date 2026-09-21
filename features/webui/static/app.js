@@ -39,6 +39,7 @@ const state = {
   timer: null,
   lastState: null,
   modal: null,        // the pending modal body from /api/pending, if any
+  editsKey: null,     // what the Edits pane was last drawn from
   editor: undefined,  // CodeMirror API from editor.js, null when unavailable
   sheet: null,        // the mounted sheet (CodeMirror or <pre>)
   composer: null,     // the CodeMirror composer, when the editor loaded
@@ -212,6 +213,7 @@ function openSession(ref, opts) {
   }
   renderHead(selectedRow());
   unmountSheet();
+  state.editsKey = null;
   $('pane').innerHTML = '<p class="empty">loading…</p>';
   $('pane').scrollTop = 0;
   setSource('');
@@ -701,7 +703,8 @@ function renderEdits(body) {
     if (parts.length > 3) short = '…/' + parts.slice(-2).join('/');
     // The diff's ---/+++ header repeats the path already shown; drop it.
     const diff = String(e.diff || '').split('\n').filter((l, i) => !(i < 2 && /^(---|\+\+\+) /.test(l))).join('\n');
-    html += '<details class="edit" data-path="' + esc(path) + '" data-line="' + esc(e.line || '') + '">' +
+    html += '<details class="edit" data-key="' + esc((e.id || '') + '|' + (e.i !== undefined ? e.i : '') + '|' + path + '|' + (e.line || '')) +
+      '" data-path="' + esc(path) + '" data-line="' + esc(e.line || '') + '">' +
       '<summary><span class="sm-tool-done">✔</span> <span class="etool">' + esc(e.tool || '?') + '</span> ' +
         '<span class="path" title="' + esc(path) + '">' + esc(short) + (e.line ? '<span class="eline">:' + esc(e.line) + '</span>' : '') + '</span>' +
         '<button type="button" class="btn tiny eopen" title="Open in Sublime at this line">open</button>' +
@@ -770,8 +773,20 @@ async function refreshPane(opts) {
     env = await api('/api/view?' + ref + '&mode=edits&limit=50');
     if (seq !== paneSeq) return;
     if (env.ok !== true) { paneHtml('<p class="empty">' + esc(env.error || 'cannot read this session') + '</p>'); showError(env); return; }
-    paneHtml(renderEdits(env.data || {}));
-    wireEdits();
+    // The pane is polled while a turn runs: only rewrite when the edits
+    // changed, and keep the cards the user unfolded (and the scroll) across
+    // that rewrite — a re-render must not fold everything back up.
+    const key = JSON.stringify((env.data || {}).edits || []);
+    if (state.editsKey !== key || !$('pane').querySelector('.edits-head')) {
+      const pane = $('pane');
+      const open = new Set([...pane.querySelectorAll('details.edit[open]')].map((d) => d.getAttribute('data-key')));
+      const top = pane.scrollTop;
+      paneHtml(renderEdits(env.data || {}));
+      for (const d of pane.querySelectorAll('details.edit')) if (open.has(d.getAttribute('data-key'))) d.open = true;
+      pane.scrollTop = top;
+      wireEdits();
+      state.editsKey = key;
+    }
     setSource('');
     syncToolbar();
     return;
@@ -1311,6 +1326,7 @@ function wire() {
       for (const other of document.querySelectorAll('.tab')) other.classList.remove('on');
       tab.classList.add('on');
       state.mode = tab.getAttribute('data-mode');
+      state.editsKey = null;
       clearError();
       refreshPane();
     });
