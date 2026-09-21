@@ -1140,14 +1140,14 @@ class SubmarineSessionListCommand(sublime_plugin.WindowCommand):
         show_session_list(self.window)
 
 
-def awake_sessions_for_window(window):
-    """Live, non-sleeping sessions that belong to this window."""
+def cycle_sessions_for_window(window):
+    """The sessions Ctrl+] / Ctrl+[ step through: every current session of
+    this window, sleeping ones included — a sleeping sheet is still a place
+    to go back to (revealing it does not wake it). Quick agents stay out."""
     from core.registry import default_registry
     out = []
     for s in default_registry.iter_sessions():
         if getattr(s, "quick_mode", False):
-            continue
-        if getattr(s, "is_sleeping", False):
             continue
         if window is not None and not _session_in_window(s, window):
             continue
@@ -1157,6 +1157,10 @@ def awake_sessions_for_window(window):
         str(getattr(sess, "agent_id", "") or ""),
     ))
     return out
+
+
+# Older name: the cycle used to skip sleeping sessions.
+awake_sessions_for_window = cycle_sessions_for_window
 
 
 def _session_in_window(session, window):
@@ -1188,7 +1192,7 @@ def _session_in_window(session, window):
 
 
 class SubmarineCycleSessionCommand(sublime_plugin.WindowCommand):
-    """Ctrl+] / Ctrl+[ — next / previous awake session in this window."""
+    """Ctrl+] / Ctrl+[ — next / previous session in this window (sleeping too)."""
 
     def run(self, direction=1):
         try:
@@ -1197,9 +1201,9 @@ class SubmarineCycleSessionCommand(sublime_plugin.WindowCommand):
             step = 1
         if step == 0:
             step = 1
-        sessions = awake_sessions_for_window(self.window)
+        sessions = cycle_sessions_for_window(self.window)
         if not sessions:
-            sublime.status_message("Submarine: no active session")
+            sublime.status_message("Submarine: no session in this window")
             return
         if len(sessions) == 1:
             target = sessions[0]

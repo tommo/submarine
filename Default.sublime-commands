@@ -154,12 +154,12 @@
         "command": "submarine_toggle_list"
     },
     {
-        "caption": "Submarine: Next Active Session (Ctrl+])",
+        "caption": "Submarine: Next Session (Ctrl+])",
         "command": "submarine_cycle_session",
         "args": {"direction": 1}
     },
     {
-        "caption": "Submarine: Previous Active Session (Ctrl+[)",
+        "caption": "Submarine: Previous Session (Ctrl+[)",
         "command": "submarine_cycle_session",
         "args": {"direction": -1}
     },

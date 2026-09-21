@@ -1,4 +1,4 @@
-"""Ctrl+] / Ctrl+[ cycle awake (non-sleeping) sessions in this window."""
+"""Ctrl+] / Ctrl+[ cycle every current session in this window, sleeping too."""
 from __future__ import annotations
 
 import json
@@ -60,7 +60,7 @@ class AwakeSessionsTest(unittest.TestCase):
     def tearDown(self):
         self.reg.clear()
 
-    def test_skips_sleeping_and_other_windows(self):
+    def test_includes_sleeping_and_skips_other_windows(self):
         import commands.session_cmds as sc
 
         other = FakeWindow()
@@ -81,12 +81,11 @@ class AwakeSessionsTest(unittest.TestCase):
         for s in (live, asleep, foreign):
             self.reg.register_session(s)
         ids = [getattr(s, "session_id", None)
-               for s in sc.awake_sessions_for_window(self.win)]
-        self.assertEqual(ids, ["live"])
-        self.assertNotIn("sleep", ids)
+               for s in sc.cycle_sessions_for_window(self.win)]
+        self.assertEqual(ids, ["sleep", "live"])   # most recently touched first
         self.assertNotIn("foreign", ids)
 
-    def test_cycle_wraps_to_the_other_awake_session(self):
+    def test_cycle_wraps_to_the_other_session(self):
         import commands.session_cmds as sc
 
         a = make_session(
@@ -103,7 +102,7 @@ class AwakeSessionsTest(unittest.TestCase):
         b.last_access = 1
         self.reg.register_session(a)
         self.reg.register_session(b)
-        sessions = sc.awake_sessions_for_window(self.win)
+        sessions = sc.cycle_sessions_for_window(self.win)
         self.assertEqual([s.session_id for s in sessions], ["a", "b"])
         revealed = []
         current = [a]
