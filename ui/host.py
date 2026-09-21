@@ -308,7 +308,14 @@ class HostView(object):
 
         current = for_view(host)
         if current is not None and current is session:
-            self._finish_bound(window, session, host, focus=focus)
+            already = False
+            try:
+                av = window.active_view()
+                already = av is not None and av.id() == host.id()
+            except Exception:
+                already = False
+            if focus and not already:
+                self._finish_bound(window, session, host, focus=True)
             return True
 
         if current is not None:
@@ -440,18 +447,98 @@ class HostView(object):
         self._refresh_list()
         return bool(ok)
 
+    def handoff_host_on_dismiss(self, window, session):
+        # type: (Any, Any) -> bool
+        """Keep the host sheet when dismissing the bound session.
+
+        Closing Codex (or any bound session) must not destroy the session
+        view if another live session still needs it. Detach first so
+        a later teardown/idle cannot paint onto the host, then attach the next.
+        Returns True if the sheet must stay (a peer was found). Never
+        stops the outgoing session; the caller decides that.
+        """
+        if not is_single_mode() or session is None:
+            return False
+        window = window or self.window
+        host = self._view
+        if host is None:
+            host = self._find_existing(window)
+        if host is None:
+            return False
+        try:
+            if not host.is_valid():
+                return False
+        except Exception:
+            return False
+        bound = self.bound_session(window)
+        if bound is not None and bound is not session:
+            # Only the session painted on the host may hand it off. A
+            # viewless (backgrounded) peer being dismissed must leave the
+            # host on whatever the user is looking at.
+            try:
+                ov = session.output.view if session.output else None
+                if ov is None or ov.id() != host.id():
+                    return False
+            except Exception:
+                return False
+        nxt = self._pick_next_for_host(window, session)
+        if nxt is None:
+            return False
+        # Unused (query_count 0) peers still count. Empty is a list/history
+        # filter, not a reason to destroy the host.
+        # Peel the outgoing session off the host before any teardown paint.
+        self._detach_session(session)
+        try:
+            session.backgrounded = True
+        except Exception:
+            pass
+        try:
+            self.attach(window, nxt, focus=True)
+        except Exception:
+            pass
+        return True
+
+    def _session_fits_window(self, session, window):
+        # type: (Any, Any) -> bool
+        if session is None:
+            return False
+        if window is None:
+            return True
+        try:
+            from ui.session_list import belongs_to_window
+            if belongs_to_window(session, window):
+                return True
+        except Exception:
+            pass
+        want = _window_key(window)
+        sw = getattr(session, "window", None)
+        if sw is None:
+            try:
+                ov = session.output.view if session.output else None
+                if ov is not None:
+                    sw = ov.window()
+            except Exception:
+                sw = None
+        if sw is None:
+            # Backgrounded/unused sheets often drop window. Keep them as
+            # handoff candidates rather than closing the host.
+            return True
+        return _window_key(sw) == want
+
     def _pick_next_for_host(self, window, exclude):
         # type: (Any, Any) -> Any
-        from core.registry import sessions_for_window
+        from core.registry import default_registry
         from ui.session_list import access_ts
 
         candidates = []
-        for s in sessions_for_window(window):
+        for s in default_registry.iter_sessions():
             if s is exclude:
                 continue
             if getattr(s, "quick_mode", False):
                 continue
             if getattr(s, "torn_off", False):
+                continue
+            if not self._session_fits_window(s, window):
                 continue
             candidates.append(s)
         if not candidates:
@@ -493,8 +580,36 @@ class HostView(object):
         if aid:
             unbind(aid)
         if output is not None:
+            # The modal keymap stamps belong to the outgoing session; the
+            # next one re-stamps its own in _paint_bound.
+            self._clear_modal_stamps(getattr(output, "view", None))
             try:
                 output.view = None
+            except Exception:
+                pass
+
+    @staticmethod
+    def _clear_modal_stamps(view):
+        # type: (Any) -> None
+        if view is None:
+            return
+        try:
+            if not view.is_valid():
+                return
+            st = view.settings()
+            keys.erase_setting(st, keys.HAS_QUESTION)
+            keys.erase_setting(st, keys.HAS_MODAL)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _sync_modal_stamps(output):
+        # type: (Any) -> None
+        modals = getattr(output, "modals", None)
+        sync = getattr(modals, "_sync_modal_settings", None)
+        if callable(sync):
+            try:
+                sync()
             except Exception:
                 pass
 
@@ -534,6 +649,9 @@ class HostView(object):
                     restore(snap)
                 except Exception:
                     pass
+        # A question/permission that arrived while viewless was never
+        # stamped; stamp it now so the 1-4/Enter/Esc keymaps fire.
+        self._sync_modal_stamps(output)
         persist = getattr(session, "_persist_view_identity", None)
         name = getattr(session, "display_name", None) or getattr(session, "name", None)
 

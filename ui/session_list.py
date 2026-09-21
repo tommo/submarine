@@ -594,6 +594,61 @@ def collapse_chains(rows: List[dict], starred: Optional[set] = None,
     return out
 
 
+_PERSISTED_CURRENT_STATES = ("open", "sleeping")
+
+
+def collect_persisted_current(window, live_ids=None, live_agents=None,
+                              saved=None) -> List[dict]:
+    """Saved open/sleeping rows that are not live yet — still CURRENT.
+
+    After a restart the registry only has sheets Sublime restored. Everyone
+    else who was CURRENT is in `.sessions.json` with state open/sleeping.
+    """
+    live_ids = set(live_ids or ())
+    live_agents = set(live_agents or ())
+    cwd = window_project(window)
+    if saved is None:
+        saved = load_saved_sessions()
+    out = []
+    for s in saved or ():
+        sid = s.get("session_id")
+        if not sid or sid in live_ids:
+            continue
+        aid = s.get("agent_id")
+        if aid and aid in live_agents:
+            continue
+        state = (s.get("state") or "closed").lower()
+        if state not in _PERSISTED_CURRENT_STATES:
+            continue
+        try:
+            q = int(s.get("query_count") or 0)
+        except (TypeError, ValueError):
+            q = 0
+        if q <= 0 and not str(s.get("first_prompt") or "").strip():
+            continue
+        proj = (s.get("project") or "").rstrip("/")
+        if cwd and proj and proj != cwd:
+            continue
+        out.append({
+            "kind": "live",
+            "session_id": sid,
+            "agent_id": aid,
+            "parent_agent_id": s.get("parent_agent_id"),
+            "view_id": None,
+            "name": saved_title(s),
+            "backend": s.get("backend") or "claude",
+            "model": s.get("model"),
+            "status": "sleeping",
+            "query_count": q,
+            "same_window": True,
+            "last_activity": s.get("last_activity"),
+            "last_access": access_ts(s),
+            "bound": False,
+            "torn_off": False,
+        })
+    return out
+
+
 def collect_history(live_ids: set, cwd: str,
                     live_agents: Optional[set] = None,
                     saved: Optional[List[dict]] = None
@@ -671,7 +726,11 @@ def _stamp_of(r: dict) -> str:
 
 
 def is_empty_session_row(r: dict) -> bool:
-    """Unused: never sent a turn. Don't keep these in the list."""
+    """HISTORY-only: never sent a turn. Live CURRENT still lists these.
+
+    query_count <= 0 is the check. Do not use this to decide whether the
+    host sheet can close — unused live sessions are still handoff targets.
+    """
     try:
         return int((r or {}).get("query_count") or 0) <= 0
     except (TypeError, ValueError):
@@ -925,7 +984,13 @@ def build_for_window(window, cols: int = 0) -> Tuple[str, List[dict]]:
     live = collect_live(window)
     live_ids = {r["session_id"] for r in live if r.get("session_id")}
     live_agents = {r.get("agent_id") for r in live if r.get("agent_id")}
-    saved = load_saved_sessions() if starred else None
+    saved = load_saved_sessions()
+    persisted = collect_persisted_current(
+        window, live_ids, live_agents, saved=saved)
+    if persisted:
+        live = list(live) + persisted
+        live_ids |= {r["session_id"] for r in persisted if r.get("session_id")}
+        live_agents |= {r.get("agent_id") for r in persisted if r.get("agent_id")}
     if saved:
         # Only pins need this: a live row's other incarnations matter to a star.
         tag_live_chains(live, saved)
@@ -1045,12 +1110,18 @@ def reveal_live_session(window, session, focus: bool = True,
         force_sheet = True
     view = session.output.view if session.output else None
     if view and view.is_valid():
+        win = view.window() or window
+        try:
+            av = win.active_view() if win else None
+            if av is not None and av.id() == view.id():
+                return True
+        except Exception:
+            pass
         try:
             from ui import idle
             idle.clear(view)   # the sheet belongs to this session again
         except Exception:
             pass
-        win = view.window() or window
         prev = None if focus else win.active_view()
         win.focus_view(view)
         if focus:
@@ -1261,20 +1332,15 @@ def reveal_row(window, row: dict, keep=None) -> bool:
                 if session is not None:
                     hv = HostView.for_window(window)
                     if getattr(session, "torn_off", False) or row.get("torn_off"):
+                        # A torn-off sheet may be a tab behind another file in
+                        # its group; a valid view is not a visible one.
+                        # reveal_live_session focuses it (no-op if already
+                        # active) or recreates it when the view is gone.
                         ok = reveal_live_session(
                             window, session, focus=True, force_sheet=True)
                     elif hv.bound_session(window) is session:
-                        host = hv.host_view(window)
-                        if host is not None:
-                            try:
-                                window.focus_view(host)
-                            except Exception:
-                                pass
-                            try:
-                                from core.placement import apply_session_tab
-                                apply_session_tab(window, host)
-                            except Exception:
-                                pass
+                        # Already on the host. Do not focus_view / retab /
+                        # scroll — that "reveals" a sheet that is already up.
                         ok = True
                     else:
                         ok = bool(hv.attach(window, session, focus=True))
@@ -1349,6 +1415,23 @@ def _row_is_current_session(window, row: dict) -> bool:
     return False
 
 
+def close_confirm(window, row: dict) -> bool:
+    """Ask before Cmd+W close in the Sessions list (every row)."""
+    if not row:
+        return False
+    if sublime is None:
+        return True
+    name = one_line_title(row.get("name") or "") or row.get("session_id") or "session"
+    live = row.get("kind") == "live"
+    verb = "Close" if live else "Delete"
+    what = "this session" if live else "this session from the list"
+    msg = "%s %s?\n\n%s" % (verb, what, name)
+    try:
+        return bool(sublime.ok_cancel_dialog(msg, verb))
+    except Exception:
+        return True
+
+
 def starred_confirm(window, row: dict) -> bool:
     """Ask before closing a starred row that is not the current session.
 
@@ -1412,27 +1495,48 @@ def close_row(window, row: dict, remove: Optional[bool] = None) -> bool:
             host_bound = False
             try:
                 from ui.host import HostView, is_single_mode
-                if is_single_mode():
-                    hv = HostView.for_window(window)
-                    hv_view = hv._view
-                    if hv_view is not None:
-                        try:
-                            from core.registry import for_view
-                            if for_view(hv_view) is session:
-                                host_bound = True
-                            elif view is not None and view.id() == hv_view.id():
-                                host_bound = True
-                        except Exception:
-                            host_bound = False
+                # Single-mode non-torn-off sessions share the host. Do not
+                # require hv._view to already be cached — a miss used to
+                # view.close() the host. Unused (query_count 0) still counts.
+                if is_single_mode() and not getattr(session, "torn_off", False):
+                    host_bound = True
             except Exception:
                 host_bound = False
+            if host_bound:
+                try:
+                    from core.registry import default_registry
+                    from ui.host import HostView
+                    kept = HostView.for_window(window).handoff_host_on_dismiss(
+                        window, session)
+                    try:
+                        session.stop()
+                    except Exception:
+                        pass
+                    if not kept:
+                        HostView.for_window(window).detach_current(window)
+                    aid = getattr(session, "agent_id", None)
+                    if aid:
+                        default_registry.by_agent.pop(aid, None)
+                except Exception:
+                    try:
+                        session.stop()
+                    except Exception:
+                        pass
+            else:
+                try:
+                    session.stop()
+                except Exception:
+                    pass
+                try:
+                    if view:
+                        unregister_view(view.id())
+                    if view and view.is_valid():
+                        from .keys import SOFT_CLOSE, write_setting
+                        write_setting(view.settings(), SOFT_CLOSE, True)
+                        view.close()
+                except Exception:
+                    pass
             try:
-                session.stop()
-            except Exception:
-                pass
-            try:
-                if view:
-                    unregister_view(view.id())
                 aid = getattr(session, "agent_id", None)
                 bg = getattr(sublime, "_submarine_background", None) or getattr(
                     sublime, "_claude_background", None)
@@ -1440,20 +1544,12 @@ def close_row(window, row: dict, remove: Optional[bool] = None) -> bool:
                     bg.pop(aid, None)
             except Exception:
                 pass
-            if host_bound:
-                try:
-                    from ui.host import HostView
-                    HostView.for_window(window).detach_current(window)
-                except Exception:
-                    pass
-            elif view:
-                try:
-                    if view.is_valid():
-                        from .keys import SOFT_CLOSE, write_setting
-                        write_setting(view.settings(), SOFT_CLOSE, True)
-                        view.close()
-                except Exception:
-                    pass
+        elif sid:
+            try:
+                from core.records import SessionStore
+                SessionStore().persist_state(sid, "closed")
+            except Exception:
+                pass
         if remove and sid:
             _forget_row_rows(row, window)
         return True
@@ -2255,11 +2351,11 @@ class SubmarineSessionListSetTextCommand(sublime_plugin.TextCommand):
 class SubmarineSessionListCloseCommand(sublime_plugin.TextCommand):
     """Delete/close the session under the caret in the Sessions list.
 
-    A starred row asks first (`starred_confirm`); anything else goes straight
-    through.
+    Delete/Backspace: starred rows ask first (`starred_confirm`).
+    Cmd+W (`confirm=True`): always ask, then close the row — not the list view.
     """
 
-    def run(self, edit):
+    def run(self, edit, confirm=False):
         import json
         if not self.view.settings().get(SETTING):
             return
@@ -2278,7 +2374,8 @@ class SubmarineSessionListCloseCommand(sublime_plugin.TextCommand):
             return
         name = (row.get("name") or "").strip() or "session"
         list_view = self.view
-        if starred_confirm(win, row) and close_row(win, row):
+        ok = close_confirm(win, row) if confirm else starred_confirm(win, row)
+        if ok and close_row(win, row):
             refresh_session_list(win)
 
             def _stay(_v=list_view, _win=win, _line=line):

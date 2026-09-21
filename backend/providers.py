@@ -159,11 +159,49 @@ def dynamic_env(settings: dict, name: str) -> Tuple[Dict[str, str], Dict[str, st
     return overwrite, defaults
 
 
+_ALIAS_CONTEXT_KEYS = {
+    "opus": "opus_context_tokens",
+    "sonnet": "sonnet_context_tokens",
+    "haiku": "haiku_context_tokens",
+}
+
+
+def context_tokens_for_provider(cfg, model):
+    # type: (Optional[dict], Optional[str]) -> Optional[int]
+    """Per-alias / per-id context window from custom_providers cfg."""
+    cfg = cfg or {}
+    model = (model or "").strip()
+    if not model:
+        return None
+
+    def _int(val):
+        try:
+            n = int(val)
+        except (TypeError, ValueError):
+            return None
+        return n if n > 0 else None
+
+    key = _ALIAS_CONTEXT_KEYS.get(model)
+    if key:
+        n = _int(cfg.get(key))
+        if n:
+            return n
+    for alias, key in _ALIAS_CONTEXT_KEYS.items():
+        mid = (cfg.get("%s_model" % alias) or "").strip()
+        if mid and model == mid:
+            n = _int(cfg.get(key))
+            if n:
+                return n
+    return None
+
+
 def provider_spec(name: str, cfg: dict) -> "BackendSpec":
     """Build a BackendSpec for a user-defined Anthropic-compatible provider."""
     from .specs import BackendSpec
 
     label = (cfg.get("label") or name).strip() or name
+    if not label.upper().startswith("(CC)"):
+        label = "(CC) %s" % label
     abbrev = (cfg.get("abbrev") or name[:2].upper()).strip() or name[:2].upper()
     opus = (cfg.get("opus_model") or "").strip()
     sonnet = (cfg.get("sonnet_model") or "").strip()

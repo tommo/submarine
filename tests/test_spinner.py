@@ -118,18 +118,15 @@ class SpinnerTest(unittest.TestCase):
         self.assertEqual(out.spinner_frames, [])
         self.assertEqual(s.scheduler.pending, [])
 
-    def test_spinner_does_not_rewrite_while_a_question_is_up(self):
-        """AskUserQuestion lives at the tail. Busy-mark ticks must not
-        `_render_current` or the question reflows (wrap, caret, checks)."""
+    def test_spinner_does_not_full_render(self):
+        """Busy-mark ticks must not `_render_current`. Patch the glyph only."""
         from ui.renderer import TurnRenderer
         from ui.models import Conversation
+        from tests.test_single_view import RecordingView, _Region
 
         rendered = []
         titles = []
-
-        class _View(object):
-            def is_valid(self):
-                return True
+        patches = []
 
         class _Sheet(object):
             def is_following_tail(self, slack=120):
@@ -140,22 +137,40 @@ class SpinnerTest(unittest.TestCase):
 
         class _Owner(object):
             def __init__(self):
-                self.view = _View()
+                self.view = RecordingView()
+                self.view._content = "◎ hi ▶\n  ◇\n"
+                from ui import keys
+                self.view._regions = {keys.CONV_REGION: [
+                    _Region(0, len(self.view._content))]}
                 self.sheet = _Sheet()
-                self._modal = True
+                self._modal = False
+                self.composer = None
+                self.modals = None
 
             def has_turn_modal_ui(self):
                 return self._modal
+
+            def _replace(self, start, end, text):
+                patches.append((start, end, text))
+                v = self.view
+                v._content = v._content[:start] + text + v._content[end:]
+                return start + len(text)
 
         owner = _Owner()
         r = TurnRenderer(owner)
         r._render_current = lambda auto_scroll=True: rendered.append(auto_scroll)
         r.current = Conversation(prompt="q", working=True)
+        r._spinner_frames = SPINNER_WAITING
+        r._spinner_frame = 0
         r.advance_spinner()
         self.assertEqual(rendered, [])
-        owner._modal = False
+        self.assertTrue(patches)
+        self.assertIn(patches[-1][2].strip(), list(SPINNER_WAITING))
+        owner._modal = True
+        n = len(patches)
         r.advance_spinner()
-        self.assertEqual(rendered, [False])
+        self.assertEqual(rendered, [])
+        self.assertEqual(len(patches), n)
 
     def test_a_viewless_sheet_still_counts_as_chrome_only(self):
         """The renderer guards on the view; the driver must not care, so a

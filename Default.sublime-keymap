@@ -174,7 +174,7 @@
         "args": { "key": "1" },
         "context": [
             { "key": "setting.submarine_output", "operator": "equal", "operand": true },
-            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+            { "key": "setting.submarine_has_question", "operator": "equal", "operand": true }
         ]
     },
     {
@@ -183,7 +183,7 @@
         "args": { "key": "2" },
         "context": [
             { "key": "setting.submarine_output", "operator": "equal", "operand": true },
-            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+            { "key": "setting.submarine_has_question", "operator": "equal", "operand": true }
         ]
     },
     {
@@ -192,7 +192,7 @@
         "args": { "key": "3" },
         "context": [
             { "key": "setting.submarine_output", "operator": "equal", "operand": true },
-            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+            { "key": "setting.submarine_has_question", "operator": "equal", "operand": true }
         ]
     },
     {
@@ -201,7 +201,7 @@
         "args": { "key": "4" },
         "context": [
             { "key": "setting.submarine_output", "operator": "equal", "operand": true },
-            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+            { "key": "setting.submarine_has_question", "operator": "equal", "operand": true }
         ]
     },
     {
@@ -210,7 +210,7 @@
         "args": { "key": "o" },
         "context": [
             { "key": "setting.submarine_output", "operator": "equal", "operand": true },
-            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+            { "key": "setting.submarine_has_question", "operator": "equal", "operand": true }
         ]
     },
     {
@@ -219,7 +219,7 @@
         "args": { "key": "enter" },
         "context": [
             { "key": "setting.submarine_output", "operator": "equal", "operand": true },
-            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
+            { "key": "setting.submarine_has_question", "operator": "equal", "operand": true }
         ]
     },
     // Submit on Enter (default mode: submit_with_modifier=false)
@@ -328,17 +328,17 @@
         ]
     },
     {
-        // Super+K clear chat — works in history *and* sticky ◎ draft.
+        // Super+K: clear older rounds, keep last turn (also from draft).
         "keys": ["super+k"],
-        "command": "submarine_clear",
+        "command": "submarine_clear_keep_last",
         "context": [
             { "key": "setting.submarine_output", "operator": "equal", "operand": true }
         ]
     },
     {
-        // Super+Shift+K: clear older rounds, keep last turn (also from draft).
+        // Super+Shift+K: full clear — works in history *and* sticky ◎ draft.
         "keys": ["super+shift+k"],
-        "command": "submarine_clear_keep_last",
+        "command": "submarine_clear",
         "context": [
             { "key": "setting.submarine_output", "operator": "equal", "operand": true }
         ]
@@ -366,6 +366,14 @@
     {
         "keys": ["alt+escape"],
         "command": "submarine_interrupt"
+    },
+    {
+        "keys": ["escape"],
+        "command": "submarine_interrupt",
+        "context": [
+            { "key": "setting.submarine_output", "operator": "equal", "operand": true },
+            { "key": "setting.submarine_has_modal", "operator": "equal", "operand": true }
+        ]
     },
     {
         "keys": ["f"],
@@ -436,6 +444,14 @@
     {
         "keys": ["backspace"],
         "command": "submarine_session_list_close",
+        "context": [
+            { "key": "setting.submarine_session_list", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["super+w"],
+        "command": "submarine_session_list_close",
+        "args": {"confirm": true},
         "context": [
             { "key": "setting.submarine_session_list", "operator": "equal", "operand": true }
         ]

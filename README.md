@@ -151,8 +151,8 @@ All commands available via Command Palette (`Cmd+Shift+P`): type "Submarine"
 | Rename Session... | - | Name the current session |
 | Stop Session | - | Disconnect and stop |
 | Toggle Output | - | Show/hide output view |
-| Clear Output | `Cmd+Ctrl+Alt+C` | Clear output view (`Cmd+K` in the sheet) |
-| Clear Output (Keep Last Round) | `Cmd+Shift+K` | Clear older rounds, keep last turn |
+| Clear Output | `Cmd+Ctrl+Alt+C` | Clear output view (`Cmd+Shift+K` in the sheet) |
+| Clear Output (Keep Last Round) | `Cmd+K` | Clear older rounds, keep last turn |
 | Undo Message | `Cmd+Shift+Z` | Rewind last conversation turn (caret in history) |
 | Search Sessions | - | Search all sessions by title |
 | Select Effort | - | Set reasoning effort |
@@ -197,8 +197,8 @@ prompts directly:
   newline
 - **Alt+Enter** — Queue while busy (idle = normal submit)
 - **@** — Open context menu (browse files, or clear pending context)
-- **Cmd+K** — Clear output (full wipe)
-- **Cmd+Shift+K** — Clear older rounds, keep last turn
+- **Cmd+K** — Clear older rounds, keep last turn
+- **Cmd+Shift+K** — Clear output (full wipe)
 - **Alt+Escape** — Interrupt current query
 - **Cmd+A** — Select draft only when the caret is in ◎; select history only
   when browsing above the composer

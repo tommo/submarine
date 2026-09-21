@@ -423,6 +423,62 @@ class TestSessionList(_TearOffCase):
         self.assertIs(b.output.view, host)
         self.assertIs(win.active_view(), lv)
 
+    def test_follow_already_bound_does_not_refocus_the_host(self):
+        import json
+        from tests.test_single_view import _Region, _Settings
+        from ui.session_list import follow_current_under_caret, SETTING, ROWS_KEY
+
+        win = RecordingWindow()
+        a = _session(win, "StayA")
+        hv = HostView.for_window(win)
+        hv.attach(win, a)
+        host = hv.host_view(win)
+        rows = collect_live(win)
+        for i, r in enumerate(rows):
+            r["line"] = i + 4
+            r["section"] = "CURRENT"
+        a_row = [r for r in rows if r["session_id"] == a.session_id][0]
+
+        class _ListView(object):
+            def __init__(self):
+                self._settings = _Settings()
+                self._settings.set(SETTING, True)
+                self._settings.set(ROWS_KEY, json.dumps(rows))
+                self._sel = [_Region(0)]
+
+            def is_valid(self):
+                return True
+
+            def settings(self):
+                return self._settings
+
+            def window(self):
+                return win
+
+            def sel(self):
+                return self._sel
+
+            def rowcol(self, pt):
+                return (a_row["line"] - 1, 0)
+
+            def id(self):
+                return 6161
+
+        lv = _ListView()
+        win.focus_view(lv)
+        focused = []
+        real = win.focus_view
+
+        def _focus(v):
+            focused.append(getattr(v, "id", lambda: None)())
+            return real(v)
+
+        win.focus_view = _focus
+        focused.clear()
+        self.assertTrue(follow_current_under_caret(lv))
+        self.assertIs(hv.bound_session(win), a)
+        self.assertNotIn(host.id(), focused)
+
     def test_list_key_tears_off_bound_and_docks_torn_off(self):
         win = RecordingWindow()
         a = _session(win, "A")

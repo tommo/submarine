@@ -143,6 +143,19 @@ class TestRestoreNeverStarts(unittest.TestCase):
         self.assertIn("allow_composer=False", src)
         self.assertNotIn("_enter_input_with_draft", src)
 
+    def test_settle_restores_current_list_from_store(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "main.py"), encoding="utf-8") as f:
+            src = f.read()
+        chunk = src.split("def _startup_settle_views", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("restore_current_sessions_from_store", chunk)
+        with open(os.path.join(root, "ui", "listeners.py"), encoding="utf-8") as f:
+            lis = f.read()
+        self.assertIn("def _ensure_restored_transcript", lis)
+        self.assertIn("paint_resume_preview", lis)
+        with open(os.path.join(root, "ui", "listeners.py"), encoding="utf-8") as f:
+            self.assertIn("def restore_current_sessions_from_store", f.read())
+
     def test_quiet_covers_settle(self):
         path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -154,6 +167,9 @@ class TestRestoreNeverStarts(unittest.TestCase):
         self.assertIn("_startup_settle_views", chunk)
         self.assertIn("_end_startup_quiet", chunk)
         self.assertIn("+ 150", chunk)
+        unload = src.split("def plugin_unloaded", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("_save_session", unload)
+        self.assertIn('sleeping', unload)
 
 
 class TestIsRestoringScansBackgroundSheets(unittest.TestCase):
@@ -221,7 +237,7 @@ class TestUnusedRestore(unittest.TestCase):
         v = _View()
         self.assertTrue(_matched_is_unused(None, v))
         self.assertTrue(_matched_is_unused(
-            {"session_id": "sid", "backend": "grok"}, v))
+            {"session_id": "sid", "backend": "grok", "query_count": 0}, v))
 
     def test_saved_turns_are_used(self):
         from ui.listeners import _matched_is_unused
@@ -277,6 +293,19 @@ class TestParkStartupAsleep(unittest.TestCase):
         self.assertTrue(s.is_sleeping)
         self.assertFalse(s._composer_allowed)
         self.assertTrue(s.chrome.sleep)
+
+    def test_empty_scratch_with_session_id_is_not_unused(self):
+        from ui.listeners import _matched_is_unused
+        from ui import keys
+
+        view = _View()
+        keys.write_setting(view.settings(), keys.SESSION_ID, "sess-used")
+        self.assertFalse(_matched_is_unused(
+            {"session_id": "sess-used", "query_count": 4, "first_prompt": "hi"},
+            view))
+        self.assertFalse(_matched_is_unused(
+            {"session_id": "sess-used", "backend": "claude", "name": None},
+            view))
 
     def test_unused_session_is_discarded(self):
         from ui.listeners import _park_startup_session_asleep

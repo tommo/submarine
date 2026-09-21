@@ -24,8 +24,12 @@
         "command": "kimi_start"
     },
     {
-        "caption": "DeepSeek: New Session",
+        "caption": "(CC) DeepSeek: New Session",
         "command": "deep_seek_start"
+    },
+    {
+        "caption": "(CC) StepFun: New Session",
+        "command": "step_fun_start"
     },
     {
         "caption": "Submarine: Query Selection",

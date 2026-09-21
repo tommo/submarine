@@ -70,6 +70,38 @@ class TestDynamicEnv(unittest.TestCase):
         self.assertEqual(overwrite["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "glm-haiku")
         self.assertEqual(overwrite["CLAUDE_CODE_SUBAGENT_MODEL"], "glm-fast")
 
+    def test_stepfun_claude_code_env(self):
+        settings = {"custom_providers": {
+            "stepfun": {
+                "label": "StepFun",
+                "base_url": "https://api.stepfun.com/step_plan",
+                "auth_token": "sk-step-test",
+                "opus_model": "step-5-preview",
+                "sonnet_model": "step-5-preview",
+                "haiku_model": "step-3.7-flash",
+                "extra_env": {
+                    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1000000",
+                    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
+                },
+            }
+        }}
+        overwrite, defaults = providers.dynamic_env(settings, "stepfun")
+        self.assertEqual(
+            overwrite["ANTHROPIC_BASE_URL"],
+            "https://api.stepfun.com/step_plan")
+        self.assertEqual(overwrite["ANTHROPIC_AUTH_TOKEN"], "sk-step-test")
+        self.assertEqual(overwrite["ANTHROPIC_DEFAULT_OPUS_MODEL"], "step-5-preview")
+        self.assertEqual(overwrite["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "step-3.7-flash")
+        self.assertEqual(defaults["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "1000000")
+        self.assertEqual(defaults["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "1000000")
+        cfg = settings["custom_providers"]["stepfun"]
+        cfg["opus_context_tokens"] = 1000000
+        cfg["haiku_context_tokens"] = 256000
+        self.assertEqual(providers.context_tokens_for_provider(cfg, "haiku"), 256000)
+        self.assertEqual(providers.context_tokens_for_provider(cfg, "opus"), 1000000)
+        self.assertEqual(
+            providers.context_tokens_for_provider(cfg, "step-3.7-flash"), 256000)
+
     def test_never_sets_anthropic_model(self):
         settings = {"custom_providers": {"glm": _glm_cfg()}}
         overwrite, defaults = providers.dynamic_env(settings, "glm")
@@ -101,6 +133,12 @@ class TestProviderSpecAndCollision(unittest.TestCase):
     def test_custom_uses_claude_bridge(self):
         spec = providers.provider_spec("glm", _glm_cfg())
         self.assertEqual(spec.bridge_script, "claude_main.py")
+
+    def test_cc_prefix_on_custom_label(self):
+        spec = providers.provider_spec("glm", _glm_cfg())
+        self.assertEqual(spec.label, "(CC) GLM")
+        again = providers.provider_spec("glm", _glm_cfg(label="(CC) GLM"))
+        self.assertEqual(again.label, "(CC) GLM")
 
     def test_name_collision_remap(self):
         settings = {

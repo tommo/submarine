@@ -79,10 +79,19 @@ def find_claude_jsonl(session_id, cwd=""):
     return None
 
 
+_CLAUDE_JSONL_SKIP = frozenset({"grok", "kimi", "codex", "pi"})
+
+
+def uses_claude_jsonl(backend):
+    # type: (str) -> bool
+    """Claude Code family (official Claude + (CC) custom providers)."""
+    b = (backend or "claude").lower()
+    return b not in _CLAUDE_JSONL_SKIP
+
+
 def find_session_jsonl(session_id, backend="claude", cwd=""):
     # type: (str, str, str) -> Optional[str]
-    backend = (backend or "claude").lower()
-    if backend == "claude":
+    if uses_claude_jsonl(backend):
         return find_claude_jsonl(session_id, cwd)
     return None
 

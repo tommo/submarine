@@ -1290,7 +1290,32 @@ class SubmarineOutputView(FormatHelpers):
                 '<div style="margin-bottom:6px">🎬 video (no inline preview)</div>'
                 "%s</body>" % (style, links)
             )
-        return '<body id="submarine-media-popup" style="%s">%s</body>' % (style, links)
+        if not is_image_path(path):
+            return '<body id="submarine-media-popup" style="%s">%s</body>' % (
+                style, links)
+        embed = None
+        try:
+            embed = self.renderer._media_embed(
+                path, self.renderer._MEDIA_POPUP_MAX_W)
+        except Exception:
+            embed = None
+        if embed:
+            uri, w, h = embed
+            img = (
+                '<div style="margin:0 0 6px 0">'
+                '<img src="%s" width="%d" height="%d" /></div>'
+                % (uri, w, h)
+            )
+            return (
+                '<body id="submarine-media-popup" style="%s">%s%s</body>'
+                % (style, img, links)
+            )
+        return (
+            '<body id="submarine-media-popup" style="%s">'
+            '<div style="margin-bottom:6px">🖼 image '
+            "(preview too large or unsupported)</div>%s</body>"
+            % (style, links)
+        )
 
     def _sync_edit_target_from_preview(self, path, as_context=True, announce=True, line=None):
         if not path:

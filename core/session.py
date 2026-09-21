@@ -505,8 +505,18 @@ class Session:
         )
         if chosen_raw:
             _, ctx = resolve_model_id(chosen_raw)
+            if not ctx:
+                try:
+                    from backend import providers as provider_mod
+                    pcfg = (self.settings.get("custom_providers") or {}).get(
+                        self.backend) or {}
+                    ctx = provider_mod.context_tokens_for_provider(
+                        pcfg, chosen_raw)
+                except Exception:
+                    ctx = None
             if ctx:
                 env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(ctx)
+                env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(ctx)
 
         if spec is not None:
             for k, v in (getattr(spec, "static_env", None) or {}).items():
@@ -1517,6 +1527,7 @@ class Session:
             self._rewind_fail("no session to undo")
             return
         if self.working and self.current_tool != "rewinding...":
+            self._rewind_fail("busy — interrupt first")
             return
         if (self.backend or "") == "grok":
             client = self.client
@@ -1681,8 +1692,15 @@ class Session:
             cwd = self.cwd or ""
         except Exception:
             cwd = ""
-        return find_session_jsonl(
-            self.session_id or "", self.backend or "claude", cwd)
+        backend = self.backend or "claude"
+        sid = self.session_id or ""
+        path = find_session_jsonl(sid, backend, cwd)
+        if path:
+            return path
+        rid = self.resume_id or ""
+        if rid and rid != sid:
+            return find_session_jsonl(rid, backend, cwd)
+        return None
 
     # ── persist ───────────────────────────────────────────────────────
 
@@ -1717,11 +1735,17 @@ class Session:
         # existing resume entry just because this process has not queried yet.
         if live_q <= 0 and existing is None:
             return
+        existing = existing or {}
+        try:
+            saved_cost = float(existing.get("total_cost") or 0.0)
+        except (TypeError, ValueError):
+            saved_cost = 0.0
         entry = {
             "session_id": self.session_id,
             "name": self.name,
             "project": self.cwd or self._default_cwd(),
-            "total_cost": self.total_cost,
+            # Cost restarts at 0 on resume; never regress the saved figure.
+            "total_cost": max(float(self.total_cost or 0.0), saved_cost),
             "query_count": max(live_q, saved_q),
             "backend": self.backend,
             "last_activity": self.last_activity,
@@ -1746,14 +1770,20 @@ class Session:
             entry["model"] = self.model
         if self._pending_resume_at:
             entry["resume_session_at"] = self._pending_resume_at
+        # Carry-over fields: a restored-but-not-started session has none of
+        # these live yet; upsert replaces the row, so keep the saved values.
         if self.context_usage:
             entry["context_usage"] = self.context_usage
+        elif existing.get("context_usage"):
+            entry["context_usage"] = existing["context_usage"]
         if self.plan_file:
             entry["plan_file"] = self.plan_file
+        elif existing.get("plan_file"):
+            entry["plan_file"] = existing["plan_file"]
         fp = _longer_prompt(
             getattr(self, "first_prompt", None),
             getattr(self, "_recovered_title", None),
-            (existing or {}).get("first_prompt") if existing else None,
+            existing.get("first_prompt"),
             str(self.name).split("\n", 1)[0].strip() if self.name else "",
         )
         if fp:
@@ -1765,6 +1795,10 @@ class Session:
                 entry["goal"] = gt.to_json()
             except Exception:
                 pass
+        if "goal" not in entry:
+            saved_goal = getattr(self, "_saved_goal_json", None) or existing.get("goal")
+            if saved_goal:
+                entry["goal"] = saved_goal
         self.store.upsert(entry)
         try:
             if self.session_id and self.session_id in starred_ids_for_projects(

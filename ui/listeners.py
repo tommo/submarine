@@ -42,6 +42,7 @@ from .session_api import (
     close_or_detach_session,
     create_session,
     detach_session,
+    find_live_by_session_id,
     get_session_by_agent_id,
     get_session_for_view,
     in_startup_quiet,
@@ -163,11 +164,15 @@ def _view_text_head(view, n=8000):
 
 def _matched_is_unused(matched, view) -> bool:
     """True when this sheet never sent a turn — do not keep it in the list."""
+    stored_q = False
+    q = 0
     if matched:
-        try:
-            q = int(matched.get("query_count") or 0)
-        except (TypeError, ValueError):
-            q = 0
+        if "query_count" in matched:
+            stored_q = True
+            try:
+                q = int(matched.get("query_count") or 0)
+            except (TypeError, ValueError):
+                q = 0
         if q > 0:
             return False
         if (matched.get("first_prompt") or "").strip():
@@ -177,6 +182,20 @@ def _matched_is_unused(matched, view) -> bool:
         return False
     stripped = (content or "").strip()
     if not stripped:
+        # Store said unused (query_count 0).
+        if stored_q and q <= 0:
+            return True
+        # Scratch views lose the buffer on restart. A session_id stamp
+        # still has a transcript on disk — restore and paint it.
+        sid = ""
+        try:
+            sid = (keys.read_setting(view.settings(), keys.SESSION_ID) or "").strip()
+        except Exception:
+            sid = ""
+        if not sid and matched:
+            sid = (matched.get("session_id") or "").strip()
+        if sid:
+            return False
         return True
     try:
         from ui import idle
@@ -203,7 +222,34 @@ def _session_is_unused(session) -> bool:
     fp = getattr(session, "first_prompt", None)
     if fp and str(fp).strip():
         return False
+    try:
+        from features.resume import load_turns
+        sid = getattr(session, "session_id", None) or getattr(session, "resume_id", None)
+        if sid:
+            turns = load_turns(
+                sid,
+                getattr(session, "backend", None) or "claude",
+                getattr(session, "cwd", None) or "",
+                "",
+                agent_id=getattr(session, "agent_id", None) or "",
+            )
+            if turns:
+                return False
+    except Exception:
+        pass
     return True
+
+
+def _ensure_restored_transcript(session) -> None:
+    """Scratch views are empty after restart. Paint the on-disk tail."""
+    if session is None:
+        return
+    try:
+        from features.resume import paint_resume_preview, scroll_to_tail
+        if paint_resume_preview(session):
+            scroll_to_tail(session)
+    except Exception as e:
+        log_plugin("restore paint: %s" % e)
 
 
 def _idle_output_view(view, window=None) -> None:
@@ -319,6 +365,7 @@ def _park_startup_session_asleep(session, paint=False) -> None:
     if _session_is_unused(session):
         _discard_unused_startup_session(session)
         return
+    _ensure_restored_transcript(session)
     sid = getattr(session, "session_id", None) or getattr(session, "resume_id", None)
     if getattr(session, "is_sleeping", False):
         if hasattr(session, "_apply_sleep_ui"):
@@ -399,11 +446,169 @@ def settle_active_output_view(window, allow_composer=True) -> None:
             s._enter_input_with_draft()
 
 
+_CURRENT_STATES = ("open", "sleeping")
+
+
+def _window_matching_project(project, windows):
+    proj = (project or "").rstrip("/")
+    if not windows:
+        return None
+    if proj:
+        for w in windows:
+            try:
+                folders = w.folders() or []
+            except Exception:
+                folders = []
+            if folders and (folders[0] or "").rstrip("/") == proj:
+                return w
+    return windows[0]
+
+
+def _hydrate_session_from_saved(session, entry):
+    if not session or not entry:
+        return
+    sid = entry.get("session_id")
+    if sid:
+        session.session_id = sid
+        session.resume_id = sid
+    if entry.get("agent_id"):
+        session.agent_id = entry["agent_id"]
+    if entry.get("name"):
+        session.name = entry["name"]
+    if entry.get("model"):
+        session.model = entry["model"]
+    if entry.get("backend"):
+        session.backend = entry["backend"]
+    if entry.get("first_prompt"):
+        session.first_prompt = entry["first_prompt"]
+    if entry.get("project"):
+        session.cwd = entry["project"]
+    try:
+        session.query_count = int(entry.get("query_count") or 0)
+    except (TypeError, ValueError):
+        pass
+    try:
+        session.last_activity = float(entry.get("last_activity") or 0)
+    except (TypeError, ValueError):
+        pass
+    try:
+        session.last_access = float(
+            entry.get("last_access") or entry.get("last_activity") or 0)
+    except (TypeError, ValueError):
+        pass
+    # Carry-over fields _save_session would otherwise write back empty.
+    if entry.get("parent_agent_id"):
+        session.parent_agent_id = entry["parent_agent_id"]
+    if entry.get("parent_session_id"):
+        session.parent_session_id = entry["parent_session_id"]
+    if entry.get("subsession_id"):
+        session.subsession_id = entry["subsession_id"]
+    if entry.get("child_agent_ids"):
+        session.child_agent_ids = [c for c in entry["child_agent_ids"] if c]
+    if entry.get("agent_id_aliases"):
+        session.agent_id_aliases = list(entry["agent_id_aliases"])
+    try:
+        session.total_cost = float(entry.get("total_cost") or 0.0)
+    except (TypeError, ValueError):
+        pass
+    if entry.get("context_usage"):
+        session.context_usage = entry["context_usage"]
+    if entry.get("plan_file"):
+        session.plan_file = entry["plan_file"]
+    if entry.get("goal"):
+        session._saved_goal_json = entry["goal"]
+    if entry.get("resume_session_at"):
+        session._pending_resume_at = entry["resume_session_at"]
+    session.client = None
+    session.initialized = False
+    session.backgrounded = True
+
+
+def restore_current_sessions_from_store():
+    """Rehydrate open/sleeping saved rows into the registry (no bridge, no sheet).
+
+    Single-view only restores the host sheet. Other CURRENT sessions lived in
+    memory; without this they vanish from the list after a Sublime restart.
+    """
+    try:
+        import sublime as _sublime
+    except ImportError:
+        return 0
+    if _sublime is None:
+        return 0
+    try:
+        saved = load_saved_sessions()
+    except Exception:
+        return 0
+    windows = []
+    try:
+        windows = list(_sublime.windows() or [])
+    except Exception:
+        windows = []
+    if not windows:
+        return 0
+    n = 0
+    for entry in saved or ():
+        if not isinstance(entry, dict):
+            continue
+        state = (entry.get("state") or "").lower()
+        if state not in _CURRENT_STATES:
+            continue
+        sid = entry.get("session_id")
+        if not sid:
+            continue
+        try:
+            q = int(entry.get("query_count") or 0)
+        except (TypeError, ValueError):
+            q = 0
+        if q <= 0 and not str(entry.get("first_prompt") or "").strip():
+            continue
+        try:
+            if find_live_by_session_id(sid) is not None:
+                continue
+        except Exception:
+            pass
+        window = _window_matching_project(entry.get("project"), windows)
+        if window is None:
+            continue
+        # No initial_context: it would short-circuit Session.__init__'s
+        # resume branch, which is what loads agent_id and the parent/child
+        # links from the saved row.
+        try:
+            session = create_session(
+                window,
+                resume_id=sid,
+                backend=entry.get("backend") or None,
+                model=entry.get("model"),
+                start=False,
+                show=False,
+                focus=False,
+                attach_view=None,
+            )
+        except Exception:
+            continue
+        if session is None:
+            continue
+        _hydrate_session_from_saved(session, entry)
+        try:
+            from core.registry import register_session
+            register_session(session)
+        except Exception:
+            pass
+        _park_startup_session_asleep(session, paint=False)
+        n += 1
+    return n
+
+
 def settle_startup_output_views() -> None:
     """After quiet: restore every output sheet as sleeping. Never enter ◎."""
-    if sublime is None:
+    try:
+        import sublime as _sublime
+    except ImportError:
         return
-    for w in sublime.windows():
+    if _sublime is None:
+        return
+    for w in _sublime.windows():
         active = w.active_view()
         active_id = active.id() if active else None
         for view in w.views():
@@ -508,15 +713,45 @@ class SubmarineEventListener(sublime_plugin.EventListener):
                 if keys.read_setting(view.settings(), keys.QUICK_SOFT_CLOSE):
                     return None
                 session = get_session_for_view(view)
-                if session and (getattr(session, "initialized", False)
-                                or getattr(session, "is_sleeping", False)):
-                    def _ask():
-                        s = get_session_for_view(view)
+                # Unused/empty (query_count 0, not yet initialized) still
+                # owns the host in single mode — intercept even then.
+                if session:
+                    def _ask(s0=session):
+                        s = get_session_for_view(view) or s0
+                        win = None
+                        try:
+                            win = view.window()
+                        except Exception:
+                            win = None
+                        if win is None:
+                            win = window
+                        def _handoff():
+                            try:
+                                from ui.host import HostView, is_single_mode
+                                if is_single_mode() and win is not None and s is not None:
+                                    return HostView.for_window(win).handoff_host_on_dismiss(
+                                        win, s)
+                            except Exception:
+                                pass
+                            return False
+
+                        def _switched():
+                            if sublime is not None:
+                                sublime.status_message(
+                                    "Submarine: switched to the remaining session")
+
                         if not s or not (getattr(s, "initialized", False)
                                          or getattr(s, "is_sleeping", False)):
+                            if _handoff():
+                                _switched()
+                                return
                             view.close()
                             return
                         if keep_running_on_close(s):
+                            # Detach only; the bridge keeps running.
+                            if _handoff():
+                                _switched()
+                                return
                             close_or_detach_session(s, view)
                             try:
                                 view.close()
@@ -526,8 +761,16 @@ class SubmarineEventListener(sublime_plugin.EventListener):
                                 sublime.status_message(
                                     "Submarine: session still running (open from Sessions)")
                             return
+                        # Sleeping / not kept: closing means stop. Ask first.
                         if sublime is not None and sublime.ok_cancel_dialog(
                                 "Close this Submarine session?", "Close"):
+                            if _handoff():
+                                try:
+                                    s.stop()
+                                except Exception:
+                                    pass
+                                _switched()
+                                return
                             close_or_detach_session(s, view)
                             try:
                                 view.close()
@@ -878,6 +1121,7 @@ class SubmarineOutputEventListener(sublime_plugin.ViewEventListener):
             session.output.clear_phantoms()
             if hasattr(session, "reset_phantoms_for_new_view"):
                 session.reset_phantoms_for_new_view()
+            _ensure_restored_transcript(session)
             if resume_id and hasattr(session, "_apply_sleep_ui"):
                 session._apply_sleep_ui()
             else:

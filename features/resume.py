@@ -653,8 +653,11 @@ def paint_resume_preview(session) -> bool:
     """Paint last turn(s) into a newly reopened history view. True if painted.
 
     Forks reuse the parent `resume_id` transcript so the new sheet is not blank.
+    Undo reconnect must not repaint the stripped turn from JSONL.
     """
     if getattr(session, "quick_mode", False):
+        return False
+    if getattr(session, "_park_composer_after_init", False):
         return False
     if not getattr(session, "resume_id", None):
         return False
@@ -666,6 +669,18 @@ def paint_resume_preview(session) -> bool:
     cur = getattr(out, "current", None)
     if cur is not None and (getattr(cur, "prompt", None) or getattr(cur, "events", None)):
         return False
+    view = getattr(out, "view", None)
+    if view is not None:
+        try:
+            import sublime
+            existing = view.substr(sublime.Region(0, view.size())) or ""
+        except Exception:
+            try:
+                existing = view.substr(None) or ""
+            except Exception:
+                existing = ""
+        if "◎ " in existing and " ▶" in existing:
+            return False
     fork = bool(getattr(session, "fork", False))
     resume_id = getattr(session, "resume_id", None)
     live_id = getattr(session, "session_id", None)
@@ -756,6 +771,8 @@ def scroll_to_tail(session, delay_ms: int = 30) -> None:
 
 def _on_init_paint(session, result):
     if isinstance(result, dict) and result.get("error"):
+        return
+    if getattr(session, "_park_composer_after_init", False):
         return
     try:
         paint_resume_preview(session)

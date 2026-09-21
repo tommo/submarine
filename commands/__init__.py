@@ -3,6 +3,7 @@ from .session_cmds import (  # noqa: F401
     SubmarineStartCommand,
     CodexStartCommand,
     DeepSeekStartCommand,
+    StepFunStartCommand,
     PiStartCommand,
     GrokStartCommand,
     KimiStartCommand,

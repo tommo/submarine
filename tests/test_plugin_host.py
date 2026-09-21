@@ -85,6 +85,19 @@ class TestPluginHost(unittest.TestCase):
             "commands/__init__.py missing command re-exports: %s" % missing,
         )
 
+    def test_done_meta_matches_cc_provider_labels(self):
+        import re
+        syn = open(
+            os.path.join(ROOT, "SubmarineOutput.sublime-syntax"),
+            encoding="utf-8",
+        ).read()
+        self.assertIn(r"@done\(.*\)", syn)
+        self.assertNotIn(r"@done\([^)]+\)", syn)
+        pat = re.compile(r"^\s*@done\(.*\)$")
+        self.assertTrue(pat.match(
+            "  @done(12.3s, 515k ctx, (CC) DeepSeek/step-5-preview, effort:high)"))
+        self.assertTrue(pat.match("  @done(186.9s, 515k ctx, Grok/grok-4.6, effort:high)"))
+
     def test_output_syntax_has_turn_fold_markers(self):
         prefs = open(os.path.join(ROOT, "Fold.tmPreferences"), encoding="utf-8").read()
         self.assertIn("text.submarine", prefs)
@@ -95,6 +108,8 @@ class TestPluginHost(unittest.TestCase):
             encoding="utf-8",
         ).read()
         self.assertIn("meta.fold.turn.begin.submarine", syn)
+        self.assertNotIn("meta.fold.tool.output.begin.submarine", prefs)
+        self.assertNotIn("meta.fold.tool.output.begin.submarine", syn)
         settings = open(
             os.path.join(ROOT, "SubmarineOutput.sublime-settings"),
             encoding="utf-8",

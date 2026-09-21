@@ -11,6 +11,10 @@ contexts:
     - match: '^[┄─━-]{8,}\s*$'
       scope: submarine.input.sep comment.line
 
+    # @done after conversation already popped (e.g. (CC) labels contain ')').
+    - match: '^\s*@done\(.*\)$'
+      scope: submarine.meta.done comment.line
+
     # Prompt starts with ◎ and ends with ▶
     - match: '^◎ '
       scope: submarine.prompt.marker punctuation.definition.prompt.begin
@@ -39,8 +43,9 @@ contexts:
       scope: submarine.input.sep comment.line
       pop: true
 
-    # Done tag ends the conversation
-    - match: '^\s*@done\([^)]+\)$'
+    # Done tag ends the conversation. `.*` not `[^)]+` — provider labels
+    # like `(CC) DeepSeek/step-5-preview` contain parentheses.
+    - match: '^\s*@done\(.*\)$'
       scope: submarine.meta.done comment.line
       pop: true
 

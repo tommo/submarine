@@ -421,6 +421,62 @@ class TestResumePreview(unittest.TestCase):
         self.assertIn("hi back", s.output.calls[1][1])
         self.assertFalse(paint_resume_preview(s))  # already has conversations
 
+    def test_undo_reconnect_does_not_repaint_the_stripped_turn(self):
+        class _Out(object):
+            conversations = []
+            current = None
+            view = None
+
+            def prompt(self, *a, **k):
+                raise AssertionError("undo must not paint JSONL back")
+
+        class _S(object):
+            resume_id = "sid"
+            session_id = "sid"
+            fork = False
+            quick_mode = False
+            backend = "claude"
+            cwd = ""
+            output = None
+            _park_composer_after_init = True
+
+            def _find_jsonl_path(self):
+                return "/tmp/x.jsonl"
+
+        s = _S()
+        s.output = _Out()
+        self.assertFalse(paint_resume_preview(s))
+
+    def test_existing_transcript_on_the_sheet_is_not_replaced(self):
+        class _View(object):
+            def substr(self, region):
+                return "◎ old ▶\nhello\n◎ newer ▶\nworld\n"
+
+        class _Out(object):
+            conversations = []
+            current = None
+            view = _View()
+
+            def prompt(self, *a, **k):
+                raise AssertionError("must not overwrite the sheet")
+
+        class _S(object):
+            resume_id = "sid"
+            session_id = "sid"
+            fork = False
+            quick_mode = False
+            backend = "claude"
+            cwd = ""
+            output = None
+            _park_composer_after_init = False
+
+            def _find_jsonl_path(self):
+                return "/tmp/x.jsonl"
+
+        s = _S()
+        s.output = _Out()
+        self.assertFalse(paint_resume_preview(s))
+
     def test_paint_uses_the_resumed_id_not_the_reopened_one(self):
         """Closed session reopened fresh: history lives under resume_id.
 

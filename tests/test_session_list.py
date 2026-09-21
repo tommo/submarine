@@ -477,6 +477,24 @@ class TestStarredConfirm(unittest.TestCase):
         sl.load_bookmarks = lambda path=None: {"s1"}
         self.assertTrue(sl.starred_confirm(None, self._row()))
 
+    def test_cmd_w_always_asks(self):
+        self.sublime._submarine_dialog = False
+        sl.load_bookmarks = lambda path=None: set()
+        row = self._row(kind="live", section="CURRENT", bound=True, name="Trackpad")
+        self.assertFalse(sl.close_confirm(None, row))
+        self.sublime._submarine_dialog = True
+        self.assertTrue(sl.close_confirm(None, row))
+        self.assertEqual(len(self.sublime._submarine_dialogs), 2)
+        self.assertIn("Trackpad", self.sublime._submarine_dialogs[0])
+        self.assertIn("Close", self.sublime._submarine_dialogs[0])
+
+    def test_cmd_w_history_asks_delete(self):
+        self.sublime._submarine_dialog = True
+        row = self._row(kind="saved", section="HISTORY", name="old one")
+        self.assertTrue(sl.close_confirm(None, row))
+        self.assertIn("Delete", self.sublime._submarine_dialogs[0])
+        self.assertIn("old one", self.sublime._submarine_dialogs[0])
+
 
 class TestSessionChains(unittest.TestCase):
     """One row per session, not one per resume.
@@ -567,7 +585,10 @@ class TestSessionChains(unittest.TestCase):
             (sl.sublime, sl.load_saved_sessions, sl.load_bookmarks) = prev
         self.assertEqual(sorted(r["session_id"] for r in index), ["new", "solo"])
         self.assertEqual(text.count("GUEST"), 1)
-        self.assertIn("HISTORY (2)", text)
+        self.assertIn("CURRENT (1)", text)
+        self.assertIn("HISTORY (1)", text)
+        self.assertIn("GUEST", text.split("CURRENT")[1].split("HISTORY")[0])
+        self.assertIn("solo run", text.split("HISTORY")[1])
 
     def test_a_live_row_stands_for_its_whole_chain(self):
         """Grok mints a new id per resume: the registry knows only the current
@@ -1398,6 +1419,39 @@ class TestRenderSessionList(unittest.TestCase):
         kept = sl.drop_empty_sessions(rows, starred={"c"})
         self.assertEqual([r["session_id"] for r in kept], ["b", "c"])
 
+    def test_open_saved_sessions_stay_in_current(self):
+        """Restart: registry is empty; open/sleeping rows still CURRENT."""
+        prev = (sl.collect_live, sl.load_saved_sessions, sl.load_bookmarks)
+        sl.collect_live = lambda w: []
+        sl.load_saved_sessions = lambda: [
+            {"session_id": "alive", "name": "still going", "backend": "grok",
+             "project": "/p", "state": "sleeping", "query_count": 4,
+             "last_activity": 9, "last_access": 9},
+            {"session_id": "openone", "name": "was open", "backend": "claude",
+             "project": "/p", "state": "open", "query_count": 2,
+             "last_activity": 8, "last_access": 8},
+            {"session_id": "done", "name": "finished", "backend": "grok",
+             "project": "/p", "state": "closed", "query_count": 7,
+             "last_activity": 7, "last_access": 7},
+            {"session_id": "empty", "name": "never used", "backend": "grok",
+             "project": "/p", "state": "sleeping", "query_count": 0,
+             "last_activity": 6, "last_access": 6},
+        ]
+        sl.load_bookmarks = lambda project=None: set()
+        try:
+            text, index = sl.build_for_window(_win_for(["/p"]), cols=80)
+        finally:
+            (sl.collect_live, sl.load_saved_sessions, sl.load_bookmarks) = prev
+        by_sec = {}
+        for r in index:
+            by_sec.setdefault(r["section"], []).append(r["session_id"])
+        self.assertEqual(set(by_sec.get("CURRENT") or []), {"alive", "openone"})
+        self.assertEqual(by_sec.get("HISTORY"), ["done"])
+        self.assertIn("still going", text)
+        self.assertIn("was open", text)
+        self.assertIn("finished", text)
+        self.assertNotIn("never used", text)
+
     def test_window_list_keeps_empty_live(self):
         """A brand-new sheet must list in CURRENT so you can switch away."""
         prev = (sl.collect_live, sl.load_saved_sessions, sl.load_bookmarks)
@@ -1954,6 +2008,27 @@ class TestSessionListKeymap(unittest.TestCase):
                 if e.get("command") == "submarine_session_list"
                 and e.get("keys") == ["super+ctrl+\\"]]
         self.assertEqual(hits, [], "⌃⌘\\ is not a session-list chord")
+
+    def test_syntax_colors_custom_provider_backends(self):
+        import os
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        syn = open(os.path.join(root, "SessionList.sublime-syntax"),
+                   encoding="utf-8").read()
+        self.assertIn("row_title", syn)
+        self.assertIn("[A-Za-z][A-Za-z0-9_-]{0,7}", syn)
+        self.assertNotIn("claude|grok|kimi|codex|pi|deepseek", syn)
+
+    def test_cmd_w_closes_the_row_with_confirm(self):
+        hits = [e for e in self.keymap
+                if e.get("command") == "submarine_session_list_close"
+                and e.get("keys") == ["super+w"]]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual((hits[0].get("args") or {}).get("confirm"), True)
+        ctx = hits[0].get("context") or []
+        self.assertTrue(any(
+            c.get("key") == "setting.submarine_session_list"
+            and c.get("operand") is True
+            for c in ctx))
 
 
 if __name__ == "__main__":

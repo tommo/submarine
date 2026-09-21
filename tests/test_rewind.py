@@ -7,13 +7,25 @@ import unittest
 
 from core.rewind import (
     find_rewind_point,
+    find_session_jsonl,
     is_synthetic_turn,
     last_prompt_span,
     prompt_index_span,
     prompt_spans,
     read_claude_turns,
     turns_for_undo,
+    uses_claude_jsonl,
 )
+
+
+class TestClaudeJsonlRouting(unittest.TestCase):
+    def test_cc_providers_use_claude_jsonl(self):
+        self.assertTrue(uses_claude_jsonl("claude"))
+        self.assertTrue(uses_claude_jsonl("deepseek"))
+        self.assertTrue(uses_claude_jsonl("stepfun"))
+        self.assertFalse(uses_claude_jsonl("grok"))
+        self.assertFalse(uses_claude_jsonl("codex"))
+        self.assertFalse(uses_claude_jsonl("kimi"))
 
 
 class TestLastPromptSpan(unittest.TestCase):

@@ -59,6 +59,37 @@ class ModalUI:
         self._perm_timeout_token = 0
         self._region_stash = None  # type: Optional[dict]
 
+    def _sync_modal_settings(self) -> None:
+        """Stamp view settings so question/interrupt keymaps can fire."""
+        view = getattr(self.owner, "view", None)
+        if view is None:
+            return
+        try:
+            if not view.is_valid():
+                return
+        except Exception:
+            return
+        q = self.pending_question
+        c = getattr(self.owner, "composer", None)
+        q_input = bool(c and getattr(c, "_question_input_mode", False))
+        has_q = bool(q and getattr(q, "callback", None)) and not q_input
+        has_m = bool(
+            (q and getattr(q, "callback", None))
+            or (self.pending_permission and getattr(
+                self.pending_permission, "callback", None))
+            or (self.pending_plan and getattr(self.pending_plan, "callback", None))
+            or q_input
+        )
+        st = view.settings()
+        keys.write_setting(st, keys.HAS_QUESTION, has_q)
+        keys.write_setting(st, keys.HAS_MODAL, has_m)
+        if has_q:
+            keys.write_setting(st, keys.INPUT_MODE, False)
+            try:
+                st.erase("claude_input_mode")
+            except Exception:
+                pass
+
     def _has_view(self) -> bool:
         view = self.owner.view
         if not view:
@@ -260,6 +291,7 @@ class ModalUI:
             self.owner.composer._question_input_mode = False
         except Exception:
             pass
+        self._sync_modal_settings()
         view = getattr(self.owner, "view", None)
         if not view:
             try:
@@ -371,6 +403,7 @@ class ModalUI:
         self._bump_dirty()
         self.owner.composer.hide_composer_for_modal()
         self._render_permission()
+        self._sync_modal_settings()
         self.owner.composer.scroll_to_end()
         self._arm_perm_timeout(perm)
         self._notify_detached("permission")
@@ -492,6 +525,7 @@ class ModalUI:
         if not self._has_view():
             self.pending_permission.region = None
             self.pending_permission.button_regions = {}
+            self._sync_modal_settings()
             return
         perm = self.pending_permission
         for btn_type in perm.button_regions:
@@ -507,6 +541,7 @@ class ModalUI:
         self.owner.view.erase_regions(keys.PERM_BLOCK)
         perm.region = None
         perm.button_regions = {}
+        self._sync_modal_settings()
 
     def _clear_permission(self):
         if not self.pending_permission:
@@ -524,6 +559,7 @@ class ModalUI:
                 cur.region = (cur.region[0], self.owner.view.size())
         self.pending_permission.region = None
         self.pending_permission.button_regions = {}
+        self._sync_modal_settings()
 
     def clear_stale_permission(self, current_pid):
         if not self.pending_permission:
@@ -702,6 +738,7 @@ class ModalUI:
                 continue
             self.pending_permission = perm
             self._render_permission()
+            self._sync_modal_settings()
             self.owner.composer.scroll_to_end()
             self._arm_perm_timeout(perm)
             break
@@ -741,6 +778,7 @@ class ModalUI:
         self._bump_dirty()
         self.owner.composer.hide_composer_for_modal()
         self._render_plan_approval()
+        self._sync_modal_settings()
         self.owner.composer.scroll_to_end()
         self._notify_detached("plan")
 
@@ -801,6 +839,7 @@ class ModalUI:
             )
         self.pending_plan.region = None
         self.pending_plan.button_regions = {}
+        self._sync_modal_settings()
 
     def handle_plan_key(self, key):
         """Answer the visible plan. Viewless: still resolves the callback."""
@@ -861,6 +900,10 @@ class ModalUI:
         self._bump_dirty()
         self.owner.composer.hide_composer_for_modal()
         self.render_question()
+        self._sync_modal_settings()
+        # No focus steal (matches permission/plan): a question arriving while
+        # the user types in another tab must not redirect their next
+        # keystroke into submarine_question_key.
         self.owner.composer.scroll_to_end(force=True)
         self._notify_detached("question")
 
@@ -994,6 +1037,7 @@ class ModalUI:
             c._question_input_mode = False
             if summary and self.owner.current is not None:
                 self.owner.current.events.append("  ☑ %s\n" % summary)
+            self._sync_modal_settings()
             return
         view = self.owner.view
         c = self.owner.composer
@@ -1038,6 +1082,7 @@ class ModalUI:
         )
         self.pending_question.region = None
         self.pending_question.button_regions = {}
+        self._sync_modal_settings()
         if summary:
             self.owner.renderer._struct_dirty = True
             self.owner.renderer._render_current()
@@ -1114,7 +1159,10 @@ class ModalUI:
             return False
         if (self.owner.composer.is_input_mode()
                 and not self.owner.composer._question_input_mode):
-            return False
+            try:
+                self.owner.composer.hide_composer_for_modal()
+            except Exception:
+                pass
         q_req = self.pending_question
         q = q_req.questions[q_req.current_idx]
         options = q.get("options", [])
@@ -1190,6 +1238,7 @@ class ModalUI:
         c._input_mode = True
         keys.write_setting(view.settings(), keys.INPUT_MODE, True)
         keys.write_setting(view.settings(), keys.QUESTION_INPUT_MODE, True)
+        self._sync_modal_settings()
         if sublime is not None:
             view.sel().clear()
             view.sel().add(sublime.Region(c._question_input_start, c._question_input_start))

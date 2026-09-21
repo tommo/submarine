@@ -103,8 +103,10 @@ contexts:
       scope: comment.tree.session-list
     - match: '[△★✨]'
       scope: keyword.star.session-list
-    # First token is the backend column only — do not scan the title.
-    - match: '(?:claude|grok|kimi|codex|pi|deepseek|[A-Z]{2,3})\b'
+    # First token is the backend column (padded to 8, or compact GR/CL).
+    # Custom providers (stepfun, openrouter, …) must match too — otherwise
+    # we never enter row_title and the rest of the line loses its colors.
+    - match: '(?:[A-Za-z][A-Za-z0-9_-]{0,7}|[A-Z]{2,3})\b'
       scope: storage.type.backend.session-list
       set: row_title
     - match: '$'

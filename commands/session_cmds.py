@@ -177,6 +177,16 @@ class DeepSeekStartCommand(sublime_plugin.WindowCommand):
         create_session(self.window, backend="deepseek")
 
 
+class StepFunStartCommand(sublime_plugin.WindowCommand):
+    def run(self):
+        if not backend_specs.is_available("stepfun"):
+            sublime.error_message(
+                "StepFun provider not configured. Set STEPFUN_API_KEY "
+                "(or Manage Anthropic Providers → stepfun auth).")
+            return
+        create_session(self.window, backend="stepfun")
+
+
 class PiStartCommand(sublime_plugin.WindowCommand):
     def run(self):
         bun_pi = os.path.expanduser("~/.bun/install/global/node_modules/.bin/pi")
@@ -312,22 +322,57 @@ class SubmarineCloseSessionCommand(sublime_plugin.TextCommand):
     def run(self, edit):
         view = self.view
         session = get_session_for_view(view)
-        if not session or not (session.initialized or session.is_sleeping):
+        win = view.window() if view else None
+
+        def _handoff(s):
+            try:
+                from ui.host import HostView, is_single_mode
+                if (is_single_mode() and win is not None and s is not None
+                        and not getattr(s, "torn_off", False)):
+                    if HostView.for_window(win).handoff_host_on_dismiss(win, s):
+                        try:
+                            s.stop()
+                        except Exception:
+                            pass
+                        sublime.status_message(
+                            "Submarine: switched to the remaining session")
+                        return True
+            except Exception:
+                pass
+            return False
+
+        if not session or not (getattr(session, "initialized", False)
+                               or getattr(session, "is_sleeping", False)):
+            if _handoff(session):
+                return
             view.close()
             return
 
-        def _ask():
-            s = get_session_for_view(view)
-            if not s or not (s.initialized or s.is_sleeping):
-                view.close()
+        def _ask(s0=session):
+            s = get_session_for_view(view) or s0
+            if not sublime.ok_cancel_dialog("Close this Submarine session?", "Close"):
                 return
-            if sublime.ok_cancel_dialog("Close this Submarine session?", "Close"):
-                s.stop()
+            if _handoff(s):
                 try:
-                    unregister_view(view.id())
+                    from core.registry import default_registry
+                    aid = getattr(s, "agent_id", None)
+                    if aid:
+                        default_registry.by_agent.pop(aid, None)
                 except Exception:
                     pass
+                return
+            try:
+                s.stop()
+            except Exception:
+                pass
+            try:
+                unregister_view(view.id())
+            except Exception:
+                pass
+            try:
                 view.close()
+            except Exception:
+                pass
 
         sublime.set_timeout(_ask, 0)
 
@@ -416,6 +461,16 @@ class SubmarineHideSessionCommand(sublime_plugin.WindowCommand):
         view = s.output.view
         if not view.is_valid():
             return
+        try:
+            from ui.host import HostView, is_single_mode
+            if is_single_mode() and not getattr(s, "torn_off", False):
+                if HostView.for_window(self.window).handoff_host_on_dismiss(
+                        self.window, s):
+                    sublime.status_message(
+                        "Submarine: switched to the remaining session")
+                    return
+        except Exception:
+            pass
         keys.write_setting(view.settings(), keys.SOFT_CLOSE, True)
         detach_session(s)
         try:
@@ -441,10 +496,20 @@ class SubmarineRevealSessionCommand(sublime_plugin.WindowCommand):
                     window.bring_to_front()
                 except Exception:
                     pass
-        if session is not None and self._reveal(session, window):
-            self._land(session)
-            self._trace("revealed", session, window)
-            return
+        if session is not None:
+            already = False
+            try:
+                v = session.output.view if session.output else None
+                av = window.active_view() if window else None
+                already = (
+                    v is not None and av is not None and v.id() == av.id())
+            except Exception:
+                already = False
+            if self._reveal(session, window):
+                if not already:
+                    self._land(session)
+                self._trace("revealed", session, window)
+                return
         if self._focus_sheet():
             self._trace("focused the window's sheet", None, window)
             return

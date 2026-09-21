@@ -48,6 +48,8 @@ SELECTION_IN_HISTORY = "submarine_selection_in_history"
 SELECTION_CROSSES_DRAFT = "submarine_selection_crosses_draft"
 OUTSIDE_INPUT_AREA = "submarine_outside_input_area"
 SUBMIT_WITH_MODIFIER = "submarine_submit_with_modifier"
+HAS_QUESTION = "submarine_has_question"
+HAS_MODAL = "submarine_has_modal"
 
 # Named regions
 CONV_REGION = "submarine_conversation"

@@ -706,6 +706,15 @@ class SubmarineSelectModelCommand(sublime_plugin.WindowCommand):
                 return
             mid = model_ids[idx]
             real_model, ctx = resolve_model_id(mid)
+            if not ctx:
+                try:
+                    cfg = (_load_custom_providers() or {}).get(s.backend) or {}
+                    ctx = provider_mod.context_tokens_for_provider(cfg, mid)
+                    if not ctx:
+                        ctx = provider_mod.context_tokens_for_provider(
+                            cfg, real_model)
+                except Exception:
+                    ctx = None
             if ctx:
                 if sublime.ok_cancel_dialog(
                     "Context limit (%sK) requires session restart.\n\nRestart session with %s?"

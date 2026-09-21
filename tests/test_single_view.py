@@ -366,6 +366,116 @@ class TestRestoreClaimsOneHost(_SingleViewCase):
         self.assertIs(s.output.view, v)
 
 
+class TestHandoffHostOnDismiss(_SingleViewCase):
+    """Closing the bound session must not destroy the host if another lives."""
+
+    def test_dismissing_codex_keeps_the_host_on_the_other_session(self):
+        win = RecordingWindow()
+        grok = _session(win, "grok")
+        hv = HostView.for_window(win)
+        self.assertTrue(hv.attach(win, grok))
+        host = hv.host_view(win)
+        self.assertIsNotNone(host)
+        codex = _session(win, "codex")
+        self.assertTrue(hv.attach(win, codex))
+        self.assertIs(hv.bound_session(win), codex)
+        self.assertTrue(hv.handoff_host_on_dismiss(win, codex))
+        self.assertTrue(host.is_valid())
+        self.assertFalse(getattr(host, "closed", False))
+        self.assertIs(hv.bound_session(win), grok)
+        self.assertIs(grok.output.view, host)
+
+    def test_last_session_does_not_handoff(self):
+        win = RecordingWindow()
+        only = _session(win, "only")
+        hv = HostView.for_window(win)
+        hv.attach(win, only)
+        self.assertFalse(hv.handoff_host_on_dismiss(win, only))
+        self.assertIs(hv.bound_session(win), only)
+
+    def test_close_row_keeps_the_host_on_the_other_session(self):
+        from ui.session_list import close_row
+
+        win = RecordingWindow()
+        grok = _session(win, "grok")
+        hv = HostView.for_window(win)
+        self.assertTrue(hv.attach(win, grok))
+        host = hv.host_view(win)
+        codex = _session(win, "codex")
+        self.assertTrue(hv.attach(win, codex))
+        row = {
+            "kind": "live",
+            "session_id": codex.session_id,
+            "agent_id": codex.agent_id,
+            "section": "CURRENT",
+        }
+        self.assertTrue(close_row(win, row))
+        self.assertTrue(host.is_valid())
+        self.assertFalse(getattr(host, "closed", False))
+        self.assertIs(hv.bound_session(win), grok)
+        self.assertIs(grok.output.view, host)
+        self.assertNotIn(codex.agent_id, default_registry.by_agent)
+
+    def test_handoff_uses_an_unused_empty_peer(self):
+        """query_count 0 is not 'no session'. Empty is a list filter only."""
+        win = RecordingWindow()
+        unused = _session(win, "unused")
+        unused.query_count = 0
+        unused.first_prompt = ""
+        unused.initialized = False
+        unused.client = None
+        hv = HostView.for_window(win)
+        self.assertTrue(hv.attach(win, unused))
+        host = hv.host_view(win)
+        used = _session(win, "used")
+        used.query_count = 3
+        self.assertTrue(hv.attach(win, used))
+        self.assertTrue(hv.handoff_host_on_dismiss(win, used))
+        self.assertTrue(host.is_valid())
+        self.assertFalse(getattr(host, "closed", False))
+        self.assertIs(hv.bound_session(win), unused)
+        self.assertIs(unused.output.view, host)
+
+    def test_close_row_keeps_host_when_host_cache_is_cold(self):
+        from ui.session_list import close_row
+
+        win = RecordingWindow()
+        grok = _session(win, "grok")
+        hv = HostView.for_window(win)
+        self.assertTrue(hv.attach(win, grok))
+        host = hv.host_view(win)
+        codex = _session(win, "codex")
+        self.assertTrue(hv.attach(win, codex))
+        hv._view = None
+        row = {
+            "kind": "live",
+            "session_id": codex.session_id,
+            "agent_id": codex.agent_id,
+            "section": "CURRENT",
+        }
+        self.assertTrue(close_row(win, row))
+        self.assertTrue(host.is_valid())
+        self.assertFalse(getattr(host, "closed", False))
+        self.assertIs(grok.output.view, host)
+
+    def test_handoff_uses_a_sleeping_peer(self):
+        win = RecordingWindow()
+        grok = _session(win, "grok")
+        hv = HostView.for_window(win)
+        self.assertTrue(hv.attach(win, grok))
+        host = hv.host_view(win)
+        grok.initialized = False
+        grok.client = None
+        grok.keep_running_on_close = False
+        codex = _session(win, "codex")
+        self.assertTrue(hv.attach(win, codex))
+        self.assertTrue(hv.handoff_host_on_dismiss(win, codex))
+        self.assertTrue(host.is_valid())
+        self.assertFalse(getattr(host, "closed", False))
+        self.assertIs(hv.bound_session(win), grok)
+        self.assertIs(grok.output.view, host)
+
+
 class TestHostLookupSelfHeals(_SingleViewCase):
     """A window with an output sheet never gets a second one.
 

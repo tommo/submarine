@@ -409,12 +409,12 @@ def create_session(
                     view.settings().set("color_scheme", spec.theme)
             except Exception:
                 keys.write_setting(view.settings(), keys.BACKEND, backend)
+        register_session(session)
         if view is not None:
             try:
                 session._persist_view_identity()
             except Exception:
                 pass
-            register_session(session)
             if not restoring:
                 try:
                     remember_active_session(window, view)
@@ -425,7 +425,10 @@ def create_session(
                 % (getattr(session, "agent_id", None), view.id(), focus, start)
             )
         else:
-            log_plugin("create_session: ERROR - no output view")
+            log_plugin(
+                "create_session: agent_id=%s viewless start=%s"
+                % (getattr(session, "agent_id", None), start)
+            )
         if start:
             session.start()
     finally:
@@ -643,6 +646,13 @@ def _startup_settle_views():
                     log_plugin("startup settle (window): %s" % e)
         except Exception as e:
             log_plugin("startup settle (single view): %s" % e)
+        try:
+            from ui.listeners import restore_current_sessions_from_store
+            n = restore_current_sessions_from_store()
+            if n:
+                log_plugin("startup settle: restored %d current session(s)" % n)
+        except Exception as e:
+            log_plugin("startup settle (current list): %s" % e)
     except Exception as e:
         log_plugin("startup settle: %s" % e)
 
@@ -901,6 +911,24 @@ def plugin_unloaded():
             log_plugin("plugin_unloaded: asked %d bridge(s) to stop" % n)
     except Exception as e:
         log_plugin("plugin_unloaded bridges: %s" % e)
+    try:
+        n = 0
+        for s in list(iter_sessions()):
+            if getattr(s, "quick_mode", False):
+                continue
+            try:
+                s._save_session()
+            except Exception:
+                pass
+            try:
+                s._persist_state("sleeping")
+            except Exception:
+                pass
+            n += 1
+        if n:
+            log_plugin("plugin_unloaded: saved %d current session(s)" % n)
+    except Exception as e:
+        log_plugin("plugin_unloaded save: %s" % e)
     try:
         sublime.load_settings(SETTINGS_FILE).clear_on_change("submarine_ui_mode")
     except Exception:

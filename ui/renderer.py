@@ -5,7 +5,12 @@ import os
 import re
 from typing import List, Optional
 
-from plat.constants import CONTEXT_PREFIX, SPINNER_FRAMES
+from plat.constants import (
+    CONTEXT_PREFIX,
+    SPINNER_FRAMES,
+    SPINNER_RESPONDING,
+    SPINNER_WAITING,
+)
 
 from . import keys
 from .geometry import should_pin_view_state, stream_treat_as_composing
@@ -362,7 +367,7 @@ class TurnRenderer:
 
         self.current = Conversation(
             prompt=text, todos=prev_todos, goal=prev_goal,
-            context_names=names, context_refs=refs)
+            context_names=names, context_refs=refs, working=True)
         self._reset_proj()
         self.owner.sheet.update_title()
 
@@ -377,6 +382,11 @@ class TurnRenderer:
                         lambda r=list(refs), a=promoted[0], b=promoted[1]:
                             self._refresh_turn_context_phantoms(r, region=(a, b)),
                         15)
+            # Promote left only the ◎…▶ line. Paint waiting chrome (busy mark)
+            # now — spinner ticks only patch an existing glyph.
+            self._struct_dirty = True
+            self._render_pending = False
+            self._render_current(auto_scroll=True)
             return
         start = view.size() if view else 0
         prefix = "\n" if start > 0 else ""
@@ -391,6 +401,9 @@ class TurnRenderer:
                     lambda r=list(refs), a=start, b=end: self._refresh_turn_context_phantoms(
                         r, region=(a, b)),
                     15)
+            self._struct_dirty = True
+            self._render_pending = False
+            self._render_current(auto_scroll=True)
         else:
             self.current.region = None
 
@@ -693,35 +706,140 @@ class TurnRenderer:
             self._render_current()
 
     def advance_spinner(self, frames=None):
-        """Advance the working spinner. Viewless: no-op."""
+        """Advance the working spinner. Viewless: no-op.
+
+        The glyph in the sheet must move. Do not `_render_current` — a full
+        replace plus caret/viewport restore recasts the mouse cursor across
+        the window. Patch only the spinner line. Question/permission/plan
+        own the tail, so those ticks are title-only.
+        """
         if not self.current or not self.current.working or not self._has_view():
             return
         if frames:
             self._spinner_frames = frames
         self._spinner_frame += 1
-        # Question/permission/plan own the tail. A full rewrite here reflows
-        # that block (wrap, caret, checks) every busy-mark frame.
+        frames = self._spinner_frames or SPINNER_FRAMES
+        glyph = frames[self._spinner_frame % len(frames)]
         if getattr(self.owner, "has_turn_modal_ui", lambda: False)():
             if self._spinner_frame % 15 == 0:
-                self.owner.sheet.update_title()
-            return
-        if not self.owner.sheet.is_following_tail():
-            if self._spinner_frame % 15 == 0:
-                self.owner.sheet.update_title()
-            return
-        self._struct_dirty = True
-        self._render_current(auto_scroll=False)
-        if self._spinner_frame % 50 == 0 and sublime is not None:
-            view = self.owner.view
-
-            def _clear_undo(v=view):
                 try:
-                    if v and v.is_valid():
-                        v.clear_undo_stack()
+                    self.owner.sheet.update_title()
+                except Exception:
+                    pass
+            return
+        if not self._patch_spinner_glyph(glyph):
+            if self._spinner_frame % 15 == 0:
+                try:
+                    self.owner.sheet.update_title()
                 except Exception:
                     pass
 
-            sublime.set_timeout(_clear_undo, 0)
+    def _spinner_glyphs(self):
+        seen = []
+        for blob in (
+            self._spinner_frames or "",
+            SPINNER_WAITING,
+            SPINNER_RESPONDING,
+            SPINNER_FRAMES,
+        ):
+            for ch in blob:
+                if ch not in seen:
+                    seen.append(ch)
+        return seen
+
+    def _patch_spinner_glyph(self, glyph):
+        """Replace the live `  ◇\\n` / braille line. No pin, no caret restore."""
+        view = self.owner.view
+        replace = getattr(self.owner, "_replace", None)
+        if view is None or not callable(replace):
+            return False
+        try:
+            if not view.is_valid():
+                return False
+        except Exception:
+            return False
+        start, end = 0, 0
+        try:
+            tracked = view.get_regions(keys.CONV_REGION)
+            if tracked and tracked[0].size() > 0:
+                start, end = tracked[0].begin(), tracked[0].end()
+            elif self.current and self.current.region:
+                start, end = self.current.region
+            else:
+                end = view.size()
+        except Exception:
+            return False
+        try:
+            peel = None
+            c = getattr(self.owner, "composer", None)
+            if c is not None and getattr(c, "is_input_mode", lambda: False)():
+                peel = c.peel_start()
+            trail = None
+            modals = getattr(self.owner, "modals", None)
+            if modals is not None:
+                trail = modals.trailing_ui_start()
+            if peel is not None and peel >= start:
+                end = min(end, peel)
+            if trail is not None and trail >= start:
+                end = min(end, trail)
+        except Exception:
+            pass
+        try:
+            end = min(end, view.size())
+            start = max(0, min(start, end))
+            text = view.substr(_R(start, end))
+        except Exception:
+            return False
+        best = -1
+        best_n = 0
+        for ch in self._spinner_glyphs():
+            needle = "  %s\n" % ch
+            pos = text.rfind(needle)
+            if pos >= 0 and pos >= best:
+                best = pos
+                best_n = len(needle)
+        if best < 0:
+            insert_at = end
+            new = "  %s\n" % glyph
+            if text and not text.endswith("\n"):
+                new = "\n" + new
+            try:
+                replace(insert_at, insert_at, new)
+                grown = len(new)
+                # Mirror _try_append: grow (never shrink to the clamped
+                # insert point) and shift the composer so its _input_start
+                # does not land on the glyph line and replant it as draft.
+                if self.current and self.current.region:
+                    a, b = self.current.region
+                    self.current.region = (a, max(b, insert_at) + grown)
+                try:
+                    tracked = view.get_regions(keys.CONV_REGION)
+                    if tracked:
+                        self.owner.sheet.set_hidden_region(
+                            keys.CONV_REGION, tracked[0].begin(),
+                            tracked[0].end() + grown)
+                    elif self.current and self.current.region:
+                        na, nb = self.current.region
+                        self.owner.sheet.set_hidden_region(keys.CONV_REGION, na, nb)
+                except Exception:
+                    pass
+                try:
+                    if (c is not None and c.is_input_mode()
+                            and not getattr(c, "_question_input_mode", False)):
+                        c.shift_anchors(grown)
+                except Exception:
+                    pass
+                return True
+            except Exception:
+                return False
+        new = "  %s\n" % glyph
+        if text[best:best + best_n] == new:
+            return True
+        try:
+            replace(start + best, start + best + best_n, new)
+            return True
+        except Exception:
+            return False
 
     # --- lookup ------------------------------------------------------------
 
@@ -1411,8 +1529,17 @@ class TurnRenderer:
             if self._try_append(delta):
                 return
 
-        # Full rewrite
-        was_input = bool(c.is_input_mode()) and not c._question_input_mode
+        # Full rewrite. A pending question/permission/plan owns the tail —
+        # replanting ◎ here leaves input_mode true so 1–4/Esc never bind.
+        if c.has_turn_modal_ui() and not c._question_input_mode:
+            if c.is_input_mode():
+                try:
+                    c.hide_composer_for_modal()
+                except Exception:
+                    pass
+            was_input = False
+        else:
+            was_input = bool(c.is_input_mode()) and not c._question_input_mode
         draft = ""
         caret_off = 0
         caret_in_composer = False
@@ -1827,9 +1954,152 @@ class TurnRenderer:
         except Exception as e:
             print("[Submarine] media phantoms: %s" % e)
 
+    def _minihtml_image_ok(self, path):
+        return bool(path) and path.lower().endswith(self._MINIHTML_IMAGE_EXTS)
+
+    def _image_dimensions_from_bytes(self, data):
+        try:
+            import struct
+            if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24:
+                w, h = struct.unpack(">II", data[16:24])
+                return int(w), int(h)
+            if data[:6] in (b"GIF87a", b"GIF89a") and len(data) >= 10:
+                w, h = struct.unpack("<HH", data[6:10])
+                return int(w), int(h)
+            if data[:2] == b"\xff\xd8":
+                i = 2
+                n = len(data)
+                while i + 9 < n:
+                    if data[i] != 0xFF:
+                        break
+                    marker = data[i + 1]
+                    seglen = struct.unpack(">H", data[i + 2:i + 4])[0]
+                    if marker in (
+                        0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+                        0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF,
+                    ):
+                        h, w = struct.unpack(">HH", data[i + 5:i + 9])
+                        return int(w), int(h)
+                    i += 2 + seglen
+        except Exception:
+            pass
+        return 0, 0
+
+    def _image_dimensions(self, path):
+        try:
+            with open(path, "rb") as f:
+                return self._image_dimensions_from_bytes(f.read(65536))
+        except Exception:
+            return 0, 0
+
+    def _scaled_display_size(self, w, h, max_w):
+        if w <= 0 or h <= 0:
+            return max_w, max_w
+        if w <= max_w and h <= max_w:
+            return w, h
+        scale = min(max_w / float(w), max_w / float(h))
+        return max(1, int(round(w * scale))), max(1, int(round(h * scale)))
+
+    def _make_thumbnail_bytes(self, path, max_edge):
+        ow, oh = self._image_dimensions(path)
+        tw, th = self._scaled_display_size(ow, oh, max_edge)
+        try:
+            from PIL import Image  # type: ignore
+            import io
+            with Image.open(path) as im:
+                im = im.convert("RGB") if im.mode not in ("RGB", "L") else im
+                if im.mode == "L":
+                    im = im.convert("RGB")
+                resample = (Image.Resampling.LANCZOS
+                            if hasattr(Image, "Resampling") else Image.LANCZOS)
+                im.thumbnail((max_edge, max_edge), resample)
+                buf = io.BytesIO()
+                im.save(buf, format="JPEG", quality=72, optimize=True)
+                data = buf.getvalue()
+                return data, im.size[0], im.size[1]
+        except Exception:
+            pass
+        plat = ""
+        try:
+            plat = sublime.platform() if sublime is not None else ""
+        except Exception:
+            plat = ""
+        if plat == "osx" or (not plat and os.path.isfile("/usr/bin/sips")):
+            import subprocess
+            import tempfile
+            sips = "/usr/bin/sips"
+            if not os.path.isfile(sips):
+                sips = "sips"
+            tmp = None
+            try:
+                fd, tmp = tempfile.mkstemp(suffix=".jpg")
+                os.close(fd)
+                r = subprocess.run(
+                    [sips, "-Z", str(max_edge), "-s", "format", "jpeg",
+                     path, "--out", tmp],
+                    capture_output=True, timeout=15)
+                if r.returncode == 0 and os.path.isfile(tmp):
+                    with open(tmp, "rb") as f:
+                        data = f.read()
+                    if data:
+                        w, h = self._image_dimensions_from_bytes(data)
+                        if w <= 0:
+                            w, h = tw, th
+                        return data, w, h
+            except Exception:
+                pass
+            finally:
+                if tmp and os.path.isfile(tmp):
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
+        return None
+
+    def _media_embed(self, path, max_edge=None):
+        """(data_uri, width, height) thumbnail for minihtml, or None."""
+        if max_edge is None:
+            max_edge = self._MEDIA_PHANTOM_MAX_W
+        if not self._minihtml_image_ok(path) or not os.path.isfile(path):
+            return None
+        try:
+            mtime = os.path.getmtime(path)
+            size = os.path.getsize(path)
+            if size <= 0 or size > self._MEDIA_SOURCE_MAX_BYTES:
+                return None
+            cache_key = "%s|%s" % (path, max_edge)
+            cached = self._media_uri_cache.get(cache_key)
+            if cached and cached[0] == mtime:
+                return cached[1], cached[2], cached[3]
+            import base64
+            thumb = self._make_thumbnail_bytes(path, max_edge)
+            if thumb:
+                data, w, h = thumb
+                uri = "data:image/jpeg;base64," + base64.b64encode(data).decode(
+                    "ascii")
+                self._media_uri_cache[cache_key] = (mtime, uri, w, h)
+                return uri, w, h
+            if size > 40_000:
+                return None
+            with open(path, "rb") as f:
+                raw = f.read()
+            ext = os.path.splitext(path)[1].lower()
+            mime = {
+                ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".png": "image/png", ".gif": "image/gif",
+            }.get(ext, "image/jpeg")
+            uri = "data:%s;base64,%s" % (
+                mime, base64.b64encode(raw).decode("ascii"))
+            w, h = self._image_dimensions_from_bytes(raw)
+            w, h = self._scaled_display_size(w, h, max_edge)
+            self._media_uri_cache[cache_key] = (mtime, uri, w, h)
+            return uri, w, h
+        except Exception as e:
+            print("[Submarine] media embed: %s" % e)
+            return None
+
     def _media_phantom_html(self, path, disp):
         import html as _html
-        from .formatters import media_display_path
         safe_disp = _html.escape(disp or os.path.basename(path) or path)
         reveal_href = "reveal:" + path
         popup_href = "popup:" + path
@@ -1841,6 +2111,20 @@ class TurnRenderer:
             % (_html.escape(reveal_href), _html.escape(popup_href),
                _html.escape(edit_href), safe_disp)
         )
+        embed = self._media_embed(path, self._MEDIA_PHANTOM_MAX_W)
+        if embed:
+            uri, w, h = embed
+            img = (
+                '<div style="margin:2px 0 2px 0">'
+                '<a href="%s"><img src="%s" width="%d" height="%d" /></a>'
+                "</div>" % (_html.escape(popup_href), uri, w, h)
+            )
+            return (
+                '<body id="submarine-media-phantom" '
+                'style="margin:0;padding:0 0 0 24px;font-size:11px;'
+                'color:color(var(--foreground) alpha(0.7))">'
+                "%s%s</body>" % (img, links)
+            )
         return (
             '<body id="submarine-media-phantom" '
             'style="margin:0;padding:2px 0 4px 24px;font-size:11px;'

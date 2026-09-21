@@ -1,6 +1,7 @@
 """Tool row model→text, background gate, host-control hide, todo side effects."""
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from core.background import SHELL_BG as _CORE_SHELL_BG

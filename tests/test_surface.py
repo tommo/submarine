@@ -356,6 +356,23 @@ class TestModalDescriptor(unittest.TestCase):
         self.assertTrue(out.is_input_mode())
         self.assertIn("◎", v._content)
 
+    def test_question_answer_works_if_composer_leaked_open(self):
+        win = RecordingWindow()
+        out = SubmarineOutputView(win)
+        v = _bind(out, 1)
+        out.prompt("ask")
+        out.enter_input_mode()
+        answers = []
+        out.question_request(
+            1, [{"question": "Pick?", "options": [{"label": "A"}]}],
+            answers.append)
+        out.composer._input_mode = True
+        keys.write_setting(v.settings(), keys.INPUT_MODE, True)
+        self.assertTrue(v.settings().get(keys.HAS_QUESTION))
+        self.assertTrue(v.settings().get(keys.HAS_MODAL))
+        self.assertTrue(out.handle_question_key("1"))
+        self.assertEqual(answers, [{"Pick?": "A"}])
+
     def test_answering_last_question_reopens_composer(self):
         win = RecordingWindow()
         out = SubmarineOutputView(win)
