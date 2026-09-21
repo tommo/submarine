@@ -100,20 +100,23 @@ Command Palette: **Submarine: Devtools Snapshot / Sessions / Composer / Log / Re
 
 ### Session control from outside Sublime
 
-`list` / `view` / `chat` / `interrupt` for the sessions a running Sublime is
-holding, for a terminal, a script, or an agent that is not itself a session.
-Both clients talk to the plugin socket (`op:"sessions"`) — no second stack:
+The sessions a running Sublime is holding, for a terminal, a script, an agent
+that is not itself a session, or a phone. Both clients talk to the plugin
+socket (`op:"sessions"`) — no second stack:
 
 ```bash
-submarine_sessions list                              # or: chat/view/interrupt
+submarine_sessions list | view | chat | interrupt | pending | answer
+submarine_sessions create | rename | close | backends
 submarine_web.py                                     # browser console, 0.0.0.0:8787
 ```
 
-The web UI is the same four actions over HTTP with a small no-build console:
-the session list, the session sheet drawn the way Sublime draws it (same
-syntax and colours, folds per turn, search) in a CodeMirror editor, edits,
-a multi-line composer, interrupt. CodeMirror loads from esm.sh; offline the
-console degrades to a highlighted `<pre>` and a textarea.
+The web console is the same actions over HTTP: the Sublime session list
+(current above history, by window, ↳ children, `?` waiting first), the sheet
+drawn as Sublime draws it (CodeMirror, folds per turn, search), question /
+permission / plan cards you can answer, edits with diffs and a code view,
+new / rename / close. A prompt sent from outside shows as `◎ 📨 …` on the
+sheet. Phone layout included. CodeMirror loads from esm.sh; offline the
+console degrades to a `<pre>` and a textarea.
 
 **Usage docs:** [docs/session-control.md](docs/session-control.md) (CLI) and
 [docs/web-ui.md](docs/web-ui.md) (browser console, `--host` / `--port` /
@@ -155,10 +158,12 @@ All commands available via Command Palette (`Cmd+Shift+P`): type "Submarine"
 | Switch Session… | `Cmd+\` | Quick panel: active sessions, new session, backends (`with Grok…` / `with Kimi Code…` show live subscription usage from Service Manager when available). `Cmd+Alt+\` is an alias |
 | Session List | - | Scratch list of live + saved sessions |
 | Session List Reveal (keep focus) | - | Reveal list without stealing focus |
+| Toggle Session List / View | `Cmd+Shift+\` | Sessions list ↔ session view |
+| Next / Previous Session | `Ctrl+]` / `Ctrl+[` | Cycle this window's sessions (sleeping too), from the sheet or the list; the list follows |
 | Open Session JSONL | - | Open this session’s transcript |
 | Reveal Session JSONL in Finder | - | Reveal the transcript file |
 | Hide Session (keep running) | - | Hide the output view; bridge stays up |
-| Quick Agent | `Cmd+Shift+\` | Toggle one-shot Quick Agent sheet |
+| Quick Agent | - | Toggle one-shot Quick Agent sheet |
 | Quick Agent New Slot | - | Add a Quick slot (max 3) |
 | Quick Agent Config… | - | Configure Quick backend / model / effort |
 | Quick Agent Stop | - | Stop all Quick slots |
@@ -278,6 +283,9 @@ When a question is showing:
 - **O** — Other (free text)
 - **Enter** — Confirm (multi-select)
 
+All three can also be answered from outside (`submarine_sessions answer`,
+the web console); the sheet records the `☑` line either way.
+
 ### Menu
 
 Tools > Submarine
@@ -310,6 +318,12 @@ Right-click selected text and choose "Ask Submarine" to query about the selectio
     // Auto-sleep idle sessions after N minutes (0 = disabled). Timer starts
     // when a turn *ends*. Default if omitted: 60.
     // "auto_sleep_minutes": 60,
+
+    // Background job completions: "auto" wakes the agent, but once a
+    // notification turn ends with no tool call the rest of that batch is
+    // only surfaced and rides along with your next prompt; "always" wakes
+    // per job; "defer" never wakes. Failures always wake.
+    "background_notify": "auto",
 
     // Service Manager base URL for subscription usage on "with XXX…"
     // switch-panel rows (Grok / Kimi). Empty → http://127.0.0.1:3001
@@ -515,6 +529,10 @@ always passed — never a fresh session).
   disabled). Timer starts when a turn *ends*. **Toggle Auto-Sleep for This
   Session** sets `sleep_disabled` on that sheet only
 - **Hide Session** closes the view but keeps the bridge running
+- The **Session List** shows CURRENT (`▸` bound, `●` working, `?` waiting,
+  `!` unread, `○` ready, `⏸` sleeping) above HISTORY, children under their
+  parent with `↳`. Closing a parent asks about its children. Resumed
+  transcripts show host-injected prompts as `⚙ …`, never the raw tag block.
 
 ### Fork / switch / undo
 
