@@ -225,9 +225,9 @@ lose. No build step either way.
   a phone the composer steps aside while a card is up.
 - **Compose**: prompt (see *The sheet* above for the editor) and **Send**
   (Enter; Shift+Enter newlines); a prompt sent mid-turn queues behind the
-  turn, as it does in Sublime — there is no policy to pick — and
-  **Interrupt** (enabled only while the selected session is `working`; on a
-  phone it appears only then): the same cancel as `interrupt`.
+  turn, as it does in Sublime — there is no policy to pick. **■ Interrupt**
+  sits in the session header and shows only while the session is `working`:
+  the same cancel as `interrupt`.
 - Send is refused for saved rows: `chat` needs a live session (a sleeping one is
   woken by the plugin's own hand-off, and the console says so).
 

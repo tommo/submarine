@@ -77,6 +77,7 @@ window.SubmarineEditor = { ready: new Promise((r) => { window.__submarineEditorR
       <button id="back" class="btn back" type="button" aria-label="Back to the session list" title="Sessions">←</button>
       <div id="head" class="head empty">Pick a session on the left.</div>
       <div id="head-actions" class="head-actions" hidden>
+        <button id="interrupt" class="btn tiny danger interrupt" type="button" title="Cancel the current turn (a prompt sent mid-turn queues behind it)">■ Interrupt</button>
         <button id="more-actions" class="btn tiny phone-only" type="button" aria-label="Session actions">⋯</button>
         <div class="head-menu">
           <button id="rename" class="btn tiny" type="button" title="Rename this session">Rename</button>
@@ -115,18 +116,14 @@ window.SubmarineEditor = { ready: new Promise((r) => { window.__submarineEditorR
     <div id="modal" class="modal" hidden></div>
 
     <!-- One row: the editor and Send. A prompt sent mid-turn queues behind
-         the turn, as in Sublime; Interrupt is the only other control and on
-         a phone it appears only mid-turn. -->
+         the turn, as in Sublime. Interrupt lives in the session header. -->
     <form id="compose" class="compose">
       <div class="compose-main">
         <div id="composer" class="composer"></div>
         <textarea id="prompt" rows="1" placeholder="Prompt this session… (Enter sends, Shift+Enter newline)"></textarea>
         <button id="send" class="btn primary send" type="submit" title="Send">Send</button>
       </div>
-      <div class="compose-row">
-        <button id="interrupt" class="btn danger" type="button" title="Cancel the current turn (a prompt sent mid-turn queues behind it)">Interrupt</button>
-        <span id="note" class="note dim"></span>
-      </div>
+      <div id="note" class="note dim"></div>
     </form>
   </section>
 </main>

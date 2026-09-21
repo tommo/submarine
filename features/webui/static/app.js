@@ -844,6 +844,7 @@ async function tick() {
   state.working = working;
   document.body.classList.toggle('working', working);
   $('interrupt').disabled = !working;
+  $('interrupt').hidden = !working;
   setPlaceholder(promptPlaceholder(working));
   if (state.ref && row && row.kind === 'live') await refreshPending();
   else renderModal(null);

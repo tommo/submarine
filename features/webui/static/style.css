@@ -136,6 +136,9 @@ main {
 
 .head-actions { display: flex; gap: 6px; padding: 0 12px 8px; border-bottom: 1px solid var(--line); }
 .head-actions .btn.danger { background: #3a2226; border-color: #6b3b3f; }
+/* Interrupt: in the header, only while the session is mid-turn. */
+.head-actions .interrupt { display: none; }
+body.working .head-actions .interrupt { display: inline-flex; align-items: center; background: #5a2b2e; border-color: #8a4046; color: #ffd7db; font-weight: 600; }
 .group.in-history { text-transform: none; letter-spacing: 0; color: var(--fg); border-left-color: #4a5568; background: #15181e; }
 .group.in-history .gt { font-size: 12px; font-weight: 600; }
 
@@ -257,6 +260,9 @@ main {
 .head-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 8px 12px 0 0; position: relative; }
 .head-menu { display: flex; gap: 6px; }
 .head-actions .btn.danger { background: #3a2226; border-color: #6b3b3f; }
+/* Interrupt: in the header, only while the session is mid-turn. */
+.head-actions .interrupt { display: none; }
+body.working .head-actions .interrupt { display: inline-flex; align-items: center; background: #5a2b2e; border-color: #8a4046; color: #ffd7db; font-weight: 600; }
 .back { display: none; }
 
 .toolbar {
@@ -438,8 +444,8 @@ main {
 }
 .compose textarea:disabled { opacity: 0.5; }
 .btn.send { flex: 0 0 auto; min-height: 34px; }
-.compose-row { display: flex; gap: 8px; margin-top: 6px; align-items: center; }
-.note { font-size: 11px; min-height: 14px; margin-left: auto; text-align: right; }
+.note { font-size: 11px; margin-top: 4px; text-align: right; }
+.note:empty { display: none; }
 
 /* ── phone (and any window under 761px) ─────────────────────────────────────
    One pane at a time instead of a stacked pair: the list is a full screen and
@@ -546,11 +552,8 @@ main {
   .composer .cm-editor .cm-scroller { max-height: 30vh; }
   .btn.send { width: 44px; min-height: 44px; padding: 0; font-size: 0; }
   .btn.send::before { content: '↑'; font-size: 20px; line-height: 1; }
-  .compose-row { display: none; }
-  body.working .compose-row { display: flex; margin-top: 6px; }
-  body.working #interrupt { min-height: 40px; }
-  .note { display: none; }
-  .compose-row .note:not(:empty) { display: inline; }
+  .note { font-size: 11px; }
+  body.working .head-actions .interrupt { min-height: 36px; padding: 0 10px; }
   /* Folding and search are keyboard/pointer affordances; a thumb gets End. */
   .toolbar #fold, .toolbar #unfold, .toolbar #find { display: none !important; }
   .toolbar .tools { margin-left: auto; }
