@@ -32,7 +32,12 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
-ACTIONS = frozenset(("list", "view", "chat", "interrupt"))
+ACTIONS = frozenset(("list", "view", "chat", "interrupt", "pending", "answer"))
+PERMISSION_RESPONSES = frozenset(("allow", "deny", "allow_session", "allow_all"))
+PLAN_RESPONSES = frozenset(("approve", "reject"))
+#: A permission's tool_input on the wire: a Write's content or a long Bash
+#: script is summarised, not streamed, through the list.
+MAX_INPUT_CHARS = 2000
 VIEW_MODES = frozenset(("tail", "text", "edits"))
 CHAT_POLICIES = frozenset(("queue", "interrupt", "reject"))
 
@@ -103,6 +108,10 @@ def dispatch(request: dict) -> dict:
         elif action == "chat":
             body = action_chat(request or {}, caller)
             return body          # may carry the sleep/wake hand-off
+        elif action == "pending":
+            body, target = action_pending(request or {})
+        elif action == "answer":
+            body, target = action_answer(request or {})
         else:
             body, target = action_interrupt(request or {})
     except ControlError as e:
@@ -366,8 +375,20 @@ def _live_row(session: Any) -> dict:
         budget = session.context_budget_snapshot() or {}
     except Exception:
         budget = {}
+    # What the sheet is waiting on, if anything: the list surfaces these first
+    # (a question or permission is the one thing a phone must not miss).
+    waiting = None
+    modals = getattr(getattr(session, "output", None), "modals", None)
+    for attr, kind in (("pending_question", "question"),
+                       ("pending_permission", "permission"),
+                       ("pending_plan", "plan")):
+        if getattr(modals, attr, None) is not None:
+            waiting = kind
+            break
     return {
         "kind": "live",
+        "waiting": waiting,
+        "unread": bool(getattr(session, "unread", False)),
         "agent_id": getattr(session, "agent_id", None),
         "session_id": _session_id(session) or None,
         "subsession_id": getattr(session, "subsession_id", None),
@@ -571,11 +592,20 @@ def _idem_put(key: str, data: dict) -> None:
         st.pop(next(iter(st)), None)
 
 
-def _default_display(caller: Any) -> str:
+def _default_display(caller: Any, prompt: str = "") -> str:
+    """The sheet's prompt line: who sent it, then what they sent. The display
+    text replaces the prompt on the sheet (`◎ … ▶`), so the message itself
+    has to be in it — a bare `📨 from web UI` left the sheet with no prompt."""
     name = ""
     if isinstance(caller, dict):
         name = str(caller.get("name") or caller.get("kind") or "").strip()
-    return "📨 from %s" % (name or "outside agent")
+    stamp = "📨 from %s" % (name or "outside agent")
+    prompt = str(prompt or "").strip()
+    if not prompt:
+        return stamp
+    if "\n" in prompt:
+        return "%s\n%s" % (stamp, prompt)
+    return "%s: %s" % (stamp, prompt)
 
 
 def action_chat(params: dict, caller: Any = None) -> dict:
@@ -587,7 +617,7 @@ def action_chat(params: dict, caller: Any = None) -> dict:
         raise ControlError("bad_request", "unknown queue policy %r" % policy,
                            {"policies": sorted(CHAT_POLICIES)})
     wait = bool(params.get("wait"))
-    display = str(params.get("display") or _default_display(caller))
+    display = str(params.get("display") or _default_display(caller, prompt))
     key = params.get("idem")
     session = _resolve_live(params.get("ref"))
     ref = _row_ref(session)
@@ -705,3 +735,138 @@ def action_interrupt(params: dict) -> (dict, dict):
                  "reconciled by the host's interrupt timer") if settling else None,
     }
     return data, ref
+
+
+# ─── pending modals / answer ────────────────────────────────────────────────
+
+
+def _clip(value: Any, limit: int = MAX_INPUT_CHARS) -> Any:
+    if isinstance(value, str):
+        return value if len(value) <= limit else value[:limit] + "…"
+    if isinstance(value, dict):
+        return {str(k): _clip(v, limit) for k, v in list(value.items())[:40]}
+    if isinstance(value, (list, tuple)):
+        return [_clip(v, limit) for v in list(value)[:40]]
+    return value
+
+
+def _modals_of(session: Any) -> Any:
+    return getattr(getattr(session, "output", None), "modals", None)
+
+
+def _pending_body(session: Any) -> dict:
+    modals = _modals_of(session)
+    items = []  # type: List[dict]
+    try:
+        items = list(modals.descriptors()) if modals is not None else []
+    except Exception:
+        items = []
+    out = []
+    for d in items:
+        kind = d.get("kind")
+        payload = dict(d.get("payload") or {})
+        if kind == "permission":
+            payload["tool_input"] = _clip(payload.get("tool_input") or {})
+        elif kind == "question":
+            qs = payload.get("questions") or []
+            idx = int(payload.get("current_idx") or 0)
+            payload["total"] = len(qs)
+            payload["question"] = _clip(qs[idx]) if 0 <= idx < len(qs) else None
+            payload["questions"] = [_clip(q) for q in qs]
+        out.append({"kind": kind, "payload": payload})
+    # What the sheet shows first: a permission, then the plan, then the
+    # question — the order ModalUI.descriptors() lists them.
+    return {"modals": out, "waiting": (out[0]["kind"] if out else None),
+            "count": len(out)}
+
+
+def action_pending(params: dict) -> (dict, dict):
+    session = _resolve_live(params.get("ref"))
+    ref = _row_ref(session)
+    body = _pending_body(session)
+    body["session"] = ref
+    return body, ref
+
+
+def action_answer(params: dict) -> (dict, dict):
+    """Answer the visible modal the way the sheet's keys would.
+
+    question:   {"kind":"question", "option": 2 | "label", "options": [...],
+                 "text": "free text", "qid": …}
+    permission: {"kind":"permission", "response": allow|deny|allow_session|allow_all, "id": …}
+    plan:       {"kind":"plan", "response": approve|reject, "id": …}
+    """
+    session = _resolve_live(params.get("ref"))
+    ref = _row_ref(session)
+    modals = _modals_of(session)
+    if modals is None:
+        raise ControlError("no_session", "session has no modal surface")
+    kind = str(params.get("kind") or "").strip().lower()
+    applied = False
+    if kind == "question":
+        q_req = getattr(modals, "pending_question", None)
+        if not q_req or getattr(q_req, "callback", None) is None:
+            raise ControlError("not_found", "no question is pending", {"kind": kind})
+        qid = params.get("qid")
+        if qid is not None and str(qid) != str(getattr(q_req, "qid", "")):
+            raise ControlError("stale", "that question is no longer the pending one",
+                               {"qid": getattr(q_req, "qid", None)})
+        q = q_req.questions[q_req.current_idx]
+        options = q.get("options") or []
+        labels = [o.get("label", str(o)) if isinstance(o, dict) else str(o) for o in options]
+
+        def _label(v):
+            if isinstance(v, int) or (isinstance(v, str) and v.isdigit()):
+                i = int(v)
+                if 1 <= i <= len(labels):
+                    return labels[i - 1]
+                raise ControlError("bad_request", "option %s is out of range" % v,
+                                   {"options": labels})
+            return str(v)
+
+        if params.get("text") is not None and str(params.get("text")).strip():
+            answer = str(params["text"]).strip()  # type: Any
+        elif params.get("options") is not None:
+            if not q.get("multiSelect"):
+                raise ControlError("bad_request", "this question takes one option",
+                                   {"options": labels})
+            answer = [_label(v) for v in (params.get("options") or [])]
+        elif params.get("option") is not None:
+            answer = _label(params["option"])
+            if q.get("multiSelect"):
+                answer = [answer]
+        else:
+            raise ControlError("bad_request", "give option, options or text",
+                               {"options": labels, "multiSelect": bool(q.get("multiSelect"))})
+        applied = bool(modals.answer_question(answer))
+    elif kind == "permission":
+        response = str(params.get("response") or "").strip().lower()
+        if response not in PERMISSION_RESPONSES:
+            raise ControlError("bad_request", "response must be one of %s"
+                               % ", ".join(sorted(PERMISSION_RESPONSES)))
+        perm = getattr(modals, "pending_permission", None)
+        if not perm or getattr(perm, "callback", None) is None:
+            raise ControlError("not_found", "no permission is pending", {"kind": kind})
+        if params.get("id") is not None and str(params["id"]) != str(perm.id):
+            raise ControlError("stale", "that permission is no longer the pending one",
+                               {"id": perm.id})
+        applied = bool(modals.answer_permission(response, params.get("id")))
+    elif kind == "plan":
+        response = str(params.get("response") or "").strip().lower()
+        if response not in PLAN_RESPONSES:
+            raise ControlError("bad_request", "response must be approve or reject")
+        plan = getattr(modals, "pending_plan", None)
+        if not plan or getattr(plan, "callback", None) is None:
+            raise ControlError("not_found", "no plan is pending", {"kind": kind})
+        if params.get("id") is not None and str(params["id"]) != str(plan.id):
+            raise ControlError("stale", "that plan is no longer the pending one",
+                               {"id": plan.id})
+        applied = bool(modals.answer_plan(response, params.get("id")))
+    else:
+        raise ControlError("bad_request", "kind must be question, permission or plan")
+    if not applied:
+        raise ControlError("not_found", "nothing to answer", {"kind": kind})
+    body = _pending_body(session)
+    body["answered"] = kind
+    body["session"] = ref
+    return body, ref

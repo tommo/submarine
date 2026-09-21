@@ -497,8 +497,9 @@ def _hydrate_session_from_saved(session, entry):
     except (TypeError, ValueError):
         pass
     # Carry-over fields _save_session would otherwise write back empty.
-    if entry.get("parent_agent_id"):
-        session.parent_agent_id = entry["parent_agent_id"]
+    paid = entry.get("parent_agent_id")
+    if paid and paid != session.agent_id:
+        session.parent_agent_id = paid
     if entry.get("parent_session_id"):
         session.parent_session_id = entry["parent_session_id"]
     if entry.get("subsession_id"):
@@ -1092,11 +1093,13 @@ class SubmarineOutputEventListener(sublime_plugin.ViewEventListener):
                 or (matched or {}).get("subsession_id")
                 or None
             )
-            session.parent_agent_id = (
-                keys.read_setting(view.settings(), keys.PARENT_AGENT_ID)
-                or (matched or {}).get("parent_agent_id")
-                or None
-            )
+            # The saved row is written by this session alone; the host view's
+            # stamp may belong to whichever session was bound last.
+            if matched:
+                paid = matched.get("parent_agent_id") or None
+            else:
+                paid = keys.read_setting(view.settings(), keys.PARENT_AGENT_ID) or None
+            session.parent_agent_id = None if paid == aid else paid
             if resume_id:
                 session.session_id = resume_id
             try:

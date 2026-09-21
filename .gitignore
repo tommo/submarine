@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 .sessions.json
+.sessions.json.*
 .migration.json
 _research/
 .delta/

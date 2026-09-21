@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Submarine sessions</title>
+<link rel="stylesheet" href="/static/style.css">
+<!-- CodeMirror 6 from esm.sh. Every package is externalised (the `*` prefix)
+     and resolved here, so the page holds exactly one @codemirror/state — two
+     copies is the classic CM6 CDN failure. Versions are pinned; bump them
+     together. Offline, editor.js falls back to the plain sheet and textarea. -->
+<script type="importmap">
+{
+  "imports": {
+    "@codemirror/state": "https://esm.sh/*@codemirror/state@6.7.5",
+    "@codemirror/view": "https://esm.sh/*@codemirror/view@6.43.12",
+    "@codemirror/language": "https://esm.sh/*@codemirror/language@6.12.4",
+    "@codemirror/commands": "https://esm.sh/*@codemirror/commands@6.11.1",
+    "@codemirror/search": "https://esm.sh/*@codemirror/search@6.7.2",
+    "@lezer/common": "https://esm.sh/*@lezer/common@1.5.2",
+    "@lezer/highlight": "https://esm.sh/*@lezer/highlight@1.2.3",
+    "@marijn/find-cluster-break": "https://esm.sh/*@marijn/find-cluster-break@1.0.4",
+    "style-mod": "https://esm.sh/*style-mod@4.1.4",
+    "w3c-keyname": "https://esm.sh/*w3c-keyname@2.2.8",
+    "crelt": "https://esm.sh/*crelt@1.0.7"
+  }
+}
+</script>
+<script>
+// Settled by editor.js with the CodeMirror API, or null when the CDN is
+// unreachable; app.js waits on it (with a timeout) before it renders a sheet.
+window.SubmarineEditor = { ready: new Promise((r) => { window.__submarineEditorReady = r; }) };
+</script>
+</head>
+<!-- data-pane picks which pane a phone shows; see the 760px media query in
+     style.css and the navigation block in app.js. Inert above 760px. -->
+<body data-pane="list">
+<header class="top">
+  <h1>Submarine <span class="dim">sessions</span></h1>
+  <div class="top-right">
+    <span id="conn" class="badge">connecting…</span>
+    <button id="refresh" class="btn" type="button" title="Reload the list and this session">Refresh</button>
+  </div>
+</header>
+
+<div id="error" class="error" hidden></div>
+
+<main>
+  <aside class="list">
+    <div class="list-head">
+      <input id="search" type="search" placeholder="Search sessions…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <div id="counts" class="counts dim">…</div>
+    </div>
+    <div id="sessions" class="rows"></div>
+  </aside>
+
+  <section class="detail">
+    <div class="headwrap">
+      <button id="back" class="btn back" type="button" aria-label="Back to the session list">← Sessions</button>
+      <div id="head" class="head empty">Pick a session on the left, or send a prompt to wake one.</div>
+    </div>
+
+    <div class="toolbar">
+      <div class="tabs">
+        <button class="tab on" type="button" data-mode="sheet" title="The session sheet as Sublime shows it; falls back to the transcript when the session has no sheet">Sheet</button>
+        <button class="tab" type="button" data-mode="tail" title="The last turns from the transcript on disk">Transcript</button>
+        <button class="tab" type="button" data-mode="edits" title="Files this session edited">Edits</button>
+      </div>
+      <span id="source" class="dim small"></span>
+      <div class="tools">
+        <label class="dim small" id="turns-wrap">turns <input id="turns" type="number" min="1" max="50" value="8"></label>
+        <button id="fold" class="btn tiny" type="button" title="Fold every turn (Cmd/Ctrl-Alt-[ ), unfold with Cmd/Ctrl-Alt-]">Fold all</button>
+        <button id="unfold" class="btn tiny" type="button" title="Unfold every turn">Unfold</button>
+        <button id="find" class="btn tiny" type="button" title="Search the sheet (Cmd/Ctrl-F)">Find</button>
+        <button id="tail" class="btn tiny" type="button" title="Jump to the end of the sheet">⤓ End</button>
+        <button id="reload" class="btn tiny phone-only" type="button" title="Reload the list and this session" aria-label="Refresh">⟳</button>
+      </div>
+    </div>
+    <!-- Phone: the toolbar's second line — what the pane shows, and a way to
+         pull more turns without a number field. -->
+    <div class="caption phone-only">
+      <span id="source-phone" class="dim small"></span>
+      <button id="more" class="link small" type="button">+8 older turns</button>
+    </div>
+
+    <div id="pane" class="pane"></div>
+
+    <!-- What the sheet is waiting on — a question, a permission, a plan —
+         rendered as controls; answers go through POST /api/answer. -->
+    <div id="modal" class="modal" hidden></div>
+
+    <form id="compose" class="compose">
+      <div id="composer" class="composer"></div>
+      <textarea id="prompt" rows="3" placeholder="Prompt this session… (Enter sends, Shift+Enter newline)"></textarea>
+      <div class="compose-row">
+        <select id="queue" title="What to do when the session is mid-turn">
+          <option value="queue">queue behind the turn</option>
+          <option value="interrupt">interrupt, then send</option>
+          <option value="reject">refuse while busy</option>
+        </select>
+        <button id="send" class="btn primary" type="submit">Send</button>
+        <button id="interrupt" class="btn danger" type="button" title="Cancel the current turn">Interrupt</button>
+      </div>
+      <div id="note" class="note dim"></div>
+    </form>
+  </section>
+</main>
+
+<script src="/static/highlight.js"></script>
+<script type="module" src="/static/editor.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

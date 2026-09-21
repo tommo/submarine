@@ -86,7 +86,10 @@ def call(action: str, timeout: float = DEFAULT_TIMEOUT, path: str = "",
             out["error"] = resp["error"]
         return out
     if resp.get("error"):
-        return {"ok": False, "error": resp["error"]}
+        out = {"ok": False, "error": resp["error"]}
+        if resp.get("hint"):
+            out["hint"] = resp["hint"]
+        return out
     if body is None:
         return {"ok": False,
                 "error": "Sublime answered nothing for op:sessions",
@@ -109,6 +112,67 @@ def _ago(ts) -> str:
     return "?"
 
 
+def _window_of(row: dict) -> str:
+    """The row's parent window id as text, or "" when it has none.
+
+    `0` is a valid window id, so the test is None/""-based, not truthiness.
+    """
+    window = (row.get("view") or {}).get("window")
+    if window is None or window == "":
+        return ""
+    return str(window)
+
+
+def _window_label(key: str, rows: list) -> str:
+    if not key:
+        return "No window (%d)" % len(rows)
+    project = next((str((r.get("view") or {}).get("project")) for r in rows
+                    if (r.get("view") or {}).get("project")), "")
+    return "Window %s%s (%d)" % (key, " — %s" % project if project else "", len(rows))
+
+
+def _window_groups(rows: list) -> list:
+    """Rows grouped by parent window, windowless rows last.
+
+    The window is what tells two same-named sessions apart, so the human table
+    heads each group instead of printing one flat list. Row order inside a group
+    is the caller's (last access desc), live rows first; JSON output stays flat.
+    """
+    by_key = {}
+    for row in rows:
+        by_key.setdefault(_window_of(row), []).append(row)
+
+    def _sort_key(key):
+        if not key:
+            return (2, 0, "")
+        return (0, int(key), "") if key.isdigit() else (1, 0, key)
+
+    groups = []
+    for key in sorted(by_key, key=_sort_key):
+        group = by_key[key]
+        groups.append({
+            "label": _window_label(key, group),
+            "rows": ([r for r in group if r.get("kind") == "live"] +
+                     [r for r in group if r.get("kind") != "live"]),
+        })
+    return groups
+
+
+def _row_line(r: dict) -> str:
+    view = r.get("view") or {}
+    agent = str(r.get("agent_id") or "")
+    sid = str(r.get("session_id") or "")
+    return ("%-9s %-22s %-7s %-6s %-6s %-5s %-4s %s"
+            % (str(r.get("state") or "")[:9],
+               (str(r.get("name") or "(unnamed)"))[:22],
+               str(r.get("backend") or "")[:7],
+               (str(view.get("view_id")) if view.get("bound") else "-")[:6],
+               _window_of(r)[:6] or "-",
+               str(r.get("query_count") if r.get("query_count") is not None else "-")[:5],
+               _ago(r.get("last_access"))[:4],
+               ("%s %s" % (agent[:26], sid[:14])).strip()))
+
+
 def render_list(body: dict) -> str:
     rows = body.get("sessions") or []
     if not rows:
@@ -116,19 +180,10 @@ def render_list(body: dict) -> str:
     head = ("%-9s %-22s %-7s %-6s %-6s %-5s %-4s %s"
             % ("STATE", "NAME", "BACKEND", "VIEW", "WINDOW", "Q", "AGE", "AGENT / SESSION"))
     lines = [head, "-" * len(head)]
-    for r in rows:
-        view = r.get("view") or {}
-        agent = str(r.get("agent_id") or "")
-        sid = str(r.get("session_id") or "")
-        lines.append("%-9s %-22s %-7s %-6s %-6s %-5s %-4s %s"
-                     % (str(r.get("state") or "")[:9],
-                        (str(r.get("name") or "(unnamed)"))[:22],
-                        str(r.get("backend") or "")[:7],
-                        (str(view.get("view_id")) if view.get("bound") else "-")[:6],
-                        (str(view.get("window")) if view.get("window") else "-")[:6],
-                        str(r.get("query_count") if r.get("query_count") is not None else "-")[:5],
-                        _ago(r.get("last_access"))[:4],
-                        ("%s %s" % (agent[:26], sid[:14])).strip()))
+    for group in _window_groups(rows):
+        lines.append("")
+        lines.append(group["label"])
+        lines.extend("  " + _row_line(r) for r in group["rows"])
     lines.append("")
     lines.append("%d session(s) — %s" % (
         int(body.get("count") or len(rows)),
@@ -284,6 +339,81 @@ def cmd_interrupt(args) -> int:
     return 0
 
 
+def render_pending(body: dict) -> str:
+    modals = body.get("modals") or []
+    if not modals:
+        return "nothing pending"
+    out = []
+    for m in modals:
+        kind, p = m.get("kind"), m.get("payload") or {}
+        if kind == "question":
+            q = p.get("question") or {}
+            out.append("? %s (%d of %d)  qid %s" % (q.get("header") or "Question",
+                       int(p.get("current_idx") or 0) + 1, p.get("total") or 1, p.get("qid")))
+            out.append("  %s" % q.get("question", ""))
+            for i, o in enumerate(q.get("options") or []):
+                label = o.get("label", o) if isinstance(o, dict) else o
+                desc = o.get("description", "") if isinstance(o, dict) else ""
+                out.append("  %d. %s%s" % (i + 1, label, ("  — " + desc) if desc else ""))
+            if q.get("multiSelect"):
+                out.append("  (multiSelect: answer --options 1,3)")
+        elif kind == "permission":
+            inp = p.get("tool_input") or {}
+            head = inp.get("command") or inp.get("file_path") or inp.get("path") or ""
+            out.append("! allow %s?  id %s%s" % (p.get("tool"), p.get("id"),
+                       ("  " + str(head)[:120]) if head else ""))
+        elif kind == "plan":
+            out.append("plan needs approval  id %s  %s" % (p.get("id"), p.get("plan_file") or ""))
+        else:
+            out.append("%s pending" % kind)
+    return "\n".join(out)
+
+
+def cmd_pending(args) -> int:
+    env = call("pending", timeout=args.timeout, path=args.socket, ref=args.ref)
+    if not env.get("ok"):
+        return _fail(env)
+    body = env.get("data") or {}
+    print(json.dumps(body, indent=2) if args.json else render_pending(body))
+    return 0
+
+
+def cmd_answer(args) -> int:
+    fields = {"kind": args.kind}
+    if args.kind == "question":
+        if args.text:
+            fields["text"] = args.text
+        elif args.options:
+            fields["options"] = [x.strip() for x in args.options.split(",") if x.strip()]
+        elif args.option:
+            fields["option"] = args.option
+        else:
+            print("error: give an option number/label, --options 1,3 or --text", file=sys.stderr)
+            return 2
+        if args.id is not None:
+            fields["qid"] = args.id
+    else:
+        if not args.option:
+            print("error: give the response (allow/deny/allow_session/allow_all, "
+                  "approve/reject)", file=sys.stderr)
+            return 2
+        fields["response"] = args.option
+        if args.id is not None:
+            fields["id"] = args.id
+    env = call("answer", timeout=args.timeout, path=args.socket, ref=args.ref, **fields)
+    if not env.get("ok"):
+        return _fail(env)
+    body = env.get("data") or {}
+    if args.json:
+        print(json.dumps(body, indent=2))
+    else:
+        print("answered %s" % body.get("answered"))
+        rest = render_pending(body)
+        if rest != "nothing pending":
+            print("still pending:\n" + rest)
+    return 0
+
+
 MANUAL_NAME = "session-control.md"
 
 
@@ -364,6 +494,21 @@ def build_parser() -> argparse.ArgumentParser:
     sp = common(sub.add_parser("interrupt", help="cancel the current turn"))
     sp.add_argument("ref")
     sp.set_defaults(func=cmd_interrupt)
+
+    sp = common(sub.add_parser("pending", help="what the sheet is waiting on"))
+    sp.add_argument("ref")
+    sp.set_defaults(func=cmd_pending)
+
+    sp = common(sub.add_parser("answer", help="answer a question / permission / plan"))
+    sp.add_argument("ref")
+    sp.add_argument("kind", choices=("question", "permission", "plan"))
+    sp.add_argument("option", nargs="?", default=None,
+                    help="option number or label (question); allow/deny/allow_session/"
+                         "allow_all (permission); approve/reject (plan)")
+    sp.add_argument("--options", default=None, help="multiSelect: 1,3 or labels")
+    sp.add_argument("--text", default=None, help="free-text answer")
+    sp.add_argument("--id", default=None, help="qid / permission id / plan id guard")
+    sp.set_defaults(func=cmd_answer)
 
     sub.add_parser("help", help="short usage").set_defaults(func=cmd_help)
     return p

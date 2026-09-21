@@ -1,0 +1,634 @@
+:root {
+  --bg: #16181d;
+  --panel: #1d2027;
+  --panel-2: #23262e;
+  --line: #2f333d;
+  --fg: #dfe3ea;
+  --dim: #8b93a1;
+  --accent: #7fb2ff;
+  --ok: #5fbf7f;
+  --warn: #d9a557;
+  --bad: #e06c75;
+  /* SubmarineOutput.hidden-tmTheme globals */
+  --sheet-bg: #1f2430;
+  --sheet-fg: #cbccc6;
+  --sheet-line: #191e2a;
+  --sheet-sel: #33415e;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  /* The document never scrolls: the list, the sheet and the modal card do.
+     No rubber-band at the page edges, no pull-to-refresh, on any device. */
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* A scroll that reaches the end of a pane stays in that pane. */
+.rows, .pane, .modal, .cm-scroller, .compose textarea { overscroll-behavior: contain; }
+
+.dim { color: var(--dim); }
+.small { font-size: 12px; }
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.top h1 { font-size: 14px; font-weight: 600; margin: 0; }
+.top-right { display: flex; align-items: center; gap: 8px; }
+
+.badge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--dim);
+  font-size: 11px;
+}
+.badge.ok { color: var(--ok); }
+.badge.bad { color: var(--bad); }
+
+.btn {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel-2);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--dim); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn.primary { background: #2b4a7d; border-color: #37598f; }
+.btn.danger { background: #4a2b2e; border-color: #6b3b3f; }
+
+.error {
+  margin: 0;
+  padding: 8px 12px;
+  background: #3a2226;
+  border-bottom: 1px solid #6b3b3f;
+  color: #ffd7db;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.list {
+  width: 34%;
+  min-width: 260px;
+  max-width: 460px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line);
+  min-height: 0;
+}
+
+.list-head {
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.list-head input[type="search"] {
+  width: 100%;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 8px;
+  -webkit-appearance: none;
+}
+.list-head input[type="search"]:focus { outline: none; border-color: var(--dim); }
+.counts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 11px; }
+
+.rows { overflow-y: auto; flex: 1; }
+.empty-note { padding: 10px; margin: 0; font-size: 12px; }
+
+/* group header: project (window) — click folds the group. A band, not a
+   caption: darker, an accent bar, bigger title; the rows indent under it. */
+.group {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 10px 6px 8px;
+  font-size: 12px;
+  color: var(--fg);
+  background: #12151a;
+  border-left: 3px solid var(--accent);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  cursor: pointer;
+  user-select: none;
+  min-width: 0;
+}
+.group:not(:first-child) { border-top: 1px solid var(--line); margin-top: 6px; }
+.group:hover { background: #171a20; }
+.group .chev { color: var(--dim); font-size: 10px; width: 10px; flex: 0 0 auto; }
+.group .gt { font-weight: 700; font-size: 13px; letter-spacing: 0.01em; flex: 0 0 auto; }
+.group .gs { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.group .gn { flex: 0 0 auto; font-size: 11px; }
+.group.folded { border-left-color: var(--dim); }
+.group.history { text-transform: uppercase; letter-spacing: 0.08em; color: var(--dim); border-left-color: var(--line); }
+.group.history .gt { font-weight: 600; font-size: 11px; }
+/* rows sit inside the band's indent */
+.group ~ .row { padding-left: 20px; }
+.group.history ~ .row { padding-left: 20px; }
+.gb { font-size: 10px; padding: 0 6px; border-radius: 8px; background: var(--panel-2); color: var(--dim); white-space: nowrap; flex: 0 0 auto; }
+.gb.busy { color: #ffd479; background: #3a3320; }
+.gb.attn { color: #ffcc66; background: #4a3a1c; font-weight: 600; }
+
+.row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px 6px 8px;
+  border: 0;
+  border-bottom: 1px solid #23262e;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.row:hover { background: var(--panel); }
+.row.on { background: #24303f; box-shadow: inset 2px 0 0 var(--accent); }
+.row.waiting { background: #2a2618; }
+.row.waiting.on { background: #33301f; }
+.row .r1 { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.row .cur { width: 8px; flex: 0 0 auto; color: var(--accent); font-size: 11px; }
+.row .tree { color: var(--dim); flex: 0 0 auto; padding-left: calc(var(--d, 0) * 10px); font-size: 11px; }
+.row .tree-pad { display: inline-block; width: calc(var(--d, 0) * 10px + 14px); flex: 0 0 auto; }
+.row .mark { flex: 0 0 auto; width: 12px; text-align: center; font-size: 11px; color: var(--dim); }
+.row .mark.working { color: #ffd479; animation: pulse 1.2s ease-in-out infinite; }
+.row .mark.waiting { color: #ffcc66; font-weight: 700; }
+.row .mark.unread { color: #ffcc66; font-weight: 700; }
+.row .mark.idle { color: var(--ok); }
+.row .mark.sleeping { color: var(--accent); }
+.row .mark.error { color: var(--bad); }
+.row .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row.working .name, .row.waiting .name { color: #fff; }
+.row .age { flex: 0 0 auto; }
+.row .r2 { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 11px; padding-left: 20px; min-width: 0; }
+.row .r2 .bits { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .r2 .wait { color: #ffcc66; white-space: nowrap; }
+.row .ctx { margin-left: auto; width: 36px; height: 4px; border-radius: 2px; background: var(--panel-2); overflow: hidden; flex: 0 0 auto; }
+.row .ctx i { display: block; height: 100%; background: var(--ok); }
+.row .ctx.warm i { background: var(--warn); }
+.row .ctx.hot i { background: var(--bad); }
+.more-rows { display: block; width: 100%; padding: 8px 10px; text-align: left; font-size: 12px; }
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.state { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: var(--panel-2); color: var(--dim); }
+
+.detail {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.head { padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.head.empty { color: var(--dim); }
+.head h2 { margin: 0 0 4px; font-size: 14px; }
+.head .meta { display: flex; flex-wrap: wrap; gap: 10px; color: var(--dim); font-size: 11px; }
+.head .meta code { color: var(--fg); }
+/* Wrapper only exists to host the phone's back button next to the header. */
+.headwrap { display: flex; flex-direction: column; min-width: 0; }
+.back { display: none; }
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.tabs { display: flex; gap: 4px; }
+.tab {
+  padding: 3px 10px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  color: var(--dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.tab:hover { color: var(--fg); }
+.tab.on { background: var(--panel-2); border-color: var(--line); color: var(--fg); }
+.toolbar input[type="number"] {
+  width: 52px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+
+.pane {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+  min-height: 0;
+}
+/* The sheet fills the pane edge to edge; CodeMirror scrolls itself. */
+.pane.is-sheet { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+.pane.is-sheet .cm-editor { flex: 1; min-height: 0; }
+.pane.is-sheet pre.sheet {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 8px 12px 24px 18px;
+  overflow: auto;
+  background: var(--sheet-bg);
+  color: var(--sheet-fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, "JetBrains Mono", monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.toolbar .tools { display: flex; align-items: center; gap: 6px; margin-left: auto; flex: 0 0 auto; }
+.toolbar .tools label { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.toolbar .btn { white-space: nowrap; }
+.toolbar .tabs { flex: 0 0 auto; }
+.toolbar #source { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+@media (max-width: 1000px) {
+  .toolbar #source { display: none; }
+  /* Fold all / Unfold need the room more than they earn it here; the gutter
+     arrows (and, on touch, tapping a ◎ line) still fold one turn at a time. */
+  .toolbar #fold, .toolbar #unfold { display: none; }
+  .toolbar { overflow: hidden; }
+}
+.btn.tiny { padding: 2px 8px; font-size: 11px; }
+.btn.link, .link {
+  background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer;
+}
+.phone-only { display: none; }
+.caption { display: none; }
+/* The Sheet tab says when it is really the transcript (the source label is
+   hidden at narrower widths). */
+.tab.fallback::after { content: ' ·T'; color: var(--dim); font-size: 10px; }
+[hidden] { display: none !important; }
+
+.turn { border-top: 1px solid var(--line); padding: 8px 0; }
+.turn:first-child { border-top: 0; }
+.turn .prompt, .turn .reply, .pane pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.turn .prompt { color: var(--accent); }
+.turn .tools { color: var(--warn); font-size: 11px; margin: 2px 0; }
+.turn .reply { margin-top: 4px; }
+.turn .when { color: var(--dim); font-size: 10px; }
+.pane .path { color: var(--dim); font-size: 11px; margin-bottom: 6px; word-break: break-all; }
+.pane .edit { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+.pane .edit .path { color: var(--accent); }
+.pane .empty { color: var(--dim); }
+
+/* ── pending modal card: the sheet's ❓ / ⚠ / plan block as controls ────────── */
+.modal {
+  border-top: 1px solid var(--line);
+  background: #23262e;
+  padding: 10px 12px;
+  box-shadow: inset 3px 0 0 #ffcc66;
+  max-height: 45%;
+  overflow-y: auto;
+}
+.modal.permission { box-shadow: inset 3px 0 0 #ffad66; }
+.modal.plan { box-shadow: inset 3px 0 0 #d4bfff; }
+.modal .mh { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.modal .micon { color: #ffcc66; }
+.modal .micon.warn { color: #ffcc66; }
+.modal .mtitle { font-weight: 600; font-size: 13px; }
+.modal .mtitle code { color: #73d0ff; }
+.modal .mq { font-size: 13px; margin: 2px 0 8px; white-space: pre-wrap; }
+.modal .opts { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.modal .opt {
+  display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
+  padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: var(--fg); font: inherit; cursor: pointer;
+}
+.modal .opt:hover { border-color: var(--dim); }
+.modal .opt.picked { border-color: #87d96c; background: #22301f; }
+.modal .opt .on { color: #ffcc66; font-weight: 600; min-width: 1.2em; }
+.modal .opt .ol { display: flex; flex-direction: column; gap: 1px; }
+.modal .opt .od { color: var(--dim); font-size: 11px; }
+.modal .mrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.modal .mrow input[type="text"] {
+  flex: 1 1 200px; min-width: 0; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 5px; color: var(--fg); font: inherit; padding: 5px 8px;
+}
+.modal .minput {
+  margin: 0 0 8px; padding: 6px 8px; background: var(--sheet-line); border-radius: 4px;
+  font-family: ui-monospace, Menlo, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word;
+  max-height: 160px; overflow: auto;
+}
+.modal .mmore { margin: -4px 0 8px; }
+.modal .mmore pre { margin: 2px 0 6px; font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow: auto; }
+.modal .btn u { text-decoration: none; color: #ffcc66; font-weight: 600; margin-right: 2px; }
+.modal .btn.allow { background: #24402a; border-color: #2f6b3a; }
+.modal .btn.deny { background: #4a2b2e; border-color: #6b3b3f; }
+.modal .btn.always { background: #4a3a1c; border-color: #6b5426; }
+
+.compose {
+  border-top: 1px solid var(--line);
+  padding: 8px 12px;
+  background: var(--panel);
+}
+.composer { width: 100%; }
+.composer .cm-editor { width: 100%; }
+.compose textarea {
+  width: 100%;
+  resize: vertical;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--fg);
+  padding: 6px 8px;
+  font: inherit;
+  font-family: ui-monospace, Menlo, monospace;
+}
+.compose textarea:disabled { opacity: 0.5; }
+.compose-row { display: flex; gap: 8px; margin-top: 6px; align-items: center; }
+.compose select {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+}
+.compose-row .btn { margin-left: auto; }
+.compose-row .btn + .btn { margin-left: 0; }
+.note { margin-top: 4px; font-size: 11px; min-height: 14px; }
+
+/* ── phone (and any window under 761px) ─────────────────────────────────────
+   One pane at a time instead of a stacked pair: the list is a full screen and
+   a tap swaps in the detail, with the back button (or the browser/OS back
+   gesture, via the URL hash — see app.js) returning to the list. Everything
+   here is inert above 760px, where the two-pane layout is unchanged. */
+
+@media (max-width: 760px) {
+  html {
+    -webkit-text-size-adjust: 100%;
+    /* --app-h tracks the visual viewport so a soft keyboard does not cover the
+       compose row; 100dvh is the fallback when the page cannot measure it. */
+    height: var(--app-h, 100dvh);
+    /* No pull-to-refresh: the panes scroll inside a fixed-height page, and a
+       stray pull at the top of the transcript would reload the console. */
+    overscroll-behavior: none;
+  }
+  body {
+    height: var(--app-h, 100dvh);
+    overflow: hidden;             /* the panes scroll, not the document */
+  }
+
+  main { flex-direction: column; }
+  body[data-pane="list"] .detail { display: none; }
+  body[data-pane="detail"] .list { display: none; }
+
+  .top {
+    padding-top: max(6px, env(safe-area-inset-top, 0px));
+    padding-left: max(12px, env(safe-area-inset-left, 0px));
+    padding-right: max(12px, env(safe-area-inset-right, 0px));
+  }
+  .top h1 { font-size: 15px; }
+  .top h1 .dim { display: none; }   /* the title has to fit beside the badge */
+  .top-right { min-width: 0; flex: 1 1 auto; justify-content: flex-end; }
+  .badge { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .btn { min-height: 44px; }
+
+  .list {
+    width: auto;
+    max-width: none;
+    min-width: 0;
+    max-height: none;
+    flex: 1 1 auto;
+    border-right: 0;
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+  .detail { flex: 1 1 auto; }
+
+  .list-head { padding: 8px 12px 6px; }
+  .list-head input[type="search"] { font-size: 16px; padding: 8px 10px; }   /* no iOS zoom */
+  .group { padding: 9px 12px 7px 10px; }
+  .group .gt { font-size: 14px; }
+  .row { padding: 10px 12px 10px 10px; min-height: 48px; }
+  .group ~ .row { padding-left: 24px; }
+  .row .r1 { gap: 8px; font-size: 14px; }
+  .row .r2 { margin-top: 2px; }
+
+  /* The header keeps its chips on one swipeable line: ten wrapped chips would
+     eat the transcript's height. */
+  .headwrap { flex-direction: row; align-items: stretch; border-bottom: 1px solid var(--line); }
+  .head { flex: 1 1 auto; min-width: 0; border-bottom: 0; padding: 8px 12px; }
+  .head h2 { font-size: 15px; }
+  .head .meta { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; }
+  .head .meta > span { white-space: nowrap; }
+  .back {
+    display: flex;
+    align-items: center;
+    flex: 0 0 auto;
+    min-height: 44px;
+    padding: 0 14px 0 10px;
+    border: 0;
+    border-right: 1px solid var(--line);
+    border-radius: 0;
+    background: var(--panel);
+    font-size: 14px;
+  }
+
+  .toolbar { flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
+  .tab { min-height: 44px; padding: 3px 12px; font-size: 13px; }
+  .toolbar input[type="number"] { width: 64px; font-size: 16px; padding: 6px; }
+
+  .pane { padding: 10px 12px; }
+  .turn .prompt, .turn .reply, .pane pre { font-size: 13px; }
+
+  .compose {
+    padding-top: 8px;
+    padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
+    padding-left: max(12px, env(safe-area-inset-left, 0px));
+    padding-right: max(12px, env(safe-area-inset-right, 0px));
+  }
+  /* 16px keeps iOS from zooming the page when the field takes focus; the box
+     starts small and grows with the text (app.js) so it leaves the transcript
+     room. */
+  .compose textarea { font-size: 16px; height: 52px; min-height: 52px; max-height: 30vh; }
+  /* Same 16px rule for the CodeMirror composer (the theme sets 13px). */
+  .composer .cm-editor { font-size: 16px; }
+  .composer .cm-editor .cm-content { min-height: 2.4em; }
+  /* Folding and search are keyboard/pointer affordances; a thumb gets End. */
+  .toolbar #fold, .toolbar #unfold, .toolbar #find { display: none !important; }
+  .toolbar .tools { margin-left: auto; }
+  .btn.tiny { min-height: 36px; }
+
+  /* ── chrome diet: the sheet, not the chrome, gets the screen ─────────── */
+  /* The detail pane has its own header (← Sessions + name); the top bar's
+     Refresh moves into the toolbar as ⟳ and the error strip still shows. */
+  body[data-pane="detail"] .top { display: none; }
+  .phone-only { display: inline-flex; }
+  .headwrap .back { min-height: 40px; padding: 0 10px 0 8px; font-size: 13px; }
+  .head { padding: 6px 10px; }
+  .head h2 { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .head .meta { font-size: 10px; gap: 8px; }
+  .head .meta .m-id { display: none; }          /* ids are for copy-paste, not a phone */
+  .toolbar { flex-wrap: nowrap; gap: 6px; padding: 4px 8px; }
+  .tabs { gap: 2px; }
+  .tab { min-height: 36px; padding: 2px 10px; font-size: 13px; }
+  .toolbar #turns-wrap { display: none !important; }   /* the caption's +8 does this */
+  .toolbar #tail { padding: 4px 8px; }
+  .caption {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 2px 10px 4px;
+    border-bottom: 1px solid var(--line);
+    min-height: 20px;
+  }
+  .caption #source-phone { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .caption .link { flex: 0 0 auto; min-height: 28px; }
+
+  /* A pending modal owns the bottom of a phone screen: the composer steps
+     aside (as the Sublime sheet hides it), Interrupt stays. */
+  body.has-modal .composer, body.has-modal #prompt, body.has-modal #queue, body.has-modal #send { display: none !important; }
+  body.has-modal .compose-row { grid-template-columns: 1fr; }
+  .modal { padding: 10px 12px; max-height: 55%; }
+  .modal .opt { min-height: 44px; font-size: 14px; }
+  .modal .mrow.perms { display: grid; grid-template-columns: 1fr 1fr; }
+  .modal .mrow .btn { min-height: 44px; }
+  .modal .mrow input[type="text"] { font-size: 16px; min-height: 44px; flex-basis: 100%; }
+
+  /* Composing: the keyboard takes a third of the screen, so the session
+     header and toolbar step aside and the sheet keeps its room. */
+  body.composing .headwrap, body.composing .toolbar, body.composing .caption { display: none; }
+  body.composing .compose { padding-top: 6px; }
+  body.composing .note:empty { display: none; }
+}
+
+/* Real phone widths: the compose controls stack, because a queue policy select
+   plus two buttons on one line leaves none of them thumb-sized. */
+@media (max-width: 560px) {
+  .compose-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .compose select { grid-column: 1 / -1; font-size: 16px; }
+  .compose-row .btn { margin-left: 0; font-size: 14px; }
+}
+
+/* ── sheet scopes — SubmarineOutput.hidden-tmTheme, class per scope ──────────
+   Applied by highlight.js (the <pre> fallback) and by the CodeMirror
+   decorations in editor.js; both use the same class names. */
+.sm-prompt { color: #73d0ff; font-weight: 600; }
+.sm-prompt-marker { color: #73d0ff; font-weight: 600; }
+.sm-tool-pending { color: #ffad66; }
+.sm-tool-background { color: #7a8a9a; }
+.sm-tool-done { color: #5a9484; }
+.sm-tool-error { color: #a06a74; }
+.sm-goal-active { color: #d4bfff; font-weight: 600; }
+.sm-goal-verifying { color: #95e6cb; font-weight: 600; }
+.sm-goal-planning { color: #73d0ff; font-weight: 600; }
+.sm-goal-blocked { color: #f28779; font-weight: 600; }
+.sm-goal-done { color: #5a9484; }
+.sm-goal-paused { color: #8a93a3; }
+.sm-task-active { color: #ffad66; }
+.sm-task-pending { color: #8a93a3; }
+.sm-task-more { color: #5c6773; font-style: italic; }
+.sm-meta-done { color: #8a9199; font-style: italic; }
+.sm-input-sep { color: #4a5568; }
+.sm-interrupted { color: #ffad66; font-style: italic; }
+.sm-retry { color: #b08a4a; font-style: italic; }
+.sm-question-answered { color: #95e6cb; font-weight: 600; }
+.sm-tool-output { color: #707a8c; }
+.sm-tool-result { color: #5c6773; font-style: italic; }
+.sm-spinner { color: #ffcc66; }
+.sm-permission-icon { color: #ffcc66; }
+.sm-permission-label { color: var(--sheet-fg); }
+.sm-permission-tool { color: #73d0ff; font-weight: 600; }
+.sm-permission-button-allow { color: #87d96c; font-weight: 600; }
+.sm-permission-button-deny { color: #ff6666; font-weight: 600; }
+.sm-permission-button-allowall { color: #ffcc66; font-weight: 600; }
+.sm-text { color: var(--sheet-fg); }
+
+/* markdown */
+.sm-markup-heading { color: #ffd580; font-weight: 600; }
+.sm-punctuation-heading, .sm-punctuation-bold, .sm-punctuation-italic,
+.sm-punctuation-raw, .sm-punctuation-link, .sm-punctuation-blockquote,
+.sm-punctuation-thematic-break, .sm-punctuation-code { color: #5c6773; }
+.sm-markup-bold { font-weight: 600; }
+.sm-markup-italic { font-style: italic; }
+.sm-markup-underline-link { color: #73d0ff; text-decoration: underline; }
+.sm-string-other-link-title { color: #73d0ff; }
+.sm-markup-list { color: #f29e74; }
+.sm-markup-raw-inline { color: #d4bfff; background: #262d3a; border-radius: 2px; }
+.sm-markup-quote { color: #b0b8c6; font-style: italic; }
+.sm-constant-language-name { color: #ffcc66; }
+
+/* fenced code (markup.raw.block background carried by the whole line) */
+.sm-code-line, .cm-line.sm-code-line { background: var(--sheet-line); }
+.sm-code { color: var(--sheet-fg); }
+.sm-comment { color: #5c6773; font-style: italic; }
+.sm-string { color: #bae67e; }
+.sm-constant-numeric { color: #ffcc66; }
+.sm-keyword { color: #ffa759; }
+.sm-keyword-operator { color: #f29e74; }
+.sm-entity-name-function { color: #ffd580; }
+.sm-entity-name-type { color: #73d0ff; }
+.sm-diff-context { color: #678ac7; }
+.sm-markup-inserted { color: #87d96c; }
+.sm-markup-deleted { color: #ff6666; }
+.sm-meta-diff-range { color: #d4bfff; }
+
+/* ── touch screens at any width (iPad, phone) ───────────────────────────────
+   `pointer: coarse` is a thumb: targets grow, the fold gutter gets a real hit
+   area, and app.js makes Enter a newline (Send / ⌘↩ send). Widths above 760px
+   keep the two-pane layout. */
+@media (pointer: coarse) {
+  .btn, .tab, .toolbar input[type="number"], .compose select { min-height: 40px; }
+  .btn.tiny { min-height: 36px; padding: 4px 10px; font-size: 12px; }
+  .row { min-height: 48px; }
+  .pane.is-sheet .cm-editor { font-size: 13.5px; }
+  .pane.is-sheet .cm-foldGutter .cm-gutterElement {
+    padding: 0 6px 0 10px;
+    min-width: 28px;
+    font-size: 14px;
+  }
+  .pane.is-sheet .cm-gutters { min-width: 28px; }
+  .pane.is-sheet pre.sheet { font-size: 13.5px; }
+  /* A read-only editor still wants native long-press selection. */
+  .pane.is-sheet .cm-content { -webkit-user-select: text; user-select: text; }
+}

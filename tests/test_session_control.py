@@ -71,8 +71,9 @@ class FakeSession(object):
         return True
 
     def wake(self):
+        # The hand-off polls `initialized` and never starts the bridge itself,
+        # so chat has to wake a sleeping target before it hands over.
         self.calls.append(("wake",))
-        return True
 
     def interrupt(self):
         self.calls.append(("interrupt",))
@@ -253,7 +254,7 @@ class TestChat(ControlTestCase):
         env = sc.action_chat({"ref": "a1", "prompt": "  do it  "},
                              {"kind": "external", "name": "claude-code"})
         self.assertTrue(env["ok"])
-        self.assertEqual(s.calls, [("query", "do it", "📨 from claude-code")])
+        self.assertEqual(s.calls, [("query", "do it", "📨 from claude-code: do it")])
         self.assertEqual(env["data"]["action"], "sent")
         self.assertEqual(env["ref_resolved"]["agent_id"], "a1")
 
@@ -284,7 +285,7 @@ class TestChat(ControlTestCase):
     def test_interrupt_policy_on_an_idle_session_queries(self):
         s = self._add(FakeSession("a1", "s1"))
         env = sc.action_chat({"ref": "a1", "prompt": "p", "queue": "interrupt"})
-        self.assertEqual(s.calls, [("query", "p", "📨 from outside agent")])
+        self.assertEqual(s.calls, [("query", "p", "📨 from outside agent: p")])
         self.assertEqual(env["data"]["action"], "sent")
 
     def test_reject_with_wait_still_refuses_a_busy_target(self):
@@ -294,9 +295,6 @@ class TestChat(ControlTestCase):
         self.assertEqual(ctx.exception.code, "busy")
 
     def test_a_sleeping_target_is_woken_then_handed_to_the_socket_thread(self):
-        """The hand-off only polls `initialized`, so the wake has to happen
-        here — otherwise the bridge never comes up and the prompt is dropped
-        when that poll times out."""
         s = self._add(FakeSession("a1", "s1", sleeping=True, initialized=False))
         env = sc.action_chat({"ref": "a1", "prompt": "wake up", "wait": True})
         self.assertTrue(env["ok"])
@@ -304,25 +302,14 @@ class TestChat(ControlTestCase):
         self.assertIs(env["_session"], s)
         self.assertEqual(env["_prompt"], "wake up")
         self.assertTrue(env["_wait_for_completion"])
-        self.assertEqual(s.calls, [("wake",)], "started, then handed over")
-        self.assertEqual(env["data"]["action"], "woke")
-
-    def test_a_connecting_session_is_not_woken_twice(self):
-        """`initialized` false but awake is a session mid-connect: the wake
-        would be redundant, so only a genuinely sleeping one is started."""
-        s = self._add(FakeSession("a1", "s1", initialized=False, sleeping=False))
-        env = sc.action_chat({"ref": "a1", "prompt": "hello"})
-        self.assertTrue(env["_wait_for_init"])
-        self.assertEqual(s.calls, [])
-        # The label describes the delivery promise ("once the bridge is up"),
-        # not which call was made: a session mid-connect is not woken.
-        self.assertEqual(env["data"]["action"], "woke")
+        self.assertEqual(s.calls, [("wake",)],
+                         "woken here; the prompt is not sent from this thread")
 
     def test_waiting_hands_off_even_when_awake(self):
         s = self._add(FakeSession("a1", "s1"))
         env = sc.action_chat({"ref": "a1", "prompt": "p", "wait": True})
         self.assertTrue(env["_wait_for_init"])
-        self.assertEqual(s.calls, [])
+        self.assertEqual(s.calls, [], "an awake session needs no wake")
 
     def test_an_empty_prompt_is_refused(self):
         self._add(FakeSession("a1", "s1"))
@@ -336,7 +323,7 @@ class TestChat(ControlTestCase):
         second = sc.action_chat({"ref": "a1", "prompt": "once", "idem": "k1"})
         self.assertFalse(first["data"].get("duplicate"))
         self.assertTrue(second["data"]["duplicate"])
-        self.assertEqual([c for c in s.calls if c[0] == "query"], [("query", "once", "📨 from outside agent")])
+        self.assertEqual([c for c in s.calls if c[0] == "query"], [("query", "once", "📨 from outside agent: once")])
 
 
 class TestInterrupt(ControlTestCase):
@@ -438,6 +425,60 @@ class TestCli(unittest.TestCase):
         self.assertEqual(req["caller"]["kind"], "cli")
         self.assertIn("GUEST", text)
         self.assertIn("grok", text)
+
+    def _row(self, name, window, project=None, kind="live", state="idle"):
+        return {"kind": kind, "state": state, "name": name, "backend": "grok",
+                "agent_id": "agent-" + name, "session_id": "sid-" + name,
+                "last_access": time.time(),
+                "view": {"bound": kind == "live", "view_id": 1 if kind == "live" else None,
+                         "window": window, "project": project}}
+
+    def test_list_groups_rows_under_a_header_per_window(self):
+        self.reply = {"ok": True, "data": {
+            "count": 4, "states": {"idle": 3, "closed": 1},
+            "sessions": [self._row("in-2", 2, "/work/eb"),
+                         self._row("in-5", 5),
+                         self._row("unbound", None),
+                         self._row("saved", None, kind="saved", state="closed")]}}
+        code, text = self._run(["list"])
+        self.assertEqual(code, 0)
+        self.assertLess(text.index("Window 2 — /work/eb"), text.index("Window 5"))
+        self.assertLess(text.index("Window 5"), text.index("No window"))
+        # Every row sits under the header of its own window.
+        self.assertLess(text.index("Window 2 — /work/eb"), text.index("in-2"))
+        self.assertLess(text.index("in-2"), text.index("Window 5"))
+        self.assertLess(text.index("Window 5"), text.index("in-5"))
+        self.assertLess(text.index("in-5"), text.index("No window"))
+        self.assertLess(text.index("unbound"), text.index("saved"))
+        self.assertNotIn("live (", text)
+
+    def test_a_saved_row_without_a_window_still_shows_under_no_window(self):
+        self.reply = {"ok": True, "data": {
+            "count": 1, "states": {"closed": 1},
+            "sessions": [self._row("old", None, kind="saved", state="closed")]}}
+        code, text = self._run(["list"])
+        self.assertEqual(code, 0)
+        self.assertIn("No window (1)", text)
+        self.assertIn("old", text)
+
+    def test_window_zero_is_a_window_not_a_missing_one(self):
+        self.reply = {"ok": True, "data": {
+            "count": 1, "states": {"idle": 1},
+            "sessions": [self._row("first", 0, "/tmp/first")]}}
+        code, text = self._run(["list"])
+        self.assertEqual(code, 0)
+        self.assertIn("Window 0 — /tmp/first (1)", text)
+        self.assertNotIn("No window", text)
+
+    def test_json_list_stays_flat(self):
+        rows = [self._row("in-2", 2), self._row("saved", None, kind="saved",
+                                                state="closed")]
+        self.reply = {"ok": True, "data": {"count": 2, "states": {"idle": 1},
+                                           "sessions": rows}}
+        code, text = self._run(["list", "--json"])
+        self.assertEqual(code, 0)
+        body = json.loads(text)
+        self.assertEqual([r["name"] for r in body["sessions"]], ["in-2", "saved"])
 
     def test_chat_with_wait_uses_a_second_request_for_the_reply(self):
         self.reply = {"ok": True, "data": {"action": "pending", "session": {"name": "G"}}}

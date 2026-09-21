@@ -10,6 +10,10 @@ submarine_sessions list [--scope all|window|children]
 submarine_sessions view REF [--mode tail|text|edits]
 submarine_sessions chat REF "prompt" [--wait]
 submarine_sessions interrupt REF
+submarine_sessions pending REF
+submarine_sessions answer REF question 2 | --options 1,3 | --text "…"
+submarine_sessions answer REF permission allow|deny|allow_session|allow_all
+submarine_sessions answer REF plan approve|reject
 submarine_sessions --manual
 ```
 
@@ -89,12 +93,26 @@ session has no sheet), `WINDOW`, `Q` (query count), `AGE` (time since last
 activity), and `AGENT / SESSION` (the two ids, truncated). The footer counts the
 rows per state.
 
+Rows are grouped by the Sublime window that owns them — the header names the
+window id and its project folder — because that is what tells two same-named
+sessions apart. Live rows come first inside a group, then the saved ones, and
+rows the plugin reports without a window (unbound, or saved and not running)
+collect under a final `No window` header. `--json` is unaffected: it stays the
+flat `sessions` array the socket returned.
+
 ```
 STATE     NAME                   BACKEND VIEW   WINDOW Q     AGE  AGENT / SESSION
 ----------------------------------------------------------------------------------
-idle      GUEST                  grok    59     2      43    1h   agent-0a1b2c3d4e5f 01a0aaaa-bbbb
-working   review the dock tabs   kimi    -      2      12    3m   agent-1b2c3d4e5f60 session_0123abcd
-sleeping  harness-mcp            grok    12     3      5     2d   agent-2c3d4e5f6071 01a0bbbb-cccc
+
+Window 2 — /path/to/project (2)
+  idle      GUEST                  grok    59     2      43    1h   agent-0a1b2c3d4e5f 01a0aaaa-bbbb
+  working   review the dock tabs   kimi    -      2      12    3m   agent-1b2c3d4e5f60 session_0123abcd
+
+Window 3 (1)
+  sleeping  harness-mcp            grok    12     3      5     2d   agent-2c3d4e5f6071 01a0bbbb-cccc
+
+No window (1)
+  closed    dock-tabs-sketch       claude  -      -      -     5d   agent-3d4e5f607182 session_4567cdef
 
 4 session(s) — idle=1, sleeping=1, working=1, closed=1
 ```
@@ -140,7 +158,7 @@ submarine_sessions chat REF "prompt" [--queue queue|interrupt|reject]
 - `--timeout` is how long the CLI waits for the socket reply (default 30s);
   `--wait-timeout` is how long the follow-up `--wait` read may take (600s).
 - The prompt is delivered to the model as written. Only the *display* line in
-  the transcript is stamped (`📨 from outside agent`, or the caller's name when
+  the transcript is stamped (`📨 from outside agent: <prompt>`, or the caller's name when
   a wire client sends one).
 - `chat` never stops a session and never opens a sheet.
 
@@ -162,6 +180,37 @@ the bridge acknowledge is still outstanding; the host's settle timer reconciles 
 `settling: true` means the cancellation was requested and the session is still
 `working` while the bridge acknowledges; the host settles a lost acknowledgement
 on its own timer. Nothing is queued for the session by an interrupt.
+
+### `pending`
+
+```
+submarine_sessions pending REF
+```
+
+What the session's sheet is waiting on: a question (`AskUserQuestion`) with
+its numbered options, a permission prompt (tool + the command / path it asks
+about; a Write's content is clipped to 2000 chars), or a plan approval. The
+plugin lists them in the order the sheet shows them — permission, plan,
+question — and `list` marks such a session with `waiting`.
+
+### `answer`
+
+```
+submarine_sessions answer REF question 2            # option by number
+submarine_sessions answer REF question httpx        # or by label
+submarine_sessions answer REF question --options 1,3   # a multiSelect question
+submarine_sessions answer REF question --text "use urllib3, no new deps"
+submarine_sessions answer REF permission allow      # deny | allow_session | allow_all
+submarine_sessions answer REF plan approve          # reject
+```
+
+Resolves the sheet's own callback, exactly as the keys on the sheet would:
+the `☑ Header → answer` line lands in the transcript, `allow_all` remembers
+the tool pattern like `A` does, and the next question (if any) becomes the
+pending one. `--id` guards against answering a prompt that has since been
+replaced: it must match the question's `qid` / the permission or plan `id`
+from `pending`, or the call is refused with `stale`. `not_found` means nothing
+of that kind is pending.
 
 ### Global options
 
@@ -306,7 +355,9 @@ refuses.
 $ submarine_sessions list --scope window --window 2
 STATE     NAME     BACKEND VIEW   WINDOW Q     AGE  AGENT / SESSION
 --------------------------------------------------------------------------------
-idle      GUEST    grok    59     2      43    1h   agent-0a1b2c3d4e5f 01a0aaaa-bbbb
+
+Window 2 — /path/to/project (1)
+  idle      GUEST    grok    59     2      43    1h   agent-0a1b2c3d4e5f 01a0aaaa-bbbb
 
 2 session(s) — idle=1, closed=1
 

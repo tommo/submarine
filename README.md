@@ -98,6 +98,27 @@ python3 submarine_devtools.py goal status --view-id N
 Command Palette: **Submarine: Devtools Snapshot / Sessions / Composer / Log / Reload**.
 **Usage doc:** [docs/devtools.md](docs/devtools.md).
 
+### Session control from outside Sublime
+
+`list` / `view` / `chat` / `interrupt` for the sessions a running Sublime is
+holding, for a terminal, a script, or an agent that is not itself a session.
+Both clients talk to the plugin socket (`op:"sessions"`) — no second stack:
+
+```bash
+submarine_sessions list                              # or: chat/view/interrupt
+submarine_web.py                                     # browser console, 0.0.0.0:8787
+```
+
+The web UI is the same four actions over HTTP with a small no-build console:
+the session list, the session sheet drawn the way Sublime draws it (same
+syntax and colours, folds per turn, search) in a CodeMirror editor, edits,
+a multi-line composer, interrupt. CodeMirror loads from esm.sh; offline the
+console degrades to a highlighted `<pre>` and a textarea.
+
+**Usage docs:** [docs/session-control.md](docs/session-control.md) (CLI) and
+[docs/web-ui.md](docs/web-ui.md) (browser console, `--host` / `--port` /
+`--token`).
+
 ## Usage
 
 ### Commands

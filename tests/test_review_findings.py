@@ -97,10 +97,11 @@ class TestFinding2RestoreLosesAgentLinks(unittest.TestCase):
     def _build(self, store, row, with_ctx):
         from ui.listeners import _hydrate_session_from_saved
         ctx = {"agent_id": row["agent_id"]} if with_ctx else None
+        path = store.path  # make_session redirects the store; point it back
         s = make_session(
             resume_id=row["session_id"], store=store,
             initial_context=ctx)
-        s.store.path = store.path  # keep pointing at our fixture store
+        s.store.path = path
         _hydrate_session_from_saved(s, row)
         return s
 

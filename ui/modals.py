@@ -1207,6 +1207,98 @@ class ModalUI:
             return False
         return False
 
+    # --- answering from outside the sheet (session control / web UI) -------
+    # The key handlers above gate on the composer's focus because keystrokes
+    # belong to it; a remote answer has no such conflict, so these resolve the
+    # modal directly. Viewless sessions work the same way the handlers do.
+
+    def answer_question(self, answer):
+        """Answer the visible question: an option label / free text (str) or,
+        for a multiSelect question, a list of labels. Returns True if applied."""
+        q_req = self.pending_question
+        if not q_req or q_req.callback is None:
+            return False
+        if q_req.current_idx >= len(q_req.questions):
+            return False
+        c = self.owner.composer
+        if c.is_input_mode() and not c._question_input_mode:
+            try:
+                c.hide_composer_for_modal()
+            except Exception:
+                pass
+        q = q_req.questions[q_req.current_idx]
+        header = q.get("header", "Q%d" % (q_req.current_idx + 1))
+        question_text = q.get("question", str(q_req.current_idx))
+        if isinstance(answer, (list, tuple, set)):
+            labels = [str(a) for a in answer]
+            q_req.answers[question_text] = labels
+            summary = ", ".join(labels) if labels else "(none)"
+        else:
+            text = str(answer)
+            q_req.answers[question_text] = text
+            summary = text
+        if c._question_input_mode and self._has_view():
+            # Drop the sheet's inline input line the way submit does.
+            try:
+                self._question_abandon_input()
+            except Exception:
+                pass
+        self.clear_question("%s → %s" % (header, summary))
+        self._advance_question()
+        return True
+
+    def answer_permission(self, response, pid=None):
+        """Resolve the visible permission with allow / deny / allow_session /
+        allow_all. `pid` (when given) must match the visible request."""
+        perm = self.pending_permission
+        if not perm or perm.callback is None:
+            return False
+        if pid is not None and str(pid) != str(perm.id):
+            return False
+        if response not in (PERM_ALLOW, PERM_DENY, PERM_ALLOW_SESSION, PERM_ALLOW_ALL):
+            return False
+        callback = perm.callback
+        perm.callback = None
+        self._respond_permission_with_callback(
+            response, callback, perm.tool, perm.tool_input)
+        return True
+
+    def answer_plan(self, response, plan_id=None):
+        """Resolve the visible plan approval with approve / reject."""
+        plan = self.pending_plan
+        if not plan or plan.callback is None:
+            return False
+        if plan_id is not None and str(plan_id) != str(plan.id):
+            return False
+        if response not in (PLAN_APPROVE, PLAN_REJECT):
+            return False
+        callback = plan.callback
+        plan.callback = None
+        self.clear_plan_approval()
+        self.pending_plan = None
+        if callback:
+            callback(response)
+        self._restore_composer_after_modal()
+        return True
+
+    def _question_abandon_input(self):
+        """Remove the inline `▸ ` input line without submitting it."""
+        c = self.owner.composer
+        view = self.owner.view
+        regions = view.get_regions(keys.QUESTION_INPUT_MARKER)
+        erase_start = (regions[0].begin() if regions
+                       else max(0, c._question_input_start - len("\n    ▸ ")))
+        c._question_input_mode = False
+        c._input_mode = False
+        keys.write_setting(view.settings(), keys.INPUT_MODE, False)
+        keys.write_setting(view.settings(), keys.QUESTION_INPUT_MODE, False)
+        view.set_read_only(False)
+        view.run_command(keys.CMD_REPLACE, {
+            "start": erase_start, "end": view.size(), "text": "",
+        })
+        view.set_read_only(True)
+        view.erase_regions(keys.QUESTION_INPUT_MARKER)
+
     def _question_enter_input_mode(self):
         view = self.owner.view
         c = self.owner.composer

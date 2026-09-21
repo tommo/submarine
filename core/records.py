@@ -104,11 +104,23 @@ def read_stamp(persist: Any, key: str) -> Any:
 
 
 def stamp_identity(persist: Any, **values: Any) -> None:
-    """Write non-None identity stamps under the new key names."""
+    """Write identity stamps under the new key names.
+
+    A None value erases the stamp. In single mode every session binds the
+    same host view, so a stale stamp (a child's parent_agent_id) would
+    otherwise survive onto the next bound session and be read back on
+    restore as its own — a root ended up parented to itself.
+    """
     if persist is None:
         return
     for key, value in values.items():
         if value is None:
+            clear = getattr(persist, "clear", None)
+            if callable(clear):
+                try:
+                    clear(key)
+                except Exception:
+                    pass
             continue
         persist.stamp(key, value)
 

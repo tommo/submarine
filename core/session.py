@@ -1756,10 +1756,19 @@ class Session:
             entry["agent_id"] = self.agent_id
         if self.subsession_id:
             entry["subsession_id"] = self.subsession_id
-        if self.parent_agent_id:
-            entry["parent_agent_id"] = self.parent_agent_id
-        if self.parent_session_id:
-            entry["parent_session_id"] = self.parent_session_id
+        paid = self.parent_agent_id
+        if paid and paid == self.agent_id:
+            paid = None  # a stale host-view stamp, never a real link
+            self.parent_agent_id = None
+        if not paid and existing.get("parent_agent_id") not in (None, self.agent_id):
+            paid = existing.get("parent_agent_id")
+            self.parent_agent_id = paid
+        if paid:
+            entry["parent_agent_id"] = paid
+        psid = self.parent_session_id or existing.get("parent_session_id")
+        if psid:
+            entry["parent_session_id"] = psid
+            self.parent_session_id = psid
         kids = list(getattr(self, "child_agent_ids", None) or [])
         if kids:
             entry["child_agent_ids"] = kids
