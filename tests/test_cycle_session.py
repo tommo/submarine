@@ -146,3 +146,47 @@ class AwakeSessionsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ListSyncTest(unittest.TestCase):
+    """Cycling moves the Sessions list caret (and scroll) to the new row."""
+
+    def test_sync_list_to_session_places_caret_and_shows_row(self):
+        import json
+        from ui import session_list as sl
+        from tests.stubs import install
+        sublime = install()
+        prev = sl.sublime
+        sl.sublime = sublime
+        shown, sel = [], []
+
+        class _Sel(list):
+            def clear(self): del self[:]
+            def add(self, r): self.append(r); sel.append(r)
+
+        class _View(object):
+            def __init__(self):
+                self._s = {sl.SETTING: True, sl.ROWS_KEY: json.dumps([
+                    {"kind": "live", "agent_id": "aa", "session_id": "a", "line": 4},
+                    {"kind": "live", "agent_id": "bb", "session_id": "b", "line": 5},
+                ])}
+                self._sel = _Sel()
+            def settings(self):
+                d = self._s
+                return type("S", (), {"get": lambda _s, k, dflt=None: d.get(k, dflt),
+                                      "set": lambda _s, k, v: d.__setitem__(k, v)})()
+            def is_valid(self): return True
+            def text_point(self, r, c): return r * 100
+            def sel(self): return self._sel
+            def show(self, pt): shown.append(pt)
+
+        view = _View()
+        win = type("W", (), {"views": lambda _s: [view]})()
+        target = type("T", (), {"agent_id": "bb", "session_id": "b"})()
+        try:
+            self.assertTrue(sl.sync_list_to_session(win, target))
+        finally:
+            sl.sublime = prev
+        self.assertEqual(shown, [400])      # line 5 -> row 4 -> text_point(4, 0)
+        self.assertEqual(len(sel), 1)
+

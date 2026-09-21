@@ -1249,6 +1249,13 @@ class SubmarineCycleSessionCommand(sublime_plugin.WindowCommand):
                     self.window.focus_view(view)
             except Exception:
                 pass
+            # The list follows: its caret and scroll move to the new row, so
+            # what it points at is what the window shows.
+            try:
+                from ui.session_list import sync_list_to_session
+                sync_list_to_session(self.window, target)
+            except Exception:
+                pass
             reveal._land(target)
             name = (
                 getattr(target, "display_name", None)

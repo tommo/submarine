@@ -2241,6 +2241,50 @@ def _place_caret_on_session(view, sid, kind=None) -> None:
         pass
 
 
+def sync_list_to_session(window, session) -> bool:
+    """Caret (and scroll) of this window's Sessions list onto `session`'s row.
+
+    For a switch made elsewhere — Ctrl+] / Ctrl+[, a reveal command — so the
+    list keeps pointing at what the window shows. True when a row was found.
+    """
+    if window is None or session is None:
+        return False
+    sid = getattr(session, "session_id", None) or ""
+    aid = getattr(session, "agent_id", None) or ""
+    done = False
+    try:
+        views = list(window.views())
+    except Exception:
+        return False
+    for v in views:
+        try:
+            if not (v.settings().get(SETTING) and v.is_valid()):
+                continue
+            index = json.loads(v.settings().get(ROWS_KEY) or "[]")
+        except Exception:
+            continue
+        target = None
+        for rec in index:
+            if rec.get("kind") != "live":
+                continue
+            if (aid and rec.get("agent_id") == aid) or (sid and rec.get("session_id") == sid):
+                target = rec
+                break
+        if target is None:
+            continue
+        try:
+            pt = v.text_point(max(0, int(target.get("line") or 1) - 1), 0)
+            v.sel().clear()
+            v.sel().add(sublime.Region(pt, pt) if sublime is not None else pt)
+            v.show(pt)
+            gen = int(v.settings().get(FOLLOW_GEN_KEY) or 0) + 1
+            v.settings().set(FOLLOW_GEN_KEY, gen)
+            done = True
+        except Exception:
+            pass
+    return done
+
+
 def refresh_session_list(window, force: bool = True) -> bool:
     """Re-render this window's Sessions view; True when it ran.
 
