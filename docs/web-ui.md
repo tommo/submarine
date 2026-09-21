@@ -37,8 +37,8 @@ transcript files. Consequences worth knowing:
   `{"code": …}` namespace that shares the socket.
 
 The caller stamp is `{"kind": "webui", "name": "web UI"}`, so the plugin's audit
-log and the prompt line on the target sheet (`◎ 📨 from web UI: <prompt> ▶`) name the
-surface that acted.
+log names the surface that acted; the target sheet's prompt line only carries
+the mark (`◎ 📨 <prompt> ▶`).
 
 ## 2. Run it
 

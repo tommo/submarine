@@ -596,19 +596,15 @@ def _idem_put(key: str, data: dict) -> None:
 
 
 def _default_display(caller: Any, prompt: str = "") -> str:
-    """The sheet's prompt line: who sent it, then what they sent. The display
-    text replaces the prompt on the sheet (`◎ … ▶`), so the message itself
-    has to be in it — a bare `📨 from web UI` left the sheet with no prompt."""
-    name = ""
-    if isinstance(caller, dict):
-        name = str(caller.get("name") or caller.get("kind") or "").strip()
-    stamp = "📨 from %s" % (name or "outside agent")
+    """The sheet's prompt line for a prompt sent from outside Sublime: the
+    📨 mark, then the message. The display text replaces the prompt on the
+    sheet (`◎ … ▶`), so the message itself has to be in it. Who sent it is in
+    the audit log; the mark alone says "not typed here"."""
+    _ = caller
     prompt = str(prompt or "").strip()
     if not prompt:
-        return stamp
-    if "\n" in prompt:
-        return "%s\n%s" % (stamp, prompt)
-    return "%s: %s" % (stamp, prompt)
+        return "📨"
+    return "📨 %s" % prompt
 
 
 def action_chat(params: dict, caller: Any = None) -> dict:

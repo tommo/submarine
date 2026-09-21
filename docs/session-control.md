@@ -157,9 +157,9 @@ submarine_sessions chat REF "prompt" [--queue queue|interrupt|reject]
   retries on timeout.
 - `--timeout` is how long the CLI waits for the socket reply (default 30s);
   `--wait-timeout` is how long the follow-up `--wait` read may take (600s).
-- The prompt is delivered to the model as written. Only the *display* line in
-  the transcript is stamped (`📨 from outside agent: <prompt>`, or the caller's name when
-  a wire client sends one).
+- The prompt is delivered to the model as written. Only the sheet's ◎ line
+  is marked (`◎ 📨 <prompt> ▶`) to say it was not typed there; who sent it
+  (the caller stamp) goes to the audit log, not onto the sheet.
 - `chat` never stops a session and never opens a sheet.
 
 ### `interrupt`

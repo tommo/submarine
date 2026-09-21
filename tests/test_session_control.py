@@ -254,7 +254,7 @@ class TestChat(ControlTestCase):
         env = sc.action_chat({"ref": "a1", "prompt": "  do it  "},
                              {"kind": "external", "name": "claude-code"})
         self.assertTrue(env["ok"])
-        self.assertEqual(s.calls, [("query", "do it", "📨 from claude-code: do it")])
+        self.assertEqual(s.calls, [("query", "do it", "📨 do it")])
         self.assertEqual(env["data"]["action"], "sent")
         self.assertEqual(env["ref_resolved"]["agent_id"], "a1")
 
@@ -285,7 +285,7 @@ class TestChat(ControlTestCase):
     def test_interrupt_policy_on_an_idle_session_queries(self):
         s = self._add(FakeSession("a1", "s1"))
         env = sc.action_chat({"ref": "a1", "prompt": "p", "queue": "interrupt"})
-        self.assertEqual(s.calls, [("query", "p", "📨 from outside agent: p")])
+        self.assertEqual(s.calls, [("query", "p", "📨 p")])
         self.assertEqual(env["data"]["action"], "sent")
 
     def test_reject_with_wait_still_refuses_a_busy_target(self):
@@ -323,7 +323,7 @@ class TestChat(ControlTestCase):
         second = sc.action_chat({"ref": "a1", "prompt": "once", "idem": "k1"})
         self.assertFalse(first["data"].get("duplicate"))
         self.assertTrue(second["data"]["duplicate"])
-        self.assertEqual([c for c in s.calls if c[0] == "query"], [("query", "once", "📨 from outside agent: once")])
+        self.assertEqual([c for c in s.calls if c[0] == "query"], [("query", "once", "📨 once")])
 
 
 class TestInterrupt(ControlTestCase):
