@@ -19,6 +19,8 @@
 * { box-sizing: border-box; }
 
 html, body {
+  /* Glyphs stay glyphs: no emoji presentation for ⚙ ✔ ⚠ on Android. */
+  font-variant-emoji: text;
   height: 100%;
   margin: 0;
   background: var(--bg);
@@ -421,7 +423,7 @@ body.working .head-actions .interrupt { display: inline-flex; align-items: cente
 .modal.permission { box-shadow: inset 3px 0 0 #ffad66; }
 .modal.plan { box-shadow: inset 3px 0 0 #d4bfff; }
 .modal .mh { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
-.modal .micon { color: #ffcc66; }
+.modal .micon { color: #ffcc66; font-weight: 700; font-variant-emoji: text; }
 .modal .micon.warn { color: #ffcc66; }
 .modal .mtitle { font-weight: 600; font-size: 13px; }
 .modal .mtitle code { color: #73d0ff; }
@@ -640,6 +642,8 @@ body.working .head-actions .interrupt { display: inline-flex; align-items: cente
    decorations in editor.js; both use the same class names. */
 .sm-prompt { color: #73d0ff; font-weight: 600; }
 .sm-prompt-marker { color: #73d0ff; font-weight: 600; }
+.sm-tool-pending, .sm-tool-background, .sm-tool-done, .sm-tool-error, .sm-question-answered,
+.sm-permission-icon, .sm-retry, .sm-spinner, .row .mark, .group .gicon { font-variant-emoji: text; }
 .sm-tool-pending { color: #ffad66; }
 .sm-tool-background { color: #7a8a9a; }
 .sm-tool-done { color: #5a9484; }

@@ -252,14 +252,15 @@ function isCurrent(row) {
   return row.state === 'open' || row.state === 'sleeping';   // saved, still current
 }
 
-// Sublime's marks: ? input, ! unread, ● working, ⏸ sleeping, ○ ready.
+// Sublime's marks: ? input, ! unread, ● working, ⏸ sleeping, ○ ready —
+// except sleeping, where ⏸ is an emoji on Android (a yellow badge); ◌ here.
 function rowMark(row) {
   if (row.waiting) return ['?', 'waiting'];
   if (row.unread) return ['!', 'unread'];
   const st = String(row.state || '');
   if (st === 'working') return ['●', 'working'];
   if (st === 'error') return ['✘', 'error'];
-  if (st === 'sleeping') return ['⏸', 'sleeping'];
+  if (st === 'sleeping') return ['◌', 'sleeping'];
   if (row.kind !== 'live') return ['·', 'saved'];
   return ['○', 'idle'];
 }
@@ -1005,7 +1006,7 @@ function renderModal(body) {
     const options = q.options || [];
     const multi = !!q.multiSelect;
     const selected = new Set(p.selected || []);
-    html += '<div class="mh"><span class="micon">❓</span>' +
+    html += '<div class="mh"><span class="micon">?</span>' +
       '<span class="mtitle">' + esc(q.header || 'Question') + '</span>' +
       '<span class="dim small">' + (idx + 1) + ' of ' + (p.total || 1) + (multi ? ' · pick any' : '') + '</span></div>';
     html += '<div class="mq">' + esc(q.question || '') + '</div>';
@@ -1022,7 +1023,7 @@ function renderModal(body) {
       '<button type="button" class="btn" id="m-other-send">Answer</button></div>';
   } else if (kind === 'permission') {
     const queued = body.modals.filter((m) => m.kind === 'permission').length - 1;
-    html += '<div class="mh"><span class="micon warn">⚠</span>' +
+    html += '<div class="mh"><span class="micon warn">⚠\uFE0E</span>' +
       '<span class="mtitle">Allow <code>' + esc(p.tool || '?') + '</code>?</span>' +
       (queued > 0 ? '<span class="dim small">+' + queued + ' more waiting</span>' : '') + '</div>';
     html += summarizeInput(p.tool, p.tool_input);
@@ -1032,7 +1033,7 @@ function renderModal(body) {
       '<button type="button" class="btn" data-perm="allow_session" title="Allow this tool for the rest of the session"><u>S</u> Session</button>' +
       '<button type="button" class="btn always" data-perm="allow_all" title="Always allow this tool/command"><u>A</u> Always</button></div>';
   } else if (kind === 'plan') {
-    html += '<div class="mh"><span class="micon">📋</span><span class="mtitle">Plan needs approval</span></div>';
+    html += '<div class="mh"><span class="micon">≡</span><span class="mtitle">Plan needs approval</span></div>';
     if (p.plan_file) html += '<pre class="minput">' + esc(p.plan_file) + '</pre>';
     if ((p.allowed_prompts || []).length) {
       html += '<div class="dim small">allowed prompts: ' + esc(p.allowed_prompts.map((x) => x.tool || x).join(', ')) + '</div>';
