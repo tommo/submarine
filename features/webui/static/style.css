@@ -219,7 +219,7 @@ body.working .head-actions .interrupt { display: inline-flex; align-items: cente
 .row .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* title colour follows the state (never bold); the backend · model line
    dims further for a session that is not active */
-.row.working .name, .row.unread .name { color: #f4f6f3; }
+.row.working .name, .row.unread .name { color: var(--fg); }   /* the mark says it; the title does not */
 .row.waiting .name { color: #ffcc66; }
 .row.sleeping .name { color: #8a93a3; }
 .row.saved .name { color: #7d8594; font-style: italic; }

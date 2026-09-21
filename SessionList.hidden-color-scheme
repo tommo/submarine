@@ -77,7 +77,7 @@
         },
         {
             "scope": "meta.title.working.session-list",
-            "foreground": "#f4f6f3"
+            "foreground": "#cbccc6"
         },
         {
             "scope": "meta.title.input.session-list",
@@ -85,7 +85,7 @@
         },
         {
             "scope": "meta.title.unread.session-list",
-            "foreground": "#f4f6f3"
+            "foreground": "#cbccc6"
         },
         {
             "scope": "meta.title.ready.session-list",
