@@ -95,8 +95,8 @@ machine, run with your agent's permissions. Two things matter:
 
 There is no TLS: the token travels in clear text on the wire. Treat it as a
 LAN-only convenience, not as authentication over the internet. From outside
-the LAN, ride an overlay network (ZeroTier, Tailscale, an SSH tunnel) and
-bind to its address: [docs/web-ui-remote.md](web-ui-remote.md).
+the LAN, reach it over a private network (VPN / overlay / SSH tunnel) and
+bind to that address: [docs/web-ui-remote.md](web-ui-remote.md).
 
 ## 4. HTTP API
 

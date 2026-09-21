@@ -121,7 +121,7 @@ console degrades to a `<pre>` and a textarea.
 **Usage docs:** [docs/session-control.md](docs/session-control.md) (CLI),
 [docs/web-ui.md](docs/web-ui.md) (browser console, `--host` / `--port` /
 `--token`) and [docs/web-ui-remote.md](docs/web-ui-remote.md) (from outside
-the LAN: ZeroTier / Tailscale / SSH).
+the LAN: over a private network).
 
 ## Usage
 
