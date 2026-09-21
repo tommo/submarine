@@ -497,6 +497,14 @@ class SubmarineRevealSessionCommand(sublime_plugin.WindowCommand):
                 except Exception:
                     pass
         if session is not None:
+            # _land below settles the caret now; a second, deferred pass runs
+            # after attach's set_timeout(0) hooks so they cannot undo it.
+            if sublime is not None:
+                try:
+                    from ui.session_list import reveal_tail_soon
+                    reveal_tail_soon(session)
+                except Exception:
+                    pass
             already = False
             try:
                 v = session.output.view if session.output else None
@@ -1261,6 +1269,13 @@ class SubmarineCycleSessionCommand(sublime_plugin.WindowCommand):
             except Exception:
                 pass
             reveal._land(target)
+            # attach's deferred paint hooks run after _land; the focus and
+            # tail hand-off has to be the last thing to touch the view.
+            try:
+                from ui.session_list import focus_sheet_soon
+                focus_sheet_soon(self.window, target)
+            except Exception:
+                pass
             name = (
                 getattr(target, "display_name", None)
                 or getattr(target, "name", None)

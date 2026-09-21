@@ -113,7 +113,24 @@ def install_sublime():
 
     sublime = types.ModuleType("sublime")
     sublime._submarine_stub = True
-    sublime.Region = lambda *a, **k: type("R", (), {"a": a[0] if a else 0, "b": a[1] if len(a) > 1 else 0})()
+    class _Region(object):
+        def __init__(self, a=0, b=None):
+            self.a = a
+            self.b = a if b is None else b
+
+        def begin(self):
+            return min(self.a, self.b)
+
+        def end(self):
+            return max(self.a, self.b)
+
+        def size(self):
+            return abs(self.b - self.a)
+
+        def empty(self):
+            return self.a == self.b
+
+    sublime.Region = _Region
     sublime.Phantom = lambda *a, **k: None
     sublime.PhantomSet = lambda *a, **k: None
     sublime.LAYOUT_BLOCK = 1

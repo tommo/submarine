@@ -126,26 +126,28 @@ class AwakeSessionsTest(unittest.TestCase):
             current[0] = session
             return True
 
+        # Patch the class, and put it back: a leak here broke every
+        # test_reveal_session case that ran after this file.
+        orig_reveal = sc.SubmarineRevealSessionCommand._reveal
+        orig_land = sc.SubmarineRevealSessionCommand._land
         sc.SubmarineRevealSessionCommand._reveal = _reveal
         sc.SubmarineRevealSessionCommand._land = lambda *a, **k: None
-        try:
-            cmd = sc.SubmarineCycleSessionCommand(self.win)
-        except TypeError:
-            cmd = sc.SubmarineCycleSessionCommand()
-            cmd.window = self.win
         orig = sc.get_active_session
         sc.get_active_session = lambda w: current[0]
         try:
+            try:
+                cmd = sc.SubmarineCycleSessionCommand(self.win)
+            except TypeError:
+                cmd = sc.SubmarineCycleSessionCommand()
+                cmd.window = self.win
             cmd.run(direction=1)
             cmd.run(direction=1)
             cmd.run(direction=-1)
         finally:
             sc.get_active_session = orig
+            sc.SubmarineRevealSessionCommand._reveal = orig_reveal
+            sc.SubmarineRevealSessionCommand._land = orig_land
         self.assertEqual(revealed, ["b", "a", "b"])
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class ListSyncTest(unittest.TestCase):
@@ -189,4 +191,87 @@ class ListSyncTest(unittest.TestCase):
             sl.sublime = prev
         self.assertEqual(shown, [400])      # line 5 -> row 4 -> text_point(4, 0)
         self.assertEqual(len(sel), 1)
+
+
+def _inline_sublime():
+    """A `sublime` stand-in for session_list: real-ish regions, no timers."""
+    import types
+    from tests.test_single_view import _Region
+    return types.SimpleNamespace(Region=_Region, set_timeout=lambda f, ms=0: f(),
+                                 status_message=lambda m: None)
+
+
+class RevealTailTest(unittest.TestCase):
+    """Revealing from the list scrolls the sheet to its tail (attach alone
+    restores the old scroll)."""
+
+    def test_reveal_row_scrolls_to_the_tail(self):
+        from core.registry import default_registry
+        from tests.test_single_view import RecordingWindow, _session
+        from ui import session_list as sl
+        from ui.host import HostView, set_ui_mode_override
+        default_registry.clear(); HostView.reset(); set_ui_mode_override("single")
+        try:
+            win = RecordingWindow()
+            a = _session(win, "A")
+            b = _session(win, "B")
+            hv = HostView.for_window(win)
+            hv.attach(win, a)
+            host = hv.host_view(win)
+            a.output.prompt("x"); a.output.text("y" * 400); a.output.meta(0.1)
+            a.output.exit_input_mode(keep_text=False)
+            host.set_viewport_position((0.0, 0.0))
+            a.surface = None
+            hv.attach(win, b)
+            hv.attach(win, a)                       # plain attach: scroll restored as saved
+            host.set_viewport_position((0.0, 0.0))
+            default_registry.register_session(a)
+            prev = sl.sublime
+            sl.sublime = _inline_sublime()           # regions + inline set_timeout
+            try:
+                ok = sl.reveal_row(win, {"kind": "live", "session_id": a.session_id,
+                                         "agent_id": a.agent_id, "section": "CURRENT"})
+            finally:
+                sl.sublime = prev
+            self.assertTrue(ok)
+            self.assertGreater(host.viewport_position()[1], 0.0, "not scrolled to the tail")
+            sel = list(host.sel())
+            self.assertTrue(sel and sel[-1].begin() >= a.output.composer._input_start,
+                            "caret not at the tail")
+        finally:
+            default_registry.clear(); HostView.reset()
+
+    def test_enter_in_the_list_hands_focus_and_caret_to_the_composer(self):
+        from core.registry import default_registry
+        from tests.test_single_view import RecordingWindow, _session
+        from ui import session_list as sl
+        from ui.host import HostView, set_ui_mode_override
+        default_registry.clear(); HostView.reset(); set_ui_mode_override("single")
+        try:
+            win = RecordingWindow()
+            a = _session(win, "A")
+            b = _session(win, "B")
+            hv = HostView.for_window(win)
+            hv.attach(win, a)
+            host = hv.host_view(win)
+            a.output.prompt("x"); a.output.text("y"); a.output.meta(0.1)
+            hv.attach(win, b)
+            lst = win.new_file()                          # the Sessions list has focus
+            win.focus_view(lst)
+            default_registry.register_session(a)
+            prev = sl.sublime
+            sl.sublime = _inline_sublime()
+            try:
+                ok = sl.open_row(win, {"kind": "live", "session_id": a.session_id,
+                                       "agent_id": a.agent_id, "section": "CURRENT"})
+            finally:
+                sl.sublime = prev
+            self.assertTrue(ok)
+            self.assertIs(win.active_view(), host, "focus stayed on the list")
+            self.assertTrue(a.output.is_input_mode(), "no composer after Enter")
+            sel = list(host.sel())
+            self.assertTrue(sel and sel[-1].begin() >= a.output.composer._input_start,
+                            "caret parked outside the composer")
+        finally:
+            default_registry.clear(); HostView.reset()
 

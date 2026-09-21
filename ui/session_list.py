@@ -1210,6 +1210,13 @@ def reveal_session_bottom(session) -> None:
                 out.restore_draft_caret(force=True)
             except Exception:
                 pass
+            try:
+                # No draft caret to restore: park at the end of the composer.
+                if not list(view.sel()) and sublime is not None:
+                    end = view.size()
+                    view.sel().add(sublime.Region(end, end))
+            except Exception:
+                pass
             return
     except Exception:
         pass
@@ -1278,13 +1285,18 @@ def open_row(window, row: dict) -> bool:
                 if session is not None:
                     if getattr(session, "torn_off", False) or row.get("torn_off"):
                         _wake_if_sleeping(session)
-                        return focus_live(window, row)
+                        ok = focus_live(window, row)
+                        focus_sheet_soon(window, session)
+                        return ok
                     hv = HostView.for_window(window)
                     if hv.bound_session(window) is session:
                         _wake_if_sleeping(session)
-                        return focus_live(window, row)
+                        ok = focus_live(window, row)
+                        focus_sheet_soon(window, session)
+                        return ok
                     ok = bool(hv.attach(window, session, focus=True))
                     _wake_if_sleeping(session)
+                    focus_sheet_soon(window, session)
                     return ok
             return resume_saved(window, row)
     except Exception:
@@ -1293,6 +1305,7 @@ def open_row(window, row: dict) -> bool:
         session = _live_session_for_row(row)
         _wake_if_sleeping(session)
         if focus_live(window, row):
+            focus_sheet_soon(window, session)
             return True
     return resume_saved(window, row)
 
@@ -1340,8 +1353,86 @@ def follow_current_under_caret(view, force: bool = False) -> bool:
     return reveal_row(win, row, keep=view)
 
 
+def focus_sheet_soon(window, session, delay_ms: int = 60) -> None:
+    """Enter in the list: keyboard focus moves to the session's sheet, caret
+    in the composer, tail in view — after every deferred attach hook (stamps,
+    chrome, composer plant at set_timeout(0)) and the list's own refresh
+    have run, so nothing can take the focus back or leave the view focused
+    but the caret parked outside the composer (keys then did nothing until
+    a click).
+    """
+    if session is None:
+        return
+
+    def _go():
+        out = getattr(session, "output", None)
+        view = getattr(out, "view", None) if out is not None else None
+        if view is None:
+            return
+        try:
+            if not view.is_valid():
+                return
+        except Exception:
+            return
+        win = None
+        try:
+            win = view.window() or window
+        except Exception:
+            win = window
+        if win is None:
+            return
+        try:
+            win.focus_view(view)
+        except Exception:
+            pass
+        try:
+            out.set_caret_owner("draft")
+        except Exception:
+            pass
+        if not getattr(session, "is_sleeping", False):
+            try:
+                session._enter_input_with_draft()
+            except Exception:
+                pass
+        try:
+            if out.is_input_mode():
+                out.focus_composer(force_show=True, steal_focus=True, park_at_end=True)
+                try:
+                    if not list(view.sel()) and sublime is not None:
+                        end = view.size()
+                        view.sel().add(sublime.Region(end, end))
+                except Exception:
+                    pass
+                return
+        except Exception:
+            pass
+        reveal_session_bottom(session)
+
+    if sublime is None:
+        _go()
+        return
+    sublime.set_timeout(_go, delay_ms)
+
+
+def reveal_tail_soon(session, delay_ms: int = 40) -> None:
+    """Scroll the session's sheet to its tail once the attach paint settled.
+
+    Attach restores the sheet's saved scroll (surface_restore) and its
+    post-paint hooks (stamps, chrome, composer) run on set_timeout(0); a
+    reveal from the list or a shortcut means "show me the live end", so the
+    tail scroll goes last.
+    """
+    if session is None:
+        return
+    if sublime is None:
+        reveal_session_bottom(session)
+        return
+    sublime.set_timeout(lambda: reveal_session_bottom(session), delay_ms)
+
+
 def reveal_row(window, row: dict, keep=None) -> bool:
-    """Bring that session's sheet on screen; keep keyboard focus on the list."""
+    """Bring that session's sheet on screen, at its tail; keep keyboard focus
+    on the list."""
     if not row or not window:
         return False
     if keep is None:
@@ -1362,11 +1453,13 @@ def reveal_row(window, row: dict, keep=None) -> bool:
                         ok = reveal_live_session(
                             window, session, focus=True, force_sheet=True)
                     elif hv.bound_session(window) is session:
-                        # Already on the host. Do not focus_view / retab /
-                        # scroll — that "reveals" a sheet that is already up.
+                        # Already on the host: no focus_view / retab, but the
+                        # tail is still the point of revealing it.
                         ok = True
                     else:
                         ok = bool(hv.attach(window, session, focus=True))
+                    if ok:
+                        reveal_tail_soon(session)
             if not ok:
                 ok = resume_saved(window, row, focus=True)
             _restore_list_focus(window, keep)
