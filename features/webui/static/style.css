@@ -223,6 +223,7 @@ body.working .head-actions .interrupt { display: inline-flex; align-items: cente
 .row.waiting .name { color: #ffcc66; }
 .row.sleeping .name { color: #8a93a3; }
 .row.saved .name { color: #7d8594; font-style: italic; }
+.row .r2 .bits { color: #5ccfe6; }                      /* the list's backend blue */
 .row.sleeping .r2 .bits, .row.saved .r2 .bits { color: #5c6773; }
 .row .age { flex: 0 0 auto; }
 .row .r2 { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 11px; padding-left: 20px; min-width: 0; }

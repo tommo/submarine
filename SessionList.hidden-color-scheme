@@ -44,7 +44,7 @@
             "foreground": "#ffcc66"
         },
         {
-            "scope": "storage.type.backend.session-list",
+            "scope": "storage.type.backend",
             "foreground": "#5ccfe6"
         },
         {
