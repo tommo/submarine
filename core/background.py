@@ -491,6 +491,32 @@ class BackgroundTaskGate:
             self.pending_task_ids.clear()
             self.pending_tool_ids.clear()
 
+    def defer_pending(self):
+        # type: () -> int
+        """Move buffered completions into the deferred text: the user's own
+        queued message is about to start a turn and must go first; what the
+        jobs printed rides along with it instead of taking a turn of its own
+        ahead of it. Returns how many blocks moved."""
+        blocks = list(self.pending_notifications)
+        if not blocks:
+            return 0
+        tasks = set(self.pending_task_ids)
+        tools = set(self.pending_tool_ids)
+        self.pending_notifications = []
+        self.pending_block_task = []
+        self.pending_block_status = []
+        self.pending_task_ids.clear()
+        self.pending_tool_ids.clear()
+        self.pending_hold_gen = None
+        for tid in tasks:
+            self.mark(tid, "")
+        for tuid in tools:
+            self.mark("", tuid)
+        for b in blocks:
+            if b not in self.deferred:
+                self.deferred.append(b)
+        return len(blocks)
+
     def take_deferred(self):
         # type: () -> str
         """The deferred blocks, joined, for a real prompt; clears them."""

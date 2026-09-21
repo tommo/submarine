@@ -1022,6 +1022,10 @@ class Session:
             # turn then looked idle since it *started*, and auto-sleep fired.
             self._note_activity(idle=True)
             self._fire_turn_end("interrupted")
+            # The user's queued message goes first; background completions
+            # (the cancel just killed those jobs) ride along with it.
+            if self._fire_queued_first():
+                return
             if self.bg.pending_notifications:
                 try:
                     self.bg.flush()
@@ -1029,8 +1033,6 @@ class Session:
                     pass
                 if self.working:
                     return
-            if self._fire_next_queued():
-                return
             self._enter_input_if_idle()
             return
 
@@ -1067,6 +1069,8 @@ class Session:
             else:
                 self._clear_deferred_state(clear_queue=True)
             self._fire_turn_end(completion)
+            if completion == "interrupted" and self._fire_queued_first():
+                return
             if self.bg.pending_notifications:
                 try:
                     self.bg.flush()
@@ -1074,12 +1078,10 @@ class Session:
                     pass
                 if self.working:
                     return
-            if completion == "interrupted" and self._fire_next_queued():
-                return
             self._enter_input_if_idle()
             return
 
-        if self._fire_next_queued():
+        if self._fire_queued_first():
             return
 
         if self._compacting and completion == "success":
@@ -1114,6 +1116,18 @@ class Session:
             if self.working:
                 return
         self.scheduler.call_later(100, self._enter_input_if_idle)
+
+    def _fire_queued_first(self):
+        # type: () -> bool
+        """Start the user's next queued message ahead of any background
+        notification turn, folding the buffered completions into it."""
+        if not self._queued_prompts:
+            return False
+        try:
+            self.bg.defer_pending()
+        except Exception:
+            pass
+        return self._fire_next_queued()
 
     def _update_queue_phantom(self):
         # type: () -> None

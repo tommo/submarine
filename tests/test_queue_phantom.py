@@ -178,3 +178,23 @@ class TestQueueAfterInterrupt(unittest.TestCase):
         s.queue_prompt("meanwhile")
         self.assertEqual([m for m, _p, _cb in client.sent if m == "inject_message"], ["inject_message"])
 
+    def test_queued_message_goes_before_a_background_notification_turn(self):
+        """Esc kills background jobs; their completions used to start a
+        notification turn first and push the user's message one round back.
+        (Grok: every open terminal reports on cancel.)"""
+        s, client = self._session()
+        s.backend = "grok"
+        s.query("first")
+        s.bg.on_task_started({"task_id": "t1", "tool_use_id": "u1", "description": "long job"})
+        s.interrupt()
+        s.queue_prompt("what I actually want")
+        s.bg.on_task_notification({"task_id": "t1", "status": "failed", "summary": "long job"})
+        _m, _p, cb = [c for c in client.sent if c[0] == "query"][-1]
+        cb({"status": "interrupted"})
+        s.scheduler.fire_all()
+        queries = [p.get("prompt") for m, p, _cb in client.sent if m == "query"]
+        self.assertEqual(len(queries), 2, "expected exactly one new turn after the cancel")
+        self.assertTrue(queries[-1].endswith("what I actually want"), queries[-1])
+        self.assertIn("<task-notification>", queries[-1])       # the completion rides along
+        self.assertEqual(s.bg.pending_notifications, [])
+
