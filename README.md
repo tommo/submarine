@@ -681,22 +681,6 @@ permissions, and MCP tools work the same regardless of backend.
 
 Longer snapshot: [docs/architecture.md](docs/architecture.md).
 
-## Removed
-
-| Gone | Use instead |
-|------|-------------|
-| Checkpoints | Profiles (`system_prompt` / `preload_docs`) or live fork |
-| Order table | `spawn_session` / `send_to_session` / `/goal` |
-| Channel (notalone sync) | — |
-| Notalone daemon / chatroom | Host `set_timer` + `wait_for_subsession` / `signal_complete` |
-| Persona server | Ordinary profiles |
-| Claude-term-mode, embedded terminal / PTY, MCP `terminal_*` | External terminal; agents use Bash / ACP session terminals |
-| Copilot backend | — |
-| DSR backend | — |
-| `grok_cc` proxy | Native Grok ACP (`grok agent stdio`) |
-
-`set_alarm` was never implemented (old README was stale).
-
 ## License
 
 VCL (Vibe-Coded License) — see LICENSE
