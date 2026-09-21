@@ -131,7 +131,17 @@ function selectedRow() {
   return null;
 }
 
-function note(text) { $('note').textContent = text || ''; }
+// A transient toast over the sheet — status, never layout. Errors have
+// their own strip (#error); this is for "sent", "renamed", "answered".
+let noteTimer = null;
+function note(text) {
+  const el = $('note');
+  clearTimeout(noteTimer);
+  if (!text) { el.hidden = true; el.textContent = ''; return; }
+  el.textContent = text;
+  el.hidden = false;
+  noteTimer = setTimeout(() => { el.hidden = true; }, 4000);
+}
 
 function clearError() {
   const el = $('error');
@@ -1138,13 +1148,12 @@ function actionText(data) {
   const verbs = {
     sent: 'sent',
     queued: 'queued behind the turn',
-    woke: 'woke the session, prompt delivered once connected',
+    woke: 'waking the session — sent once it is up',
     send_now: 'interrupted the turn and sent',
     pending: 'accepted',
   };
   let out = verbs[data.action] || data.action || 'accepted';
-  if (data.duplicate) out += ' (duplicate replay key: not sent again)';
-  if (data.note) out += ' — ' + data.note;
+  if (data.duplicate) out += ' (duplicate: not sent again)';
   return out;
 }
 

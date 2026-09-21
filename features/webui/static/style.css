@@ -479,8 +479,16 @@ body.working .head-actions .interrupt { display: inline-flex; align-items: cente
 }
 .compose textarea:disabled { opacity: 0.5; }
 .btn.send { flex: 0 0 auto; min-height: 34px; }
-.note { font-size: 11px; margin-top: 4px; text-align: right; }
-.note:empty { display: none; }
+.note {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  bottom: 100%; margin-bottom: 8px;
+  max-width: calc(100% - 24px); padding: 4px 10px;
+  background: #23262e; border: 1px solid var(--line); border-radius: 12px;
+  color: var(--fg); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.4); pointer-events: none; z-index: 4;
+}
+.detail { position: relative; }
+.compose { position: relative; }
 
 /* ── phone (and any window under 761px) ─────────────────────────────────────
    One pane at a time instead of a stacked pair: the list is a full screen and
@@ -588,7 +596,6 @@ body.working .head-actions .interrupt { display: inline-flex; align-items: cente
   .composer .cm-editor .cm-scroller { max-height: 30vh; }
   .btn.send { width: 44px; min-height: 44px; padding: 0; font-size: 0; }
   .btn.send::before { content: '↑'; font-size: 20px; line-height: 1; }
-  .note { font-size: 11px; }
   body.working .head-actions .interrupt { min-height: 36px; padding: 0 10px; }
   /* Folding and search are keyboard/pointer affordances; a thumb gets End. */
   .toolbar #fold, .toolbar #unfold, .toolbar #find { display: none !important; }
@@ -633,7 +640,6 @@ body.working .head-actions .interrupt { display: inline-flex; align-items: cente
      header and toolbar step aside and the sheet keeps its room. */
   body.composing .headwrap, body.composing .toolbar, body.composing .caption { display: none; }
   body.composing .compose { padding-top: 6px; }
-  body.composing .note:empty { display: none; }
 }
 
 

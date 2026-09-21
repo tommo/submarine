@@ -130,7 +130,9 @@ window.SubmarineEditor = { ready: new Promise((r) => { window.__submarineEditorR
         <textarea id="prompt" rows="1" placeholder="Prompt this session… (Enter sends, Shift+Enter newline)"></textarea>
         <button id="send" class="btn primary send" type="submit" title="Send">Send</button>
       </div>
-      <div id="note" class="note dim"></div>
+      <!-- Status toast: floats over the sheet's bottom edge, gone in a few
+           seconds, never part of the layout. -->
+      <div id="note" class="note" hidden></div>
     </form>
   </section>
 </main>
