@@ -182,7 +182,7 @@ not use `wait` (`chat --wait`): it polls instead, see below.
 |---|---|---|---|
 | Sheet (default) | `text`, else `tail` | the rendered output view; without one, the last N turns rebuilt in the sheet's grammar | no — it falls back |
 | Transcript | `tail` | the last N turns from the backend transcript, in the sheet's grammar | no — closed sessions work |
-| Edits | `edits` | the Edit/Write rows this session made: each unfolds to its unified diff; tapping the path opens the **code view** — the file read-only in CodeMirror (line numbers, the file's language colours, `GET /api/file`) at that line, with Find and a **Sublime** button that opens it there (`POST /api/open`) | no |
+| Edits | `edits` | one line per Edit/Write: tool initial, `path:line`; the line toggles its unified diff, **⌗** opens the **code view** — the file read-only in CodeMirror (line numbers, the file's language colours, `GET /api/file`) at that line, with Find — and **↗** opens it in Sublime (`POST /api/open`) | no |
 
 ### The sheet
 

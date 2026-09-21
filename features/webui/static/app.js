@@ -731,11 +731,13 @@ function renderEdits(body) {
     if (parts.length > 3) short = '…/' + parts.slice(-2).join('/');
     // The diff's ---/+++ header repeats the path already shown; drop it.
     const diff = String(e.diff || '').split('\n').filter((l, i) => !(i < 2 && /^(---|\+\+\+) /.test(l))).join('\n');
+    // The row body toggles the diff; the two buttons on the right act.
     html += '<details class="edit" data-key="' + esc((e.id || '') + '|' + (e.i !== undefined ? e.i : '') + '|' + path + '|' + (e.line || '')) +
       '" data-path="' + esc(path) + '" data-line="' + esc(e.line || '') + '">' +
-      '<summary><span class="sm-tool-done">✔</span> <span class="etool">' + esc(e.tool || '?') + '</span> ' +
-        '<button type="button" class="path elink" title="View ' + esc(path) + '">' + esc(short) + (e.line ? '<span class="eline">:' + esc(e.line) + '</span>' : '') + '</button>' +
-        '<button type="button" class="btn tiny eopen" title="Open in Sublime at this line">Sublime</button>' +
+      '<summary><span class="etool" title="' + esc(e.tool || '?') + '">' + esc((e.tool || '?').slice(0, 1)) + '</span>' +
+        '<span class="path" title="' + esc(path) + '">' + esc(short) + (e.line ? '<span class="eline">:' + esc(e.line) + '</span>' : '') + '</span>' +
+        '<button type="button" class="ebtn elink" title="View in the code view">⌗</button>' +
+        '<button type="button" class="ebtn eopen" title="Open in Sublime at this line">↗</button>' +
       '</summary>' +
       (diff ? '<pre class="ediff">' + window.SubmarineHL.toHtml('```diff\n' + diff + '\n```', 'conversation').split('\n').slice(1, -1).join('\n') + '</pre>'
             : '<p class="dim small">no diff recorded for this edit</p>') +

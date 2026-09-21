@@ -391,22 +391,27 @@ body.working .head-actions .interrupt { display: inline-flex; align-items: cente
 .pane pre.code .ln { display: inline-block; width: 3.5em; padding-right: 8px; margin-right: 8px; text-align: right; color: #5c6773; background: #1a1e29; user-select: none; }
 .pane pre.code .ln.hit { color: #ffcc66; background: #262d3a; }
 .edits-head { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
-.pane .edit { border: 1px solid var(--line); border-radius: 6px; margin-bottom: 6px; background: var(--panel); }
+/* One compact line per edit: [E] path:line … [⌗ view] [↗ sublime]. The line
+   toggles the diff; the two buttons act. */
+.pane .edit { border-bottom: 1px solid var(--line); background: none; }
 .pane .edit summary {
-  display: flex; align-items: center; gap: 6px; padding: 6px 8px; cursor: pointer; list-style: none;
-  font-family: ui-monospace, Menlo, monospace; font-size: 12px; min-width: 0;
+  display: flex; align-items: center; gap: 8px; padding: 3px 4px; cursor: pointer; list-style: none;
+  font-family: ui-monospace, Menlo, monospace; font-size: 12px; min-width: 0; line-height: 1.5;
 }
+.pane .edit summary:hover { background: var(--panel); }
 .pane .edit summary::-webkit-details-marker { display: none; }
 .pane .edit summary::before { content: '▸'; color: var(--dim); font-size: 10px; width: 10px; flex: 0 0 auto; }
 .pane .edit[open] summary::before { content: '▾'; }
-.pane .edit .etool { color: var(--fg); flex: 0 0 auto; }
+.pane .edit .etool { color: #5a9484; flex: 0 0 auto; width: 1.2em; text-align: center; font-weight: 600; }
 .pane .edit .path { color: var(--accent); flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pane .edit .elink { background: none; border: 0; padding: 0; font: inherit; text-align: left; cursor: pointer; text-decoration: underline dotted #4a5568; text-underline-offset: 3px; }
-.pane .edit .elink:hover { text-decoration-color: var(--accent); }
 .pane .edit .path .eline { color: #ffcc66; }
-.pane .edit .eopen { flex: 0 0 auto; }
+.pane .edit .ebtn {
+  flex: 0 0 auto; width: 26px; height: 22px; padding: 0; border: 1px solid transparent; border-radius: 4px;
+  background: none; color: var(--dim); font: inherit; font-size: 13px; cursor: pointer;
+}
+.pane .edit .ebtn:hover { color: var(--fg); border-color: var(--line); background: var(--panel-2); }
 .pane .edit .ediff {
-  margin: 0; padding: 6px 8px 8px 24px; border-top: 1px solid var(--line);
+  margin: 0 0 4px; padding: 6px 8px 8px 18px; border-top: 1px solid var(--line);
   background: var(--sheet-line); font-family: ui-monospace, Menlo, monospace; font-size: 12px;
   white-space: pre-wrap; word-break: break-word; max-height: 50vh; overflow: auto;
 }
@@ -577,9 +582,9 @@ body.working .head-actions .interrupt { display: inline-flex; align-items: cente
   .toolbar input[type="number"] { width: 64px; font-size: 16px; padding: 6px; }
 
   .pane { padding: 8px 8px; }
-  .pane .edit summary { min-height: 44px; font-size: 13px; }
+  .pane .edit summary { min-height: 40px; font-size: 13px; }
   .filebar .btn { min-height: 36px; white-space: nowrap; }
-  .pane .edit .eopen { min-height: 36px; }
+  .pane .edit .ebtn { width: 36px; height: 36px; font-size: 16px; }
   .pane .edit .ediff { padding-left: 10px; font-size: 12.5px; }
   .turn .prompt, .turn .reply, .pane pre { font-size: 13px; }
 
