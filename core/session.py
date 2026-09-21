@@ -1234,11 +1234,11 @@ class Session:
         self._update_queue_phantom()
         # A turn that is being cancelled must not receive the message: an
         # inject into it either dies with the turn or surfaces one round late.
-        # It stays queued and fires as its own turn when the ACK lands.
-        interrupting = bool(getattr(self, "_interrupting", False)
-                            or getattr(self.turn, "kind", "") == "interrupting"
-                            or getattr(self, "_interrupt_stream", False))
-        if interrupting:
+        # It stays queued and fires as its own turn when the ACK lands. Only
+        # the cancel window counts (Esc → bridge ACK): _interrupting and
+        # _interrupt_stream outlive the ACK (leftover-stream bookkeeping),
+        # and gating on them blocked every later inject.
+        if getattr(self.turn, "kind", "") == "interrupting":
             return
         if self.working and self.client and getattr(self.client, "is_alive", lambda: True)():
             if self.backend == "claude" and prompt in self._queued_prompts:

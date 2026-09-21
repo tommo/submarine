@@ -198,3 +198,30 @@ class TestQueueAfterInterrupt(unittest.TestCase):
         self.assertIn("<task-notification>", queries[-1])       # the completion rides along
         self.assertEqual(s.bg.pending_notifications, [])
 
+    def test_after_the_ack_messages_inject_again(self):
+        """Regression: gating on flags that outlive the ACK blocked every
+        later mid-turn message from being injected."""
+        s, client = self._session()
+        s.query("first")
+        s.interrupt()
+        _m, _p, cb = [c for c in client.sent if c[0] == "query"][-1]
+        cb({"status": "interrupted"})
+        s.scheduler.fire_all()
+        self.assertFalse(s.working)
+        s.query("second")                       # a fresh turn after the cancel
+        self.assertTrue(s.working)
+        s.queue_prompt("mid-turn note")
+        self.assertEqual([m for m, _p, _cb in client.sent if m == "inject_message"], ["inject_message"])
+
+    def test_resumed_leftover_stream_still_takes_injects(self):
+        s, client = self._session()
+        s.query("first")
+        s.interrupt()
+        _m, _p, cb = [c for c in client.sent if c[0] == "query"][-1]
+        cb({"status": "interrupted"})
+        s.scheduler.fire_all()
+        s._resume_interrupt_stream()             # leftover text keeps the turn alive, no query()
+        self.assertTrue(s.working)
+        s.queue_prompt("while it streams")
+        self.assertEqual([m for m, _p, _cb in client.sent if m == "inject_message"], ["inject_message"])
+
