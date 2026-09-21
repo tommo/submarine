@@ -482,6 +482,18 @@ def cmd_close(args) -> int:
     return 0
 
 
+def cmd_clear(args) -> int:
+    env = call("clear", timeout=args.timeout, path=args.socket, ref=args.ref,
+               keep_last=not args.all)
+    if not env.get("ok"):
+        return _fail(env)
+    body = env.get("data") or {}
+    print(json.dumps(body, indent=2) if args.json else
+          "cleared %s (%s)" % ((body.get("session") or {}).get("name"),
+                               "kept last round" if body.get("keep_last") else "all"))
+    return 0
+
+
 MANUAL_NAME = "session-control.md"
 
 
@@ -600,6 +612,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("ref")
     sp.add_argument("--remove", action="store_true", help="also drop the saved row")
     sp.set_defaults(func=cmd_close)
+
+    sp = common(sub.add_parser("clear", help="clear the sheet, keeping the last round (--all wipes)"))
+    sp.add_argument("ref")
+    sp.add_argument("--all", action="store_true")
+    sp.set_defaults(func=cmd_clear)
 
     sub.add_parser("help", help="short usage").set_defaults(func=cmd_help)
     return p

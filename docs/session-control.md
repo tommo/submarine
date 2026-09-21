@@ -18,6 +18,7 @@ submarine_sessions backends
 submarine_sessions create [--backend B] [--model M] [--name N] [--window ID | --project DIR] [--prompt "…"]
 submarine_sessions rename REF "new name"
 submarine_sessions close REF [--remove]
+submarine_sessions clear REF [--all]
 submarine_sessions --manual
 ```
 
@@ -232,6 +233,8 @@ session count) it can live in. `create` starts a session in that window (by
 `--window` id, `--project` folder, else the active window), viewless: it
 appears in the list and is opened from there; `--prompt` is handed to `chat`
 once the bridge is up, so the reply behaves like `chat` on a sleeping session.
+`clear REF` clears the sheet keeping the last round (Cmd+K); `--all` wipes it
+(Cmd+Shift+K). The transcript on disk is untouched.
 `rename` works on a live session or a history row. `close` stops a live
 session the way Cmd+W does (the host sheet hands off to a peer in single
 mode); on a history row it refuses unless `--remove`, which drops the row.

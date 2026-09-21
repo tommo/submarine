@@ -129,6 +129,7 @@ without a code — the socket is missing — 503).
 | `POST /api/create` | `create` | `{"backend", "model", "name", "window"\|"project", "prompt", "idem"}` |
 | `POST /api/rename` | `rename` | `{"ref", "name"}` |
 | `POST /api/close` | `close` | `{"ref", "remove"}` — stop a live session; `remove` drops a history row |
+| `POST /api/clear` | `clear` | `{"ref", "keep_last"}` — clear the sheet; `keep_last` (default true) keeps the last round |
 | `POST /api/open` | `open` | `{"ref", "file_path", "line"}` — open an existing file at a line in the session's Sublime window |
 | `GET /api/file` | `read` | `path` (required), `ref`, `max_bytes` — a text file's contents (existing files, UTF-8, ≤ 2 MB) for the code view |
 
@@ -171,6 +172,11 @@ not use `wait` (`chat --wait`): it polls instead, see below.
   can be started from. The session starts viewless — in the list,
   not on the host sheet — and the console opens it; the prompt is delivered
   once the bridge is up, like `chat` to a sleeping session.
+- **Clear** (header, or the ⋯ menu on a phone) clears the session's sheet
+  the way Cmd+K does — the last round stays; Shift-click wipes it (Cmd+Shift+K).
+  The transcript on disk is untouched, so Transcript still shows everything;
+  it is the live sheet, which grows for as long as the session lives, that
+  gets trimmed (`POST /api/clear`, `submarine_sessions clear REF [--all]`).
 - **Rename / Close** sit under the selected session's header. Close stops a
   live session the way Cmd+W does (host hands off to a peer; the history row
   stays); on a history row the button reads **Delete** and drops the row.

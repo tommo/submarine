@@ -1253,6 +1253,20 @@ async function interrupt() {
 
 // ── manage: rename / close / new session ────────────────────────────────────
 
+// Clear the sheet (the text accumulates for as long as the session lives):
+// keep the last round, or — Shift-click / the phone's confirm — wipe it.
+async function clearSheet(all) {
+  const row = selectedRow();
+  if (!row || row.kind !== 'live') { note('not a running session'); return; }
+  if (all && !window.confirm('Clear the whole sheet of "' + (row.name || state.ref) + '"?')) return;
+  clearError();
+  const env = await api('/api/clear', { method: 'POST', body: JSON.stringify({ ref: state.ref, keep_last: !all }) });
+  showError(env);
+  if (env.ok !== true) return;
+  note(all ? 'sheet cleared' : 'cleared, last round kept');
+  await refreshPane({ follow: true });
+}
+
 async function renameSession() {
   const row = selectedRow();
   if (!row) return;
@@ -1448,6 +1462,13 @@ function wire() {
   $('file-back').addEventListener('click', closeFile);
   $('file-find').addEventListener('click', () => { if (state.fileView) state.fileView.openSearch(); });
   $('file-open').addEventListener('click', () => { if (state.file) openInSublime(state.file.path, state.file.line); });
+  $('clear').addEventListener('click', (e) => {
+    $('head-actions').classList.remove('open');
+    // Desktop: Shift-click wipes. Phone (menu): a long press is not a thing
+    // here, so the menu button keeps the last round; wipe via confirm when
+    // the sheet is already down to one round.
+    clearSheet(!!e.shiftKey);
+  });
   $('rename').addEventListener('click', () => { $('head-actions').classList.remove('open'); renameSession(); });
   $('close').addEventListener('click', () => { $('head-actions').classList.remove('open'); closeSession(); });
   $('more-actions').addEventListener('click', (e) => { e.stopPropagation(); $('head-actions').classList.toggle('open'); });

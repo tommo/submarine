@@ -33,7 +33,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 ACTIONS = frozenset(("list", "view", "chat", "interrupt", "pending", "answer",
-                     "backends", "create", "rename", "close", "open", "read"))
+                     "backends", "create", "rename", "close", "open", "read", "clear"))
 #: `read` returns at most this much of a file (the browser code view).
 MAX_READ_BYTES = 2 * 1024 * 1024
 PERMISSION_RESPONSES = frozenset(("allow", "deny", "allow_session", "allow_all"))
@@ -127,6 +127,8 @@ def dispatch(request: dict) -> dict:
             body, target = action_open(request or {})
         elif action == "read":
             body, target = action_read(request or {})
+        elif action == "clear":
+            body, target = action_clear(request or {})
         else:
             body, target = action_interrupt(request or {})
     except ControlError as e:
@@ -1209,3 +1211,25 @@ def action_read(params: dict) -> (dict, dict):
     return {"file_path": path, "size": size, "truncated": truncated,
             "text": text, "lines": text.count("\n") + (0 if text.endswith("\n") else 1),
             "mtime": mtime, "session": ref}, ref
+
+
+def action_clear(params: dict) -> (dict, dict):
+    """Clear the session's sheet the way Cmd+K / Cmd+Shift+K do: keep the
+    last round (default) or wipe it. Nothing about the session changes —
+    the transcript on disk and the bridge are untouched; only the sheet's
+    text, which otherwise grows for as long as the session lives."""
+    session = _resolve_live(params.get("ref"))
+    ref = _row_ref(session)
+    keep_last = params.get("keep_last")
+    keep_last = True if keep_last is None else bool(keep_last)
+    out = getattr(session, "output", None)
+    if out is None:
+        raise ControlError("no_view", "session has no sheet")
+    try:
+        if keep_last:
+            out.clear_keep_last()
+        else:
+            out.clear(keep_supportive=True)
+    except Exception as e:
+        raise ControlError("internal", "clear failed: %s" % e)
+    return {"cleared": True, "keep_last": keep_last, "session": ref}, ref

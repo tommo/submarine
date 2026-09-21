@@ -87,6 +87,7 @@ window.SubmarineEditor = { ready: new Promise((r) => { window.__submarineEditorR
         <button id="interrupt" class="btn tiny danger interrupt" type="button" title="Cancel the current turn (a prompt sent mid-turn queues behind it)">■ Interrupt</button>
         <button id="more-actions" class="btn tiny phone-only" type="button" aria-label="Session actions">⋯</button>
         <div class="head-menu">
+          <button id="clear" class="btn tiny" type="button" title="Clear the sheet, keep the last round (Cmd+K in Sublime); Shift-click wipes it">Clear</button>
           <button id="rename" class="btn tiny" type="button" title="Rename this session">Rename</button>
           <button id="close" class="btn tiny danger" type="button" title="Stop this session (Cmd+W in Sublime)">Close</button>
         </div>

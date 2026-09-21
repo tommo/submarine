@@ -16,6 +16,7 @@ One action per endpoint, named after the CLI's subcommands, so the API really is
   POST /api/close                  {"ref", "remove"}  (`close`)
   POST /api/open                   {"ref", "file_path", "line"} — open the file in Sublime  (`open`)
   GET  /api/file?path=…&ref=…      a text file's contents, for the code view  (`read`)
+  POST /api/clear                  {"ref", "keep_last"} — clear the sheet (Cmd+K / Cmd+Shift+K)  (`clear`)
 
 Plus `GET /` and `/static/*` for the console itself. The plugin's envelope is
 returned verbatim, with `http` added, and `data.code` decides the status code —
@@ -59,7 +60,7 @@ TRANSPORT_STATUS = 503
 MAX_BODY_BYTES = 1024 * 1024
 
 _POST_ROUTES = ("/api/chat", "/api/interrupt", "/api/answer", "/api/create",
-                "/api/rename", "/api/close", "/api/open")
+                "/api/rename", "/api/close", "/api/open", "/api/clear")
 
 _CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -266,6 +267,9 @@ class WebUIHandler(BaseHTTPRequestHandler):
             return self._reply(self._client.rename(ref, str(body.get("name") or "")[:200]))
         if route == "/api/close":
             return self._reply(self._client.close(ref, remove=bool(body.get("remove"))))
+        if route == "/api/clear":
+            keep = body.get("keep_last")
+            return self._reply(self._client.clear(ref, keep_last=True if keep is None else bool(keep)))
         if route == "/api/interrupt":
             return self._reply(self._client.interrupt(ref))
         if route == "/api/answer":

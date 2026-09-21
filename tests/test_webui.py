@@ -64,6 +64,9 @@ class FakeClient(object):
     def open(self, ref, file_path, line=None):
         return self._record("open", ref=ref, file_path=file_path, line=line)
 
+    def clear(self, ref, keep_last=True):
+        return self._record("clear", ref=ref, keep_last=keep_last)
+
     def read(self, ref, file_path, max_bytes=None):
         return self._record("read", ref=ref, file_path=file_path, max_bytes=max_bytes)
 
@@ -274,6 +277,11 @@ class TestApiWrites(ServerCase):
         self.assertEqual(self.client.calls[-1], ("read", {"ref": "agent-1", "file_path": "/p/a.nim", "max_bytes": None}))
         status, _ = self.get("/api/file")
         self.assertEqual(status, 400)
+        status, _ = self.post("/api/clear", {"ref": "agent-1"})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.client.calls[-1], ("clear", {"ref": "agent-1", "keep_last": True}))
+        status, _ = self.post("/api/clear", {"ref": "agent-1", "keep_last": False})
+        self.assertEqual(self.client.calls[-1], ("clear", {"ref": "agent-1", "keep_last": False}))
 
     def test_pending_needs_a_ref(self):
         status, body = self.get("/api/pending")

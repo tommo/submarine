@@ -177,3 +177,22 @@ class TestRead(unittest.TestCase):
         self.assertTrue(body["truncated"])
         self.assertEqual(len(body["text"]), 2048)
 
+
+class TestClear(_SingleViewCase):
+    def test_clear_keeps_last_round_or_wipes(self):
+        win = RecordingWindow()
+        s = _session(win, "c")
+        default_registry.register_session(s)
+        HostView.for_window(win).attach(win, s)
+        out = s.output
+        for i in range(3):
+            out.prompt("q%d" % i); out.text("a%d" % i); out.meta(0.1)
+        self.assertEqual(len(out.conversations) + (1 if out.current else 0), 3)
+        body, _ = sc.action_clear({"ref": s.agent_id})
+        self.assertTrue(body["keep_last"])
+        self.assertIn("q2", out.view._content)
+        self.assertNotIn("q0", out.view._content)
+        body, _ = sc.action_clear({"ref": s.agent_id, "keep_last": False})
+        self.assertFalse(body["keep_last"])
+        self.assertNotIn("q2", out.view._content)
+

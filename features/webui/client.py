@@ -110,6 +110,9 @@ class SessionClient(object):
             fields["max_bytes"] = max_bytes
         return self.call("read", **fields)
 
+    def clear(self, ref: str, keep_last: bool = True) -> Dict[str, Any]:
+        return self.call("clear", ref=ref, keep_last=bool(keep_last))
+
     def close(self, ref: str, remove: bool = False) -> Dict[str, Any]:
         return self.call("close", ref=ref, remove=bool(remove))
 
