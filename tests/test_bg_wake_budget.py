@@ -13,7 +13,7 @@ from core.turn import TurnController
 from tests.fakes import FakeClient, FakeOutput, FakeScheduler, make_session
 
 
-def _gate(policy="auto"):
+def _gate(policy="auto"):   # most cases exercise auto; the default is defer
     turn = TurnController()
     sched = FakeScheduler()
     out = FakeOutput()
@@ -85,6 +85,23 @@ class TestAcknowledgedBatch(unittest.TestCase):
         _start(g, "t1", "u1"); _done(g, "t1"); sched.fire_all()
         self.assertEqual(queries, [])
         self.assertIn("publish t1", g.take_deferred())
+        # defer never wakes, not even for a failure
+        _start(g, "t2", "u2"); _done(g, "t2", status="failed"); sched.fire_all()
+        self.assertEqual(queries, [])
+        self.assertIn("[failed]", g.take_deferred())
+
+
+    def test_defer_is_the_shipped_default(self):
+        from tests.fakes import FakeClient, make_session
+        client = FakeClient()
+        s = make_session(client=client, initialized=True, settings={"background_notify": None})
+        s.query("go")
+        s._accept_tool_name("Bash")
+        _start(s.bg, "t1", "u1")
+        s._on_done({"status": "ok"}, _expected_gen=s.turn.gen)
+        _done(s.bg, "t1"); s.scheduler.fire_all()
+        self.assertFalse(s.working, "the default policy woke the agent")
+        self.assertTrue(s.bg.deferred)
         g, sched, queries, _ = _gate(policy="always")
         _start(g, "t1", "u1"); g.acknowledge_running(); _done(g, "t1"); sched.fire_all()
         self.assertEqual(len(queries), 1)
@@ -94,9 +111,9 @@ class TestSessionWiring(unittest.TestCase):
     """The session judges its own notification turn and rides deferred text
     along with the next real prompt."""
 
-    def _session(self):
+    def _session(self, policy="auto"):
         client = FakeClient()
-        s = make_session(client=client, initialized=True)
+        s = make_session(client=client, initialized=True, settings={"background_notify": policy})
         return s, client
 
     def test_quiet_notification_turn_acknowledges_and_next_prompt_carries_the_rest(self):

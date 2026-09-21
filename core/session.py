@@ -356,7 +356,7 @@ class Session:
             on_query=self._bg_query,
             on_surface=self._bg_surface,
             on_compact_done=self._finish_compact,
-            policy=lambda: str(self.settings.get("background_notify") or "auto"),
+            policy=lambda: str(self.settings.get("background_notify") or "defer"),
         )
         # Turn gen of the notification turn in flight, if any: when it ends
         # without a tool call, the gate acknowledges the running batch.

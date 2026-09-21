@@ -345,9 +345,13 @@ def make_session(**kwargs):
         rpc_factory = lambda on_n, _c=client: _c
     elif rpc_factory is None:
         rpc_factory = FakeClient
+    # The lifecycle tests describe the wake-on-completion ("auto") behaviour;
+    # the shipped default is "defer". Tests that want the default pass it.
+    settings = dict(kwargs.pop("settings", None) or {})
+    settings.setdefault("background_notify", "auto")
     s = Session(
         output, chrome, scheduler, persist,
-        registry=registry, rpc_factory=rpc_factory, **kwargs)
+        registry=registry, rpc_factory=rpc_factory, settings=settings, **kwargs)
     # Never let a test write the real plugin-dir store.
     import os as _os
     import tempfile as _tf

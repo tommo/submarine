@@ -16,15 +16,14 @@ Notify policy goes through TurnController.notify_action:
 Dedupe is source-contains (TaskGet/TaskOutput already delivered bash-*)
 plus mirrored aliases (acp-term-* and bash-* sharing one tool_use_id).
 
-Wake budget (``background_notify`` setting: auto | always | defer):
-  A notification turn costs a full context re-send. When any turn ends with
-  **no tool call** the agent is talking to the user (an answer, a question),
-  not working: every task still running then is *acknowledged*, and its
-  later `completed` result is surfaced (✓ row, unread) and **deferred** —
-  its block rides along with the next real prompt instead of starting a
-  turn. A turn that used tools keeps waking on the next completion (the
-  agent may be waiting on it). Failures always wake. `defer` treats every
-  completion that way; `always` never defers.
+Wake budget (``background_notify`` setting: defer | auto | always):
+  A notification turn costs a full context re-send and interrupts whatever
+  the user and the agent were doing. Default `defer`: a completion never
+  starts a turn — it is surfaced (✓ row, unread) and its block rides along
+  with the user's next prompt, where the agent reads it in context.
+  `auto`: a completion wakes the agent unless its last turn used no tool
+  (it was talking, not working; those jobs are *acknowledged* and deferred);
+  failures wake. `always`: every completion wakes.
 
 Completion events differ per backend and all of them count:
   * `task_notification` carries status + summary + output_file (acp/kimi, and
@@ -143,7 +142,8 @@ class BackgroundTaskGate:
         self.on_surface = on_surface
         self.on_compact_done = on_compact_done
         self.read_output_file = read_output_file or _read_file
-        # "auto" | "always" | "defer" — see the module docstring.
+        # "defer" | "auto" | "always" — see the module docstring. The Session
+        # passes the setting (default defer); a bare gate is auto.
         self.policy = policy or (lambda: "auto")
         # Tasks the agent has already judged (a notification turn with no
         # tool call ended while they ran): their completion is deferred.
@@ -420,17 +420,17 @@ class BackgroundTaskGate:
 
     def _defers(self, task_id, tool_use_id, status):
         # type: (str, str, str) -> bool
-        """A `completed` result the agent need not be woken for."""
-        if status != "completed":
-            return False          # failures / timeouts always wake
+        """A result the agent need not be woken for."""
         try:
             policy = str(self.policy() or "auto")
         except Exception:
             policy = "auto"
+        if policy == "defer":
+            return True           # nothing wakes the agent; it reads it with the next prompt
+        if status != "completed":
+            return False          # auto / always: failures and timeouts wake
         if policy == "always":
             return False
-        if policy == "defer":
-            return True
         return bool((task_id and task_id in self.acknowledged)
                     or (tool_use_id and tool_use_id in self.acknowledged))
 
