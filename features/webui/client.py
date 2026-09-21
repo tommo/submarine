@@ -94,6 +94,14 @@ class SessionClient(object):
     def rename(self, ref: str, name: str) -> Dict[str, Any]:
         return self.call("rename", ref=ref, name=name)
 
+    def open(self, ref: Optional[str], file_path: str, line: Any = None) -> Dict[str, Any]:
+        fields = {"file_path": file_path}  # type: Dict[str, Any]
+        if ref:
+            fields["ref"] = ref
+        if line:
+            fields["line"] = line
+        return self.call("open", **fields)
+
     def close(self, ref: str, remove: bool = False) -> Dict[str, Any]:
         return self.call("close", ref=ref, remove=bool(remove))
 

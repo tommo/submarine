@@ -8,7 +8,7 @@
 //
 //   SubmarineHL.initialState()          -> state for the top of a document
 //   SubmarineHL.tokenizeLine(line, st)  -> [[cls|null, text], …]; mutates st
-//   SubmarineHL.toHtml(text)            -> escaped HTML with <span class=…>
+//   SubmarineHL.toHtml(text, ctx?)      -> escaped HTML with <span class=…>
 //   SubmarineHL.isPromptLine(line)      -> true for a `◎ … ▶` line (fold roots)
 //
 // Classes are dotted scope names with `sm-` prefix and dots turned into
@@ -248,8 +248,9 @@
       { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
-  function toHtml(text) {
+  function toHtml(text, ctx) {
     const st = initialState();
+    if (ctx) st.ctx = ctx;           // 'conversation' for a bare fenced block
     const lines = String(text || '').split('\n');
     const out = [];
     for (const line of lines) {

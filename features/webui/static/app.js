@@ -683,15 +683,60 @@ function renderSheetText(text, opts) {
   mountSheet().setText(String(text || ''), opts);
 }
 
+// Each edit is a card: the file (project-relative when it is under the
+// session's project) and line, tap to unfold the unified diff in the sheet's
+// diff colours, and "open in Sublime" to jump to path:line in that window.
 function renderEdits(body) {
   const edits = body.edits || [];
   if (!edits.length) return '<p class="empty">no edits</p>';
-  let html = '<div class="dim small">' + edits.length + ' of ' + (body.total || edits.length) + ' edit(s)</div>';
+  const row = selectedRow();
+  const project = row ? projectOf(row) : '';
+  let html = '<div class="edits-head dim small">' + edits.length + ' of ' + (body.total || edits.length) + ' edit(s)' +
+    '<button type="button" class="link" id="edits-toggle">expand all</button></div>';
   for (const e of edits) {
-    html += '<div class="edit"><span class="sm-tool-done">✔</span> ' + esc(e.tool || '?') + '  <span class="path">' + esc(e.file_path || '?') +
-      (e.line ? ':' + esc(e.line) : '') + '</span></div>';
+    const path = String(e.file_path || '?');
+    let short = project && path.startsWith(project + '/') ? path.slice(project.length + 1) : path;
+    // Keep the tail readable on a narrow screen: the last two components.
+    const parts = short.split('/');
+    if (parts.length > 3) short = '…/' + parts.slice(-2).join('/');
+    // The diff's ---/+++ header repeats the path already shown; drop it.
+    const diff = String(e.diff || '').split('\n').filter((l, i) => !(i < 2 && /^(---|\+\+\+) /.test(l))).join('\n');
+    html += '<details class="edit" data-path="' + esc(path) + '" data-line="' + esc(e.line || '') + '">' +
+      '<summary><span class="sm-tool-done">✔</span> <span class="etool">' + esc(e.tool || '?') + '</span> ' +
+        '<span class="path" title="' + esc(path) + '">' + esc(short) + (e.line ? '<span class="eline">:' + esc(e.line) + '</span>' : '') + '</span>' +
+        '<button type="button" class="btn tiny eopen" title="Open in Sublime at this line">open</button>' +
+      '</summary>' +
+      (diff ? '<pre class="ediff">' + window.SubmarineHL.toHtml('```diff\n' + diff + '\n```', 'conversation').split('\n').slice(1, -1).join('\n') + '</pre>'
+            : '<p class="dim small">no diff recorded for this edit</p>') +
+      (e.truncated ? '<p class="dim small">… diff truncated</p>' : '') +
+    '</details>';
   }
   return html;
+}
+
+async function openInSublime(path, line) {
+  clearError();
+  const env = await api('/api/open', { method: 'POST', body: JSON.stringify({ ref: state.ref, file_path: path, line: line || undefined }) });
+  showError(env);
+  if (env.ok === true) note('opened ' + basename(path) + (line ? ':' + line : '') + ' in Sublime');
+}
+
+function wireEdits() {
+  const pane = $('pane');
+  for (const b of pane.querySelectorAll('.eopen')) {
+    b.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const d = b.closest('.edit');
+      openInSublime(d.getAttribute('data-path'), Number(d.getAttribute('data-line')) || 0);
+    });
+  }
+  const t = pane.querySelector('#edits-toggle');
+  if (t) t.addEventListener('click', () => {
+    const all = [...pane.querySelectorAll('details.edit')];
+    const open = all.some((d) => !d.open);
+    for (const d of all) d.open = open;
+    t.textContent = open ? 'collapse all' : 'expand all';
+  });
 }
 
 function paneHtml(html) {
@@ -726,6 +771,7 @@ async function refreshPane(opts) {
     if (seq !== paneSeq) return;
     if (env.ok !== true) { paneHtml('<p class="empty">' + esc(env.error || 'cannot read this session') + '</p>'); showError(env); return; }
     paneHtml(renderEdits(env.data || {}));
+    wireEdits();
     setSource('');
     syncToolbar();
     return;

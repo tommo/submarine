@@ -33,7 +33,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 ACTIONS = frozenset(("list", "view", "chat", "interrupt", "pending", "answer",
-                     "backends", "create", "rename", "close"))
+                     "backends", "create", "rename", "close", "open"))
 PERMISSION_RESPONSES = frozenset(("allow", "deny", "allow_session", "allow_all"))
 PLAN_RESPONSES = frozenset(("approve", "reject"))
 #: A permission's tool_input on the wire: a Write's content or a long Bash
@@ -121,6 +121,8 @@ def dispatch(request: dict) -> dict:
             body, target = action_rename(request or {})
         elif action == "close":
             body, target = action_close(request or {})
+        elif action == "open":
+            body, target = action_open(request or {})
         else:
             body, target = action_interrupt(request or {})
     except ControlError as e:
@@ -1111,3 +1113,56 @@ def action_close(params: dict) -> (dict, dict):
     except Exception:
         pass
     return {"closed": True, "removed": removed, "session": ref}, ref
+
+
+# ─── open a file in Sublime ─────────────────────────────────────────────────
+
+
+def action_open(params: dict) -> (dict, dict):
+    """Open `file_path` (at `line`) in the session's window — the Edits list's
+    "open in Sublime". Only files that exist; nothing is created."""
+    path = str(params.get("file_path") or "").strip()
+    if not path:
+        raise ControlError("bad_request", "file_path is required")
+    import os
+    if not os.path.isfile(path):
+        raise ControlError("not_found", "no such file: %s" % path)
+    target = _resolve_any(params.get("ref")) if params.get("ref") else None
+    ref = None
+    window = None
+    if target is not None:
+        ref = {"agent_id": target["agent_id"], "session_id": target["session_id"],
+               "name": target["name"], "backend": target["backend"], "kind": target["kind"]}
+        session = target["session"]
+        if session is not None:
+            window = getattr(session, "window", None)
+            if window is None:
+                try:
+                    view = session.output.view if session.output else None
+                    window = view.window() if view is not None else None
+                except Exception:
+                    window = None
+    if window is None:
+        try:
+            import sublime
+            window = sublime.active_window()
+        except Exception:
+            window = None
+    if window is None:
+        raise ControlError("no_session", "Sublime has no window to open the file in")
+    try:
+        line = int(params.get("line") or 0)
+    except (TypeError, ValueError):
+        line = 0
+    try:
+        import sublime
+        spec = "%s:%d" % (path, line) if line > 0 else path
+        view = window.open_file(spec, sublime.ENCODED_POSITION if line > 0 else 0)
+        try:
+            window.focus_view(view)
+        except Exception:
+            pass
+    except Exception as e:
+        raise ControlError("internal", "open failed: %s" % e)
+    return {"opened": path, "line": line or None, "window": _window_row(window),
+            "session": ref}, ref

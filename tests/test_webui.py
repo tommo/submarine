@@ -61,6 +61,9 @@ class FakeClient(object):
     def close(self, ref, remove=False):
         return self._record("close", ref=ref, remove=remove)
 
+    def open(self, ref, file_path, line=None):
+        return self._record("open", ref=ref, file_path=file_path, line=line)
+
     def health(self):
         self.calls.append(("health", {}))
         return {"ok": True, "socket": "/tmp/submarine_mcp.sock", "present": True}
@@ -257,6 +260,11 @@ class TestApiWrites(ServerCase):
         status, _ = self.post("/api/close", {"ref": "agent-1", "remove": True})
         self.assertEqual(self.client.calls[-1], ("close", {"ref": "agent-1", "remove": True}))
         status, _ = self.post("/api/rename", {"name": "x"})
+        self.assertEqual(status, 400)
+        status, _ = self.post("/api/open", {"ref": "agent-1", "file_path": "/p/a.nim", "line": 12})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.client.calls[-1], ("open", {"ref": "agent-1", "file_path": "/p/a.nim", "line": 12}))
+        status, _ = self.post("/api/open", {"line": 3})
         self.assertEqual(status, 400)
 
     def test_pending_needs_a_ref(self):

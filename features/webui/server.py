@@ -14,6 +14,7 @@ One action per endpoint, named after the CLI's subcommands, so the API really is
   POST /api/create                 {"backend", "model", "name", "window"|"project", "prompt"}  (`create`)
   POST /api/rename                 {"ref", "name"}  (`rename`)
   POST /api/close                  {"ref", "remove"}  (`close`)
+  POST /api/open                   {"ref", "file_path", "line"} — open the file in Sublime  (`open`)
 
 Plus `GET /` and `/static/*` for the console itself. The plugin's envelope is
 returned verbatim, with `http` added, and `data.code` decides the status code —
@@ -57,7 +58,7 @@ TRANSPORT_STATUS = 503
 MAX_BODY_BYTES = 1024 * 1024
 
 _POST_ROUTES = ("/api/chat", "/api/interrupt", "/api/answer", "/api/create",
-                "/api/rename", "/api/close")
+                "/api/rename", "/api/close", "/api/open")
 
 _CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -240,6 +241,13 @@ class WebUIHandler(BaseHTTPRequestHandler):
             if isinstance(fields.get("prompt"), str):
                 fields["prompt"] = fields["prompt"][:MAX_BODY_BYTES]
             return self._reply(self._client.create(**fields))
+        if route == "/api/open":
+            path = str(body.get("file_path") or "").strip()
+            if not path:
+                return self._json(400, {"ok": False, "http": 400,
+                                        "error": "file_path is required"})
+            return self._reply(self._client.open(
+                str(body.get("ref") or "").strip() or None, path[:4096], body.get("line")))
         ref = str(body.get("ref") or "").strip()
         if not ref:
             return self._json(400, {"ok": False, "http": 400,
