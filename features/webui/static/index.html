@@ -35,33 +35,32 @@ window.SubmarineEditor = { ready: new Promise((r) => { window.__submarineEditorR
 <!-- data-pane picks which pane a phone shows; see the 760px media query in
      style.css and the navigation block in app.js. Inert above 760px. -->
 <body data-pane="list">
-<header class="top">
-  <h1>Submarine <span class="dim">sessions</span></h1>
-  <div class="top-right">
-    <span id="conn" class="badge">connecting…</span>
-    <button id="refresh" class="btn" type="button" title="Reload the list and this session">Refresh</button>
-  </div>
-</header>
-
 <div id="error" class="error" hidden></div>
 
 <main>
   <aside class="list">
+    <!-- The list owns the page chrome: title, connection, refresh. -->
     <div class="list-head">
+      <div class="list-head-row title-row">
+        <h1>Submarine</h1>
+        <span id="conn" class="badge">connecting…</span>
+        <button id="refresh" class="btn tiny" type="button" title="Reload the list and this session">⟳</button>
+      </div>
       <div class="list-head-row">
         <input id="search" type="search" placeholder="Search sessions…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-        <button id="new" class="btn primary" type="button" title="Start a new session in one of Sublime's windows">＋ New</button>
       </div>
       <div id="counts" class="counts dim">…</div>
     </div>
-    <!-- New session: backend, model, window (project), name, first prompt.
-         POST /api/create; the session starts in the list, not on the host. -->
+    <!-- New session, opened from a window group's ＋: backend, model, name,
+         first prompt. POST /api/create; the session starts in the list. -->
     <form id="create" class="create" hidden>
+      <div class="create-row">
+        <span id="c-where" class="c-where"></span>
+      </div>
       <div class="create-row">
         <label>backend <select id="c-backend"></select></label>
         <label>model <select id="c-model"><option value="">default</option></select></label>
       </div>
-      <label>window <select id="c-window"></select></label>
       <input id="c-name" type="text" placeholder="Name (optional)" autocomplete="off">
       <textarea id="c-prompt" rows="2" placeholder="First prompt (optional) — sent once the bridge is up"></textarea>
       <div class="create-row">
@@ -75,11 +74,14 @@ window.SubmarineEditor = { ready: new Promise((r) => { window.__submarineEditorR
 
   <section class="detail">
     <div class="headwrap">
-      <button id="back" class="btn back" type="button" aria-label="Back to the session list">← Sessions</button>
-      <div id="head" class="head empty">Pick a session on the left, or send a prompt to wake one.</div>
+      <button id="back" class="btn back" type="button" aria-label="Back to the session list" title="Sessions">←</button>
+      <div id="head" class="head empty">Pick a session on the left.</div>
       <div id="head-actions" class="head-actions" hidden>
-        <button id="rename" class="btn tiny" type="button" title="Rename this session">Rename</button>
-        <button id="close" class="btn tiny danger" type="button" title="Stop this session (Cmd+W in Sublime)">Close</button>
+        <button id="more-actions" class="btn tiny phone-only" type="button" aria-label="Session actions">⋯</button>
+        <div class="head-menu">
+          <button id="rename" class="btn tiny" type="button" title="Rename this session">Rename</button>
+          <button id="close" class="btn tiny danger" type="button" title="Stop this session (Cmd+W in Sublime)">Close</button>
+        </div>
       </div>
     </div>
 

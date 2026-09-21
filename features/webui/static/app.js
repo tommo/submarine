@@ -396,6 +396,8 @@ function groupCurrent(rows) {
     const win = group.map(windowId).find(Boolean);
     return {
       key: 'w:' + key,
+      win: win,
+      project: project,
       title: project ? basename(project) : (win ? 'Window ' + win : 'No window'),
       sub: (win ? 'window ' + win : '') + (project ? (win ? ' · ' : '') + project : ''),
       rows: group,
@@ -404,6 +406,17 @@ function groupCurrent(rows) {
       recent: Math.max(...group.map((r) => Number(r.last_access || 0))),
     };
   });
+  // Sublime windows with no current session still get a band (and its ＋).
+  const known = new Set(groups.map((g) => String(g.win)));
+  for (const w of ((backendsCache || {}).windows || [])) {
+    if (w.id === null || w.id === undefined || known.has(String(w.id))) continue;
+    groups.push({
+      key: 'w:' + w.id, win: String(w.id), project: w.project || '',
+      title: w.project ? basename(w.project) : 'Window ' + w.id,
+      sub: 'window ' + w.id + (w.project ? ' · ' + w.project : ''),
+      rows: [], rank: 9, recent: 0,
+    });
+  }
   groups.sort((a, b) => (a.rank - b.rank) || (b.recent - a.recent));
   return groups;
 }
@@ -435,15 +448,23 @@ function groupHtml(g, section) {
   const busy = g.rows.filter((r) => r.state === 'working').length;
   const badges = (attn ? '<span class="gb attn">' + attn + ' waiting</span>' : '') +
                  (busy ? '<span class="gb busy">' + busy + ' working</span>' : '');
+  const icon = section === 'history' ? '▤' : '⧉';
+  const add = section === 'history' || g.win === undefined || g.win === '' ? '' :
+    '<button type="button" class="gadd" data-win="' + esc(g.win) + '" data-project="' + esc(g.project || '') +
+    '" title="New session in this window">＋</button>';
   return '<div class="group' + (folded ? ' folded' : '') + (section === 'history' ? ' in-history' : '') +
       '" data-group="' + esc(g.key) + '" title="' + esc(g.sub) + '">' +
       '<span class="chev">' + (folded ? '▸' : '▾') + '</span>' +
+      '<span class="gicon">' + icon + '</span>' +
       '<span class="gt">' + esc(g.title) + '</span>' +
       '<span class="gs dim">' + esc(g.sub) + '</span>' +
       badges +
       '<span class="gn dim">' + g.rows.length + '</span>' +
+      add +
     '</div>' +
-    (folded ? '' : treeOrder(g.rows).map((e) => rowHtml(e, section)).join(''));
+    (folded ? '' : (g.rows.length
+      ? treeOrder(g.rows).map((e) => rowHtml(e, section)).join('')
+      : '<p class="dim empty-note">no sessions in this window</p>'));
 }
 
 function renderList(env) {
@@ -505,6 +526,12 @@ function renderList(env) {
   for (const el of box.querySelectorAll('.row')) {
     el.addEventListener('click', () => openSession(el.getAttribute('data-ref')));
   }
+  for (const el of box.querySelectorAll('.gadd')) {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openCreate(el.getAttribute('data-win'), el.getAttribute('data-project'));
+    });
+  }
   for (const el of box.querySelectorAll('.group[data-group]')) {
     el.addEventListener('click', () => {
       const key = el.getAttribute('data-group');
@@ -537,21 +564,19 @@ function renderHead(row) {
     return;
   }
   const view = row.view || {};
+  const [mark, markClass] = rowMark(row);
   const meta = [
-    '<span class="m-state">state <code>' + esc(row.state || '?') + '</code></span>',
-    row.turn_phase ? '<span>turn <code>' + esc(row.turn_phase) + '</code></span>' : '',
-    '<span>backend <code>' + esc(row.backend || '?') + '</code></span>',
-    row.model ? '<span>model <code>' + esc(row.model) + '</code></span>' : '',
-    '<span>age <code>' + esc(ago(row.last_access)) + '</code></span>',
-    row.kind === 'live' && view.bound && view.view_id ? '<span>view <code>' + esc(view.view_id) + '</code></span>' : '',
-    view.project ? '<span>project <code>' + esc(view.project) + '</code></span>' : '',
-    view.window !== null && view.window !== undefined && view.window !== ''
-      ? '<span>window <code>' + esc(view.window) + '</code></span>' : '',
-    '<span class="m-id">agent <code>' + esc(row.agent_id || '–') + '</code></span>',
-    '<span class="m-id">session <code>' + esc(row.session_id || '–') + '</code></span>',
+    '<span class="m-state"><b class="mark ' + markClass + '">' + mark + '</b>' + esc(row.state || '?') +
+      (row.turn_phase && row.turn_phase !== 'idle' ? ' · ' + esc(row.turn_phase) : '') + '</span>',
+    '<span>' + esc(row.backend || '?') + (row.model ? ' · ' + esc(shortModel(row.model)) : '') + '</span>',
+    '<span>' + esc(ago(row.last_access)) + '</span>',
+    view.project ? '<span title="' + esc(view.project) + '">' + esc(basename(view.project)) +
+      (view.window !== null && view.window !== undefined && view.window !== '' ? ' · w' + esc(view.window) : '') + '</span>' : '',
+    row.query_count !== null && row.query_count !== undefined ? '<span>Q ' + esc(row.query_count) + '</span>' : '',
   ].filter(Boolean).join('');
+  const ids = 'agent ' + (row.agent_id || '–') + '\nsession ' + (row.session_id || '–');
   el.className = 'head';
-  el.innerHTML = '<h2>' + esc(row.name || '(unnamed)') + '</h2><div class="meta">' + meta + '</div>';
+  el.innerHTML = '<h2 title="' + esc(ids) + '">' + esc(row.name || '(unnamed)') + '</h2><div class="meta">' + meta + '</div>';
   $('head-actions').hidden = false;
   $('close').textContent = row.kind === 'live' ? 'Close' : 'Delete';
   $('close').title = row.kind === 'live'
@@ -751,6 +776,7 @@ function schedule(ms) {
 }
 
 async function tick() {
+  await loadBackends(false);
   const env = await api('/api/list?scope=all');
   renderList(env);
 
@@ -1082,30 +1108,39 @@ async function closeSession() {
 }
 
 let backendsCache = null;
+let backendsAt = 0;
+const BACKENDS_TTL_MS = 60000;
+const createTarget = { win: '', project: '' };
 
-async function openCreate() {
+// Backends and windows: needed for the ＋ on empty windows and the form.
+async function loadBackends(force) {
+  if (!force && backendsCache && Date.now() - backendsAt < BACKENDS_TTL_MS) return backendsCache;
+  const env = await api('/api/backends');
+  if (env.ok !== true) return backendsCache;
+  backendsCache = env.data || {};
+  backendsAt = Date.now();
+  return backendsCache;
+}
+
+async function openCreate(win, project) {
   const form = $('create');
-  if (!form.hidden) { form.hidden = true; return; }
+  if (!form.hidden && createTarget.win === String(win)) { form.hidden = true; return; }
   clearError();
-  if (!backendsCache) {
-    const env = await api('/api/backends');
-    if (env.ok !== true) { showError(env); return; }
-    backendsCache = env.data || {};
-  }
+  if (!(await loadBackends(false))) { showError({ ok: false, error: 'cannot list backends' }); return; }
   const b = backendsCache;
+  createTarget.win = String(win);
+  createTarget.project = project || '';
+  $('c-where').innerHTML = 'New session in <b>' + esc(project ? basename(project) : 'window ' + win) + '</b>' +
+    (project ? ' <span class="dim">' + esc(project) + '</span>' : '');
   const be = $('c-backend');
   be.innerHTML = (b.backends || []).map((x) =>
     '<option value="' + esc(x.name) + '"' + (x.name === b.default ? ' selected' : '') + (x.available ? '' : ' disabled') + '>' +
     esc(x.label || x.name) + (x.available ? '' : ' (unavailable)') + '</option>').join('');
-  const win = $('c-window');
-  const cur = selectedRow();
-  const curWin = cur ? windowId(cur) : '';
-  win.innerHTML = (b.windows || []).map((w) =>
-    '<option value="' + esc(w.id) + '"' + (String(w.id) === String(curWin) ? ' selected' : '') + '>' +
-    esc((w.project ? basename(w.project) : 'Window ' + w.id) + ' — ' + (w.project || 'no folder') + ' (' + w.sessions + ')') + '</option>').join('');
   syncCreateModels();
   $('c-note').textContent = '';
   form.hidden = false;
+  // The form sits under the list head; bring it into view on a phone.
+  try { form.scrollIntoView({ block: 'nearest' }); } catch (e) { /* older engines */ }
   $('c-name').focus();
 }
 
@@ -1121,7 +1156,7 @@ async function submitCreate() {
   const body = {
     backend: $('c-backend').value,
     model: $('c-model').value || undefined,
-    window: $('c-window').value,
+    window: createTarget.win,
     name: $('c-name').value.trim() || undefined,
     prompt: $('c-prompt').value.trim() || undefined,
     idem: idemKey(),
@@ -1235,9 +1270,12 @@ function wire() {
 
   $('turns').addEventListener('change', () => { clearError(); refreshPane(); });
   $('reload').addEventListener('click', () => { clearError(); refreshPane(); schedule(0); });
-  $('rename').addEventListener('click', renameSession);
-  $('close').addEventListener('click', closeSession);
-  $('new').addEventListener('click', openCreate);
+  $('rename').addEventListener('click', () => { $('head-actions').classList.remove('open'); renameSession(); });
+  $('close').addEventListener('click', () => { $('head-actions').classList.remove('open'); closeSession(); });
+  $('more-actions').addEventListener('click', (e) => { e.stopPropagation(); $('head-actions').classList.toggle('open'); });
+  document.addEventListener('click', (e) => {
+    if (!$('head-actions').contains(e.target)) $('head-actions').classList.remove('open');
+  });
   $('c-cancel').addEventListener('click', () => { $('create').hidden = true; });
   $('c-backend').addEventListener('change', syncCreateModels);
   $('create').addEventListener('submit', (e) => { e.preventDefault(); submitCreate(); });

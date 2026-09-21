@@ -151,9 +151,10 @@ not use `wait` (`chat --wait`): it polls instead, see below.
   keeps a matching parent's children, `Enter` opens the first hit, `Esc`
   clears. **History** rows group by project too (the saved row's folder),
   most recent group first.
-- **＋ New** (next to the search box) opens a form: backend (unavailable ones
-  greyed), model alias, the Sublime window it lives in (by project), a name
-  and an optional first prompt. The session starts viewless — in the list,
+- **＋ on a window's band** opens a form for a session *in that window*:
+  backend (unavailable ones greyed), model alias, a name and an optional first
+  prompt. A Sublime window with no current session still gets a band, so it
+  can be started from. The session starts viewless — in the list,
   not on the host sheet — and the console opens it; the prompt is delivered
   once the bridge is up, like `chat` to a sleeping session.
 - **Rename / Close** sit under the selected session's header. Close stops a
@@ -234,7 +235,7 @@ lose. No build step either way.
 The two panes become one at a time, the way the rest of the phone navigates —
 a list you tap into, and a way back out:
 
-- **The list is the whole screen** to start with; tapping a session swaps in
+- **The list is the whole screen** to start with (the page title, connection badge and ⟳ live in its head — there is no separate top bar); tapping a session swaps in
   the transcript and compose full-screen. The tapped row stays marked, so
   coming back shows where you were.
 - **The open session lives in the URL** as `#s=<ref>`, so a session is a link:

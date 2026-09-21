@@ -41,18 +41,9 @@ body {
 .dim { color: var(--dim); }
 .small { font-size: 12px; }
 
-.top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--line);
-}
-
-.top h1 { font-size: 14px; font-weight: 600; margin: 0; }
-.top-right { display: flex; align-items: center; gap: 8px; }
+.title-row { align-items: center; gap: 8px; }
+.title-row h1 { font-size: 14px; font-weight: 700; margin: 0; flex: 0 0 auto; }
+.title-row .badge { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .badge {
   padding: 2px 8px;
@@ -140,6 +131,8 @@ main {
 .create-row .btn { margin-left: auto; }
 .create-row .btn + .btn { margin-left: 0; }
 .create-row #c-note { flex: 1 1 auto; }
+.c-where { font-size: 12px; }
+.c-where b { color: var(--accent); }
 
 .head-actions { display: flex; gap: 6px; padding: 0 12px 8px; border-bottom: 1px solid var(--line); }
 .head-actions .btn.danger { background: #3a2226; border-color: #6b3b3f; }
@@ -153,13 +146,14 @@ main {
    caption: darker, an accent bar, bigger title; the rows indent under it. */
 .group {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
-  padding: 7px 10px 6px 8px;
+  padding: 8px 8px 7px 8px;
   font-size: 12px;
   color: var(--fg);
-  background: #12151a;
-  border-left: 3px solid var(--accent);
+  background: linear-gradient(90deg, #1b2230, #14171d 60%);
+  border-left: 4px solid var(--accent);
+  border-top: 2px solid #2b3140;
   border-bottom: 1px solid var(--line);
   position: sticky;
   top: 0;
@@ -168,10 +162,18 @@ main {
   user-select: none;
   min-width: 0;
 }
-.group:not(:first-child) { border-top: 1px solid var(--line); margin-top: 6px; }
-.group:hover { background: #171a20; }
+.group:not(:first-child) { margin-top: 10px; }
+.group:hover { background: linear-gradient(90deg, #212a3a, #171a20 60%); }
 .group .chev { color: var(--dim); font-size: 10px; width: 10px; flex: 0 0 auto; }
-.group .gt { font-weight: 700; font-size: 13px; letter-spacing: 0.01em; flex: 0 0 auto; }
+.group .gicon { color: var(--accent); font-size: 14px; line-height: 1; flex: 0 0 auto; }
+.group.in-history .gicon { color: #6b7385; }
+.group .gt { font-weight: 700; font-size: 13.5px; letter-spacing: 0.01em; flex: 0 0 auto; }
+.group .gadd {
+  flex: 0 0 auto; margin-left: 4px; width: 24px; height: 24px; padding: 0;
+  border: 1px solid #37598f; border-radius: 6px; background: #2b4a7d; color: #fff;
+  font: inherit; font-size: 15px; line-height: 1; cursor: pointer;
+}
+.group .gadd:hover { background: #37598f; }
 .group .gs { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .group .gn { flex: 0 0 auto; font-size: 11px; }
 .group.folded { border-left-color: var(--dim); }
@@ -239,13 +241,22 @@ main {
   min-height: 0;
 }
 
-.head { padding: 8px 12px; border-bottom: 1px solid var(--line); }
-.head.empty { color: var(--dim); }
-.head h2 { margin: 0 0 4px; font-size: 14px; }
-.head .meta { display: flex; flex-wrap: wrap; gap: 10px; color: var(--dim); font-size: 11px; }
-.head .meta code { color: var(--fg); }
-/* Wrapper only exists to host the phone's back button next to the header. */
-.headwrap { display: flex; flex-direction: column; min-width: 0; }
+/* Session header: one row of name + actions, one line of meta, no ids
+   (they are the name's tooltip). Compact on every width. */
+.headwrap { display: flex; align-items: flex-start; min-width: 0; border-bottom: 1px solid var(--line); }
+.head { flex: 1 1 auto; min-width: 0; padding: 7px 12px 6px; }
+.head.empty { color: var(--dim); padding: 9px 12px; }
+.head h2 { margin: 0; font-size: 14px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.head .meta { display: block; margin-top: 1px; color: var(--dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.head .meta > span + span::before { content: ' · '; color: var(--line); }
+.head .meta .mark { font-style: normal; margin-right: 4px; }
+.head .meta .mark.working { color: #ffd479; }
+.head .meta .mark.waiting, .head .meta .mark.unread { color: #ffcc66; }
+.head .meta .mark.idle { color: var(--ok); }
+.head .meta .mark.sleeping { color: var(--accent); }
+.head-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 8px 12px 0 0; position: relative; }
+.head-menu { display: flex; gap: 6px; }
+.head-actions .btn.danger { background: #3a2226; border-color: #6b3b3f; }
 .back { display: none; }
 
 .toolbar {
@@ -446,15 +457,6 @@ main {
   body[data-pane="list"] .detail { display: none; }
   body[data-pane="detail"] .list { display: none; }
 
-  .top {
-    padding-top: max(6px, env(safe-area-inset-top, 0px));
-    padding-left: max(12px, env(safe-area-inset-left, 0px));
-    padding-right: max(12px, env(safe-area-inset-right, 0px));
-  }
-  .top h1 { font-size: 15px; }
-  .top h1 .dim { display: none; }   /* the title has to fit beside the badge */
-  .top-right { min-width: 0; flex: 1 1 auto; justify-content: flex-end; }
-  .badge { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .btn { min-height: 44px; }
 
   .list {
@@ -469,7 +471,7 @@ main {
   }
   .detail { flex: 1 1 auto; }
 
-  .list-head { padding: 8px 12px 6px; }
+  .list-head { padding: max(8px, env(safe-area-inset-top, 0px)) 12px 6px; }
   .list-head input[type="search"] { font-size: 16px; padding: 8px 10px; }   /* no iOS zoom */
   .group { padding: 9px 12px 7px 10px; }
   .group .gt { font-size: 14px; }
@@ -478,29 +480,38 @@ main {
   .row .r1 { gap: 8px; font-size: 14px; }
   .row .r2 { margin-top: 2px; }
 
-  /* The header keeps its chips on one swipeable line: ten wrapped chips would
-     eat the transcript's height. */
-  .headwrap { flex-direction: row; align-items: stretch; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
-  .head-actions { flex: 1 0 100%; padding: 4px 10px 6px; border-bottom: 0; }
-  .head-actions .btn { min-height: 36px; }
-  .create select, .create input[type="text"], .create textarea { font-size: 16px; }
-  body.composing .head-actions { display: none; }
-  .head { flex: 1 1 auto; min-width: 0; border-bottom: 0; padding: 8px 12px; }
+  /* One 44px strip: ← · name (meta under it, one line) · ⋯ menu. */
+  .headwrap { align-items: center; }
+  .head { padding: 5px 8px 5px 4px; }
   .head h2 { font-size: 15px; }
-  .head .meta { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; }
-  .head .meta > span { white-space: nowrap; }
+  .head .meta { font-size: 11px; }
   .back {
     display: flex;
     align-items: center;
+    justify-content: center;
     flex: 0 0 auto;
+    width: 40px;
     min-height: 44px;
-    padding: 0 14px 0 10px;
+    padding: 0;
     border: 0;
-    border-right: 1px solid var(--line);
     border-radius: 0;
-    background: var(--panel);
-    font-size: 14px;
+    background: transparent;
+    font-size: 18px;
+    color: var(--accent);
   }
+  .head-actions { padding: 0 8px 0 0; }
+  .head-actions .btn.tiny { min-height: 36px; min-width: 36px; }
+  .head-menu {
+    display: none;
+    position: absolute; right: 8px; top: 40px; z-index: 5;
+    flex-direction: column; gap: 4px; padding: 6px;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  }
+  .head-actions.open .head-menu { display: flex; }
+  .head-menu .btn { min-height: 40px; min-width: 120px; text-align: left; }
+  .create select, .create input[type="text"], .create textarea { font-size: 16px; }
+  body.composing .head-actions { display: none; }
 
   .toolbar { flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
   .tab { min-height: 44px; padding: 3px 12px; font-size: 13px; }
@@ -530,16 +541,12 @@ main {
   /* ── chrome diet: the sheet, not the chrome, gets the screen ─────────── */
   /* The detail pane has its own header (← Sessions + name); the top bar's
      Refresh moves into the toolbar as ⟳ and the error strip still shows. */
-  body[data-pane="detail"] .top { display: none; }
   .phone-only { display: inline-flex; }
-  .headwrap .back { min-height: 40px; padding: 0 10px 0 8px; font-size: 13px; }
-  .head { padding: 6px 10px; }
-  .head h2 { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .head .meta { font-size: 10px; gap: 8px; }
-  .head .meta .m-id { display: none; }          /* ids are for copy-paste, not a phone */
-  .toolbar { flex-wrap: nowrap; gap: 6px; padding: 4px 8px; }
+  .toolbar { flex-wrap: nowrap; gap: 6px; padding: 3px 6px; }
   .tabs { gap: 2px; }
-  .tab { min-height: 36px; padding: 2px 10px; font-size: 13px; }
+  .tab { min-height: 34px; padding: 2px 10px; font-size: 13px; }
+  .group .gadd { width: 32px; height: 32px; font-size: 18px; }
+  .title-row h1 { font-size: 16px; }
   .toolbar #turns-wrap { display: none !important; }   /* the caption's +8 does this */
   .toolbar #tail { padding: 4px 8px; }
   .caption {
@@ -547,12 +554,13 @@ main {
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 2px 10px 4px;
+    padding: 0 10px;
     border-bottom: 1px solid var(--line);
-    min-height: 20px;
+    min-height: 22px;
+    font-size: 11px;
   }
   .caption #source-phone { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .caption .link { flex: 0 0 auto; min-height: 28px; }
+  .caption .link { flex: 0 0 auto; min-height: 22px; font-size: 11px; }
 
   /* A pending modal owns the bottom of a phone screen: the composer steps
      aside (as the Sublime sheet hides it), Interrupt stays. */
