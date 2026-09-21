@@ -90,3 +90,53 @@ class TestQueuePhantomNavigate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEditQueued(unittest.TestCase):
+    def _session(self):
+        from tests.fakes import FakeClient, make_session
+        from tests.test_single_view import RecordingWindow
+        from ui.host import HostView, set_ui_mode_override
+        from ui.view import SubmarineOutputView
+        from core.registry import default_registry
+        default_registry.clear(); HostView.reset(); set_ui_mode_override("single")
+        win = RecordingWindow(); out = SubmarineOutputView(win)
+        s = make_session(output=out, chrome=out, window=win, registry=default_registry,
+                         client=FakeClient(), initialized=True)
+        s.session_id = "sess-q"; s._composer_allowed = True
+        HostView.for_window(win).attach(win, s)
+        return s, out
+
+    def test_chip_has_an_edit_link(self):
+        from ui.view import format_queue_phantom_html
+        html = format_queue_phantom_html(["do this"], "hint")
+        self.assertIn('href="edit:0"', html)
+        self.assertIn('href="send:0"', html)
+        self.assertIn('href="drop:0"', html)
+
+    def test_edit_moves_the_message_into_the_composer(self):
+        s, out = self._session()
+        s.query("first")                      # working → the next goes to the queue
+        s.queue_prompt("second thing")
+        s.queue_prompt("third thing")
+        self.assertEqual(s._queued_prompts, ["second thing", "third thing"])
+        s.scheduler.fire_due(50)              # the sticky composer opens
+        s._on_queue_phantom_navigate("edit:1")
+        self.assertEqual(s._queued_prompts, ["second thing"])
+        self.assertTrue(out.is_input_mode())
+        self.assertEqual(out.get_input_text(), "third thing")
+
+    def test_edit_keeps_a_draft_being_typed(self):
+        s, out = self._session()
+        s.query("first")
+        s.queue_prompt("queued one")
+        s.scheduler.fire_due(50)
+        out.set_composer_text("typing now")
+        s.edit_queued(0)
+        self.assertEqual(s._queued_prompts, [])
+        self.assertEqual(out.get_input_text(), "queued one\ntyping now")
+
+    def test_out_of_range_is_a_noop(self):
+        s, _out = self._session()
+        self.assertFalse(s.edit_queued(3))
+

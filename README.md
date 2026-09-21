@@ -221,7 +221,9 @@ prompts directly:
 - **Cmd+Enter** / **Ctrl+Enter** — Send now (cancel in-flight turn + send). When
   `submit_with_modifier` is on, this is also the submit key and Enter inserts a
   newline
-- **Alt+Enter** — Queue while busy (idle = normal submit)
+- **Alt+Enter** — Queue while busy (idle = normal submit). Queued messages
+  sit as `⏳` chips above ◎ with **✎** (pull it back into the composer to
+  change it), **↵** (send now) and **×** (drop)
 - **@** — Open context menu (browse files, or clear pending context)
 - **Cmd+K** — Clear older rounds, keep last turn
 - **Cmd+Shift+K** — Clear output (full wipe)

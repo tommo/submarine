@@ -106,7 +106,7 @@ def format_queue_phantom_html(prompts: Sequence[str],
     """Composer chrome *above* ◎: optional queue chips + a hairline split.
 
     Layout (top → bottom, phantoms only):
-      ⏳ queued msg  ↵ ×   (only when queued)
+      ⏳ queued msg  ✎ ↵ ×   (only when queued)
       ─ hairline ─
       ◎ input…
     """
@@ -132,11 +132,13 @@ def format_queue_phantom_html(prompts: Sequence[str],
                 'background-color:color(var(--foreground) alpha(0.06));'
                 'color:var(--bluish);font-size:11px;">'
                 '⏳ %s'
+                '&nbsp;<a href="edit:%d" style="color:var(--bluish);'
+                'text-decoration:none;" title="edit in the composer">✎</a>'
                 '&nbsp;<a href="send:%d" style="color:var(--orangish);'
                 'text-decoration:none;" title="send now">↵</a>'
                 '&nbsp;<a href="drop:%d" style="color:var(--redish);'
                 'text-decoration:none;" title="remove">×</a>'
-                '</div>' % (safe, i, i)
+                '</div>' % (safe, i, i, i)
             )
         rows.append(
             '<div style="margin:2px 0 1px 0;font-size:10px;'

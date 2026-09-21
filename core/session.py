@@ -1149,6 +1149,13 @@ class Session:
                 msg = q.pop(idx)
                 self.send_now(msg)
             return
+        if href.startswith("edit:"):
+            try:
+                idx = int(href.split(":", 1)[1])
+            except (TypeError, ValueError):
+                return
+            self.edit_queued(idx)
+            return
         if not href.startswith("drop:"):
             return
         try:
@@ -1162,6 +1169,46 @@ class Session:
             except Exception:
                 pass
             self._update_queue_phantom()
+
+    def edit_queued(self, idx):
+        # type: (int) -> bool
+        """Pull queued prompt `idx` back into the composer to change it.
+
+        The message leaves the queue (it is no longer what will be sent) and
+        becomes the draft; a draft already being typed is kept below it. The
+        composer opens if it was not, and the caret lands at the end.
+        """
+        if not (0 <= idx < len(self._queued_prompts)):
+            return False
+        text = self._queued_prompts.pop(idx)
+        try:
+            (self._queued_ctx or {}).pop(text, None)
+        except Exception:
+            pass
+        self._update_queue_phantom()
+        out = self.output
+        if out is None:
+            self.draft_prompt = text
+            return True
+        try:
+            if not out.is_input_mode():
+                self._enter_input_with_draft()
+        except Exception:
+            pass
+        current = ""
+        try:
+            current = out.get_input_text() if out.is_input_mode() else (self.draft_prompt or "")
+        except Exception:
+            current = self.draft_prompt or ""
+        merged = text if not current.strip() else text.rstrip("\n") + "\n" + current
+        self.draft_prompt = merged
+        try:
+            if out.is_input_mode():
+                out.set_composer_text(merged)
+                out.focus_composer(force_show=True, steal_focus=True, park_at_end=True)
+        except Exception:
+            pass
+        return True
 
     def queue_prompt(self, prompt):
         # type: (str) -> None
