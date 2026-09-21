@@ -2033,3 +2033,19 @@ class TestSessionListKeymap(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTreeSelfLink(unittest.TestCase):
+    """A parent whose parent_agent_id is its own id (the stale host-stamp bug)
+    must still get its children indented, not be read as a cycle."""
+
+    def test_child_nests_under_a_self_linked_parent(self):
+        rows = [
+            {"agent_id": "p", "parent_agent_id": "p", "kind": "live", "status": "sleeping",
+             "last_access": 2, "name": "parent"},
+            {"agent_id": "c", "parent_agent_id": "p", "kind": "live", "status": "sleeping",
+             "last_access": 1, "name": "child"},
+        ]
+        out = sl.tree_order(rows)
+        self.assertEqual([(r["agent_id"], r["depth"]) for r in out], [("p", 0), ("c", 1)])
+

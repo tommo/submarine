@@ -38,6 +38,17 @@
     // one sheet per session).
     "ui_mode": "single",
 
+    // Background job completions and the agent's attention.
+    //   "auto"   — wake the agent for a completion, except that once a
+    //              notification turn ends without a tool call ("nothing to
+    //              act on"), the rest of that batch is only surfaced (✓,
+    //              unread) and its output rides along with your next prompt.
+    //              Failures always wake.
+    //   "always" — every completion starts a notification turn (each one
+    //              re-sends the whole context).
+    //   "defer"  — never wake for a completion; deliver with the next prompt.
+    "background_notify": "auto",
+
     // Auto-sleep idle sessions after N minutes (0 = disabled). Timer starts
     // when a turn *ends* (not when sticky ◎ opens mid-stream).
     // "auto_sleep_minutes": 60,

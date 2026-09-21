@@ -16,6 +16,16 @@ Notify policy goes through TurnController.notify_action:
 Dedupe is source-contains (TaskGet/TaskOutput already delivered bash-*)
 plus mirrored aliases (acp-term-* and bash-* sharing one tool_use_id).
 
+Wake budget (``background_notify`` setting: auto | always | defer):
+  A notification turn costs a full context re-send, so a batch of expected
+  completions must not wake the agent once per job. When a notification
+  turn ends with **no tool call** the agent has judged that batch ("nothing
+  to act on"): every task still running then is *acknowledged*, and its
+  later `completed` result is surfaced (✓ row, unread) and **deferred** —
+  its block rides along with the next real prompt instead of starting a
+  turn. Failures always wake. `defer` treats every completion that way;
+  `always` never defers.
+
 Completion events differ per backend and all of them count:
   * `task_notification` carries status + summary + output_file (acp/kimi, and
     claude when the turn is still live);
@@ -122,6 +132,7 @@ class BackgroundTaskGate:
         on_surface=None,  # type: Optional[Callable[[], None]]
         on_compact_done=None,  # type: Optional[Callable[[], None]]
         read_output_file=None,  # type: Optional[Callable[[str], str]]
+        policy=None,  # type: Optional[Callable[[], str]]
     ):
         self.turn = turn
         self.scheduler = scheduler
@@ -132,6 +143,14 @@ class BackgroundTaskGate:
         self.on_surface = on_surface
         self.on_compact_done = on_compact_done
         self.read_output_file = read_output_file or _read_file
+        # "auto" | "always" | "defer" — see the module docstring.
+        self.policy = policy or (lambda: "auto")
+        # Tasks the agent has already judged (a notification turn with no
+        # tool call ended while they ran): their completion is deferred.
+        self.acknowledged = set()  # type: Set[str]
+        # Blocks waiting for the next real prompt (never a turn of their own).
+        self.deferred = []  # type: list
+        self.pending_block_status = []  # type: list  # status per pending block
 
         self.task_tool_map = {}  # type: dict  # task_id -> tool_use_id
         self.bg_tools = {}  # type: dict
@@ -373,6 +392,9 @@ class BackgroundTaskGate:
         if not output_file:
             output_file = self.task_logs.get(task_id, "")
         block = self._completion_block(task_id, status, summary, output_file)
+        if self._defers(task_id, tool_use_id, status):
+            self._defer(block, task_id, tool_use_id)
+            return True
         # Always buffer. "notified" means shown/queried, not seen on the
         # wire — mark() happens in flush after surface/query, not here.
         index = self._pending_block_index(task_id, tool_use_id)
@@ -381,8 +403,10 @@ class BackgroundTaskGate:
             # Keyed by tool_use_id when we have one: it is stable across the
             # acp-term-*/bash-* aliases of a single job.
             self.pending_block_task.append(tool_use_id or task_id)
+            self.pending_block_status.append(status)
         else:
             self.pending_notifications[index] = block
+            self.pending_block_status[index] = status
         if task_id:
             self.pending_task_ids.add(task_id)
         if tool_use_id:
@@ -391,6 +415,90 @@ class BackgroundTaskGate:
             self.flush_scheduled = True
             self.scheduler.call_later(FLUSH_DEBOUNCE_MS, self.flush)
         return True
+
+    # --- wake budget ------------------------------------------------------
+
+    def _defers(self, task_id, tool_use_id, status):
+        # type: (str, str, str) -> bool
+        """A `completed` result the agent need not be woken for."""
+        if status != "completed":
+            return False          # failures / timeouts always wake
+        try:
+            policy = str(self.policy() or "auto")
+        except Exception:
+            policy = "auto"
+        if policy == "always":
+            return False
+        if policy == "defer":
+            return True
+        return bool((task_id and task_id in self.acknowledged)
+                    or (tool_use_id and tool_use_id in self.acknowledged))
+
+    def _defer(self, block, task_id="", tool_use_id=""):
+        # type: (str, str, str) -> None
+        """Show the completion, keep its text for the next real prompt."""
+        if block not in self.deferred:
+            self.deferred.append(block)
+        self.mark(task_id, tool_use_id)
+        if self.on_surface is not None:
+            try:
+                self.on_surface()
+            except Exception:
+                pass
+        else:
+            try:
+                self.output.refresh_background_hints()
+            except Exception:
+                pass
+
+    def acknowledge_running(self):
+        # type: () -> None
+        """The agent answered a notification turn without acting: whatever
+        is still running is part of a batch it has judged. Their later
+        `completed` results are deferred, and any completed block already
+        buffered for them stops being a reason to wake."""
+        running = set()
+        for tid, tuid in list(self.task_tool_map.items()):
+            if tid:
+                running.add(tid)
+            if tuid:
+                running.add(tuid)
+        running.update(self.bg_task_ids)
+        running.update(self.bg_tools.keys())
+        # Completions that landed during the turn were not in what the agent
+        # read either, but they are the same batch: judge them with it.
+        running.update(self.pending_task_ids)
+        running.update(self.pending_tool_ids)
+        running.update(k for k in self.pending_block_task if k)
+        running.discard("")
+        self.acknowledged.update(running)
+        if not self.pending_notifications:
+            return
+        keep, keep_task, keep_status = [], [], []
+        for block, key, status in zip(self.pending_notifications,
+                                      self.pending_block_task,
+                                      self.pending_block_status):
+            if status == "completed" and key in self.acknowledged:
+                self._defer(block, key, key)
+                continue
+            keep.append(block)
+            keep_task.append(key)
+            keep_status.append(status)
+        self.pending_notifications = keep
+        self.pending_block_task = keep_task
+        self.pending_block_status = keep_status
+        if not keep:
+            self.pending_task_ids.clear()
+            self.pending_tool_ids.clear()
+
+    def take_deferred(self):
+        # type: () -> str
+        """The deferred blocks, joined, for a real prompt; clears them."""
+        if not self.deferred:
+            return ""
+        text = "\n".join(self.deferred)
+        self.deferred = []
+        return text
 
     def note_task_poll_delivery(self, tool_name, content):
         # type: (str, str) -> None
@@ -423,6 +531,7 @@ class BackgroundTaskGate:
         if self.pending_notifications:
             kept = []
             kept_tasks = []
+            kept_status = []
             for i, block in enumerate(self.pending_notifications):
                 drop = False
                 for m in _BASH_ID_RE.finditer(block):
@@ -434,8 +543,10 @@ class BackgroundTaskGate:
                 if not drop:
                     kept.append(block)
                     kept_tasks.append(self.pending_block_task[i])
+                    kept_status.append(self._status_at(i))
             self.pending_notifications = kept
             self.pending_block_task = kept_tasks
+            self.pending_block_status = kept_status
 
     def flush(self):
         # type: () -> None
@@ -459,6 +570,7 @@ class BackgroundTaskGate:
         pending_tools = set(self.pending_tool_ids)
         self.pending_notifications = []
         self.pending_block_task = []
+        self.pending_block_status = []
         self.pending_task_ids.clear()
         self.pending_tool_ids.clear()
         self.pending_hold_gen = None
@@ -661,14 +773,24 @@ class BackgroundTaskGate:
         self.foreground_tasks.clear()
         self.pending_notifications = []
         self.pending_block_task = []
+        self.pending_block_status = []
         self.pending_task_ids.clear()
         self.pending_tool_ids.clear()
         self.notified_task_ids.clear()
         self.notified_tool_ids.clear()
+        self.acknowledged.clear()
+        # Deferred text is kept: the jobs are gone, what they printed is not.
         self.pending_hold_gen = None
         self.flush_scheduled = False
         self.poll_epoch += 1
         self._poll_armed = False
+
+    def _status_at(self, index):
+        # type: (int) -> str
+        try:
+            return self.pending_block_status[index]
+        except IndexError:
+            return "completed"
 
     def has_background(self):
         # type: () -> bool

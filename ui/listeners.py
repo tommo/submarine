@@ -34,6 +34,12 @@ except ImportError:  # unit tests
     sublime_plugin = _NS()  # type: ignore
 
 from . import keys
+
+# Buffer edits the renderer makes (never the user): see on_modified.
+_RENDER_EDIT_COMMANDS = frozenset((
+    keys.CMD_REPLACE, keys.CMD_INSERT, keys.CMD_CLEAR_ALL,
+    "claude_replace", "claude_insert", "claude_clear_all",
+))
 from .composer import Composer
 from .context_menu import ContextMenuHandler, ContextParser
 from .geometry import classify_regions, wholly_in_draft
@@ -1398,6 +1404,11 @@ class SubmarineOutputEventListener(sublime_plugin.ViewEventListener):
                         self._in_soft_undo = False
                     return
         if getattr(s.output, "_question_input_mode", False):
+            return
+        # The renderer's own edits (a streamed delta, a spinner tick) land
+        # before the composer and shift its anchors around the command; they
+        # are not the user typing, and must not be captured as the draft.
+        if command in _RENDER_EDIT_COMMANDS:
             return
         if self._wholly_in_draft(s):
             input_text = s.output.get_input_text()

@@ -356,7 +356,11 @@ class Session:
             on_query=self._bg_query,
             on_surface=self._bg_surface,
             on_compact_done=self._finish_compact,
+            policy=lambda: str(self.settings.get("background_notify") or "auto"),
         )
+        # Turn gen of the notification turn in flight, if any: when it ends
+        # without a tool call, the gate acknowledges the running batch.
+        self._notify_turn_gen = None  # type: Optional[int]
         self.events = BridgeEventRouter(
             output,
             chrome,
@@ -849,6 +853,7 @@ class Session:
         self._user_cancelled_turn = False
         self.touch_access()
         query_gen = self.turn.begin_query()
+        self._turn_tool_calls = 0
         self.query_count += 1
         self._clear_error_halt()
         self._pending_resume_at = None
@@ -912,6 +917,12 @@ class Session:
         self._set_turn_phase("waiting")
         self.chrome.refresh_tab_title()
         self._query_start = time.time()
+        # Completions the wake budget held back ride along with the next
+        # real prompt, so the agent still learns what its jobs printed.
+        if not silent and not is_synthetic_turn(raw):
+            held = self.bg.take_deferred()
+            if held:
+                prompt = "%s\n\n%s" % (held, prompt)
         query_params = {"prompt": prompt}  # type: Dict[str, Any]
         if images:
             query_params["images"] = images
@@ -1093,6 +1104,7 @@ class Session:
         self._stamp_idle_clock()
         self.touch_access()
         self._fire_turn_end("success")
+        self._judge_notification_turn(_expected_gen)
         if self.bg.pending_notifications:
             try:
                 self.bg.flush()
@@ -2481,6 +2493,22 @@ class Session:
         if self.working or self.turn.awaiting_rpc:
             return
         self.query(prompt, display_prompt=display, silent=False)
+        if self.working:
+            self._notify_turn_gen = self.turn.gen
+
+    def _judge_notification_turn(self, gen):
+        # type: (Optional[int]) -> None
+        """A notification turn that ended with no tool call: the agent looked
+        at the batch and had nothing to do — stop waking it for the rest."""
+        if gen is None or self._notify_turn_gen != gen:
+            return
+        self._notify_turn_gen = None
+        if getattr(self, "_turn_tool_calls", 0):
+            return
+        try:
+            self.bg.acknowledge_running()
+        except Exception:
+            pass
 
     def _bg_surface(self):
         # type: () -> None
@@ -2542,6 +2570,8 @@ class Session:
     def _accept_tool_name(self, name):
         # type: (Optional[str]) -> None
         self.current_tool = name
+        if name:
+            self._turn_tool_calls = getattr(self, "_turn_tool_calls", 0) + 1
 
     def _elapsed(self):
         # type: () -> float

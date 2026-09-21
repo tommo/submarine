@@ -859,6 +859,10 @@ def tree_order(rows: List[dict], starred: Optional[set] = None) -> List[dict]:
                 break
             seen.add(cur)
             pp = src[cur].get("parent_agent_id")
+            # A row that names itself as its parent (a stale host-view stamp
+            # once did that) is a root, not a cycle: its children still nest.
+            if pp and pp == src[cur].get("agent_id"):
+                pp = None
             cur = by_aid.get(pp) if pp else None
         if cyclic:
             continue

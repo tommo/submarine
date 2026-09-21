@@ -183,3 +183,82 @@ class SpinnerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SpinnerInsertGuardTest(unittest.TestCase):
+    """The insert path (no glyph in the span) runs once per conversation and
+    shifts the composer before the edit, so a lost glyph cannot become a
+    column of glyphs or a draft (the after-Cmd+K sheet full of ◆)."""
+
+    def _owner(self):
+        from tests.test_single_view import RecordingView, _Region
+        from ui import keys
+        events = []
+
+        class _Composer(object):
+            _question_input_mode = False
+
+            def __init__(self):
+                self._input_start = 8
+
+            def is_input_mode(self):
+                return True
+
+            def peel_start(self):
+                return 8
+
+            def shift_anchors(self, d):
+                events.append(("shift", d))
+                self._input_start += d
+
+        class _Sheet(object):
+            def __init__(self, view):
+                self.view = view
+
+            def set_hidden_region(self, key, a, b):
+                self.view._regions[key] = [_Region(a, b)]
+
+            def is_following_tail(self, slack=120):
+                return True
+
+        class _Owner(object):
+            def __init__(self):
+                self.view = RecordingView()
+                self.view._content = "◎ hi ▶\n◎ draft"
+                self.view._regions = {keys.CONV_REGION: [_Region(0, 8)]}
+                self.sheet = _Sheet(self.view)
+                self.composer = _Composer()
+                self.modals = None
+
+            def has_turn_modal_ui(self):
+                return False
+
+            def _replace(self, start, end, text):
+                events.append(("replace", start, text))
+                v = self.view
+                v._content = v._content[:start] + text + v._content[end:]
+                return start + len(text)
+
+        return _Owner(), events
+
+    def test_one_insert_per_conversation_and_shift_before_edit(self):
+        from ui.models import Conversation
+        from ui.renderer import TurnRenderer
+
+        owner, events = self._owner()
+        r = TurnRenderer(owner)
+        r.current = Conversation(prompt="q", working=True)
+        r.current.region = (0, 8)
+        self.assertTrue(r._patch_spinner_glyph("◇"))
+        self.assertEqual([e[0] for e in events], ["shift", "replace"])
+        # Pretend the glyph vanished from the span (a clear); no second insert.
+        owner.view._content = "◎ hi ▶\n◎ draft"
+        r.current.region = (0, 8)
+        owner.composer._input_start = 8
+        self.assertFalse(r._patch_spinner_glyph("◆"))
+        self.assertEqual(owner.view._content.count("◆"), 0)
+        # A new conversation may insert again.
+        r.current = Conversation(prompt="q2", working=True)
+        r.current.region = (0, 8)
+        self.assertTrue(r._patch_spinner_glyph("◆"))
+

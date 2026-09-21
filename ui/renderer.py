@@ -799,16 +799,42 @@ class TurnRenderer:
                 best = pos
                 best_n = len(needle)
         if best < 0:
+            # One insert per conversation. If the glyph line has gone missing
+            # from the span (a clear, a composer that swallowed it), inserting
+            # again on every tick paints a column of glyphs; the next full
+            # render puts a fresh one in the right place.
+            if getattr(self, "_spinner_inserted_for", None) is self.current:
+                return False
+            self._spinner_inserted_for = self.current
             insert_at = end
             new = "  %s\n" % glyph
             if text and not text.endswith("\n"):
                 new = "\n" + new
+            grown = len(new)
+            composing = bool(
+                c is not None and c.is_input_mode()
+                and not getattr(c, "_question_input_mode", False))
             try:
-                replace(insert_at, insert_at, new)
-                grown = len(new)
-                # Mirror _try_append: grow (never shrink to the clamped
-                # insert point) and shift the composer so its _input_start
-                # does not land on the glyph line and replant it as draft.
+                # Shift the composer's anchors BEFORE the edit: on_modified
+                # runs inside the replace command and reads the draft from
+                # _input_start, so a stale anchor would capture the glyph
+                # line as the draft (and replant it after a Cmd+K).
+                if composing:
+                    try:
+                        c.shift_anchors(grown)
+                    except Exception:
+                        pass
+                try:
+                    replace(insert_at, insert_at, new)
+                except Exception:
+                    if composing:
+                        try:
+                            c.shift_anchors(-grown)
+                        except Exception:
+                            pass
+                    raise
+                # Mirror _try_append: grow, never shrink to the clamped
+                # insert point.
                 if self.current and self.current.region:
                     a, b = self.current.region
                     self.current.region = (a, max(b, insert_at) + grown)
@@ -821,12 +847,6 @@ class TurnRenderer:
                     elif self.current and self.current.region:
                         na, nb = self.current.region
                         self.owner.sheet.set_hidden_region(keys.CONV_REGION, na, nb)
-                except Exception:
-                    pass
-                try:
-                    if (c is not None and c.is_input_mode()
-                            and not getattr(c, "_question_input_mode", False)):
-                        c.shift_anchors(grown)
                 except Exception:
                     pass
                 return True
