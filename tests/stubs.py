@@ -132,6 +132,17 @@ def install_sublime():
         return sublime._submarine_dialog
 
     sublime.ok_cancel_dialog = _ok_cancel
+    sublime.DIALOG_CANCEL = 0
+    sublime.DIALOG_YES = 1
+    sublime.DIALOG_NO = 2
+    # Three-way answer: tests set `_submarine_ync` to DIALOG_YES/NO/CANCEL.
+    sublime._submarine_ync = 0
+
+    def _yes_no_cancel(message, yes="Yes", no="No"):
+        sublime._submarine_dialogs.append(message)
+        return sublime._submarine_ync
+
+    sublime.yes_no_cancel_dialog = _yes_no_cancel
     sublime.active_window = lambda: None
     sublime.windows = lambda: []
     sublime.set_timeout = lambda f, t=0: None

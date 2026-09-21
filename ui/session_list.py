@@ -1432,6 +1432,64 @@ def close_confirm(window, row: dict) -> bool:
         return True
 
 
+def descendant_rows(index: List[dict], row: dict) -> List[dict]:
+    """Rows shown under `row` in its section (parent_agent_id chain), deepest
+    first so a caller can close leaves before their parents."""
+    if not row or not index:
+        return []
+    root_aid = row.get("agent_id")
+    if not root_aid:
+        return []
+    section = row.get("section")
+    by_parent = {}  # type: Dict[str, List[dict]]
+    for r in index:
+        if r is row or r.get("section") != section:
+            continue
+        paid = r.get("parent_agent_id")
+        if paid:
+            by_parent.setdefault(paid, []).append(r)
+    out = []  # type: List[Tuple[int, dict]]
+    seen = {root_aid}
+    frontier = [(root_aid, 0)]
+    while frontier:
+        aid, depth = frontier.pop()
+        for kid in by_parent.get(aid, []):
+            kaid = kid.get("agent_id")
+            if kaid in seen:
+                continue
+            out.append((depth + 1, kid))
+            if kaid:
+                seen.add(kaid)
+                frontier.append((kaid, depth + 1))
+    out.sort(key=lambda t: t[0], reverse=True)
+    return [r for _d, r in out]
+
+
+def children_confirm(window, row: dict, kids: List[dict]) -> Optional[bool]:
+    """Closing a parent: True = close the children too, False = only this
+    row, None = cancel. Without a dialog API the children are left alone."""
+    if not kids:
+        return False
+    if sublime is None:
+        return False
+    name = one_line_title(row.get("name") or "") or row.get("session_id") or "session"
+    live = row.get("kind") == "live"
+    verb = "Close" if live else "Delete"
+    n = len(kids)
+    msg = ("%s %s?\n\n%s\n\nIt has %d child session%s. %s them too?"
+           % (verb, "this session" if live else "this session from the list",
+              name, n, "" if n == 1 else "s", verb))
+    try:
+        ans = sublime.yes_no_cancel_dialog(msg, "%s all" % verb, "Only this")
+    except Exception:
+        return False
+    if ans == getattr(sublime, "DIALOG_YES", 1):
+        return True
+    if ans == getattr(sublime, "DIALOG_NO", 2):
+        return False
+    return None
+
+
 def starred_confirm(window, row: dict) -> bool:
     """Ask before closing a starred row that is not the current session.
 
@@ -2353,6 +2411,8 @@ class SubmarineSessionListCloseCommand(sublime_plugin.TextCommand):
 
     Delete/Backspace: starred rows ask first (`starred_confirm`).
     Cmd+W (`confirm=True`): always ask, then close the row — not the list view.
+    A row with children in its section asks whether to close them as well
+    (`children_confirm`); "Only this" leaves them as roots.
     """
 
     def run(self, edit, confirm=False):
@@ -2374,8 +2434,29 @@ class SubmarineSessionListCloseCommand(sublime_plugin.TextCommand):
             return
         name = (row.get("name") or "").strip() or "session"
         list_view = self.view
-        ok = close_confirm(win, row) if confirm else starred_confirm(win, row)
-        if ok and close_row(win, row):
+        kids = descendant_rows(index, row)
+        if kids:
+            # One dialog covers the Cmd+W confirm and the children question.
+            ok = starred_confirm(win, row) if not confirm else True
+            if not ok:
+                return
+            take_kids = children_confirm(win, row, kids)
+            if take_kids is None:
+                return
+            if not take_kids:
+                kids = []
+        else:
+            ok = close_confirm(win, row) if confirm else starred_confirm(win, row)
+            if not ok:
+                return
+        closed_kids = 0
+        for kid in kids:  # deepest first
+            try:
+                if close_row(win, kid):
+                    closed_kids += 1
+            except Exception:
+                pass
+        if close_row(win, row):
             refresh_session_list(win)
 
             def _stay(_v=list_view, _win=win, _line=line):
@@ -2394,7 +2475,11 @@ class SubmarineSessionListCloseCommand(sublime_plugin.TextCommand):
 
             _stay()
             sublime.set_timeout(_stay, 0)
-            sublime.status_message("Submarine: closed {}".format(name))
+            if closed_kids:
+                sublime.status_message("Submarine: closed {} and {} child session{}".format(
+                    name, closed_kids, "" if closed_kids == 1 else "s"))
+            else:
+                sublime.status_message("Submarine: closed {}".format(name))
 
     def is_enabled(self):
         return bool(self.view.settings().get(SETTING))
