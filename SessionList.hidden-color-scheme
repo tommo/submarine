@@ -97,11 +97,11 @@
         },
         {
             "scope": "meta.title.sleeping.session-list",
-            "foreground": "#8a93a3"
+            "foreground": "#a9b1bd"
         },
         {
             "scope": "meta.title.saved.session-list",
-            "foreground": "#7d8594"
+            "foreground": "#9aa3af"
         },
         {
             "scope": "keyword.bound.session-list",
@@ -110,11 +110,11 @@
         },
         {
             "scope": "storage.type.backend.sleeping.session-list",
-            "foreground": "#3f6f7a"
+            "foreground": "#4f9fae"
         },
         {
             "scope": "storage.type.backend.saved.session-list",
-            "foreground": "#3a5f68"
+            "foreground": "#4a92a0"
         }
     ]
 }
