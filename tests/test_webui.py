@@ -49,6 +49,18 @@ class FakeClient(object):
     def answer(self, ref, **fields):
         return self._record("answer", ref=ref, **fields)
 
+    def backends(self):
+        return self._record("backends")
+
+    def create(self, **fields):
+        return self._record("create", **fields)
+
+    def rename(self, ref, name):
+        return self._record("rename", ref=ref, name=name)
+
+    def close(self, ref, remove=False):
+        return self._record("close", ref=ref, remove=remove)
+
     def health(self):
         self.calls.append(("health", {}))
         return {"ok": True, "socket": "/tmp/submarine_mcp.sock", "present": True}
@@ -230,6 +242,22 @@ class TestApiWrites(ServerCase):
     def test_unknown_post_route_is_404(self):
         status, body = self.post("/api/nope", {"ref": "x"})
         self.assertEqual(status, 404)
+
+    def test_create_rename_close_routes(self):
+        status, _ = self.get("/api/backends")
+        self.assertEqual(status, 200)
+        self.assertEqual(self.client.calls[-1], ("backends", {}))
+        status, _ = self.post("/api/create", {"backend": "grok", "project": "/p",
+                                              "name": "n", "prompt": "hi", "ref": "ignored"})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.client.calls[-1],
+                         ("create", {"backend": "grok", "project": "/p", "name": "n", "prompt": "hi"}))
+        status, _ = self.post("/api/rename", {"ref": "agent-1", "name": "renamed"})
+        self.assertEqual(self.client.calls[-1], ("rename", {"ref": "agent-1", "name": "renamed"}))
+        status, _ = self.post("/api/close", {"ref": "agent-1", "remove": True})
+        self.assertEqual(self.client.calls[-1], ("close", {"ref": "agent-1", "remove": True}))
+        status, _ = self.post("/api/rename", {"name": "x"})
+        self.assertEqual(status, 400)
 
     def test_pending_needs_a_ref(self):
         status, body = self.get("/api/pending")

@@ -113,6 +113,10 @@ without a code — the socket is missing — 503).
 | `POST /api/interrupt` | `interrupt` | `{"ref"}` |
 | `GET /api/pending` | `pending` | `ref` (required); the question / permission / plan the sheet is waiting on |
 | `POST /api/answer` | `answer` | `{"ref", "kind": question\|permission\|plan, "option"\|"options"\|"text"\|"response", "qid"\|"id"}` |
+| `GET /api/backends` | `backends` | none; backends (availability, model aliases) and windows (id, project, session count) |
+| `POST /api/create` | `create` | `{"backend", "model", "name", "window"\|"project", "prompt", "idem"}` |
+| `POST /api/rename` | `rename` | `{"ref", "name"}` |
+| `POST /api/close` | `close` | `{"ref", "remove"}` — stop a live session; `remove` drops a history row |
 
 ```bash
 curl -s localhost:8787/api/list | jq '.data.count'
@@ -145,7 +149,17 @@ not use `wait` (`chat --wait`): it polls instead, see below.
   and paged 40 at a time. The **search box** filters everything by name,
   project, backend, model, id or state, searches history without opening it,
   keeps a matching parent's children, `Enter` opens the first hit, `Esc`
-  clears.
+  clears. **History** rows group by project too (the saved row's folder),
+  most recent group first.
+- **＋ New** (next to the search box) opens a form: backend (unavailable ones
+  greyed), model alias, the Sublime window it lives in (by project), a name
+  and an optional first prompt. The session starts viewless — in the list,
+  not on the host sheet — and the console opens it; the prompt is delivered
+  once the bridge is up, like `chat` to a sleeping session.
+- **Rename / Close** sit under the selected session's header. Close stops a
+  live session the way Cmd+W does (host hands off to a peer; the history row
+  stays); on a history row the button reads **Delete** and drops the row.
+  Both confirm first.
 - **Right**: the selected session's header (state, turn phase, backend, model,
   age, view, project, window, ids) and three read modes, mirroring `view --mode`:
 

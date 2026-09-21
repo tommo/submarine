@@ -362,7 +362,6 @@ function rowHtml(entry, section) {
   bits.push(model ? be + ' · ' + model : be);
   if (row.query_count !== null && row.query_count !== undefined) bits.push('Q ' + row.query_count);
   if (row.turn_phase && row.turn_phase !== 'idle' && row.turn_phase !== 'live') bits.push(row.turn_phase);
-  if (section === 'history' && projectOf(row)) bits.push(basename(projectOf(row)));
   const waitingText = row.waiting ? ({ question: 'asks you a question', permission: 'wants permission',
                                        plan: 'plan needs approval' }[row.waiting] || row.waiting) : '';
   const tree = entry.depth ? '<span class="tree" style="--d:' + Math.min(entry.depth, 6) + '">↳</span>' : '';
@@ -409,13 +408,35 @@ function groupCurrent(rows) {
   return groups;
 }
 
+// History rows carry their project (the saved row's folder); group them the
+// way current rows group by window, most recent group first.
+function groupHistory(rows) {
+  const byKey = new Map();
+  for (const r of rows) {
+    const key = projectOf(r) || '';
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(r);
+  }
+  const groups = [...byKey.entries()].map(([key, group]) => ({
+    key: 'h:' + key,
+    title: key ? basename(key) : 'No project',
+    sub: key,
+    rows: group,
+    rank: 0,
+    recent: Math.max(...group.map((r) => Number(r.last_access || 0))),
+  }));
+  groups.sort((a, b) => b.recent - a.recent);
+  return groups;
+}
+
 function groupHtml(g, section) {
   const folded = listState.collapsed.has(g.key);
   const attn = g.rows.filter((r) => r.waiting || r.unread).length;
   const busy = g.rows.filter((r) => r.state === 'working').length;
   const badges = (attn ? '<span class="gb attn">' + attn + ' waiting</span>' : '') +
                  (busy ? '<span class="gb busy">' + busy + ' working</span>' : '');
-  return '<div class="group' + (folded ? ' folded' : '') + '" data-group="' + esc(g.key) + '" title="' + esc(g.sub) + '">' +
+  return '<div class="group' + (folded ? ' folded' : '') + (section === 'history' ? ' in-history' : '') +
+      '" data-group="' + esc(g.key) + '" title="' + esc(g.sub) + '">' +
       '<span class="chev">' + (folded ? '▸' : '▾') + '</span>' +
       '<span class="gt">' + esc(g.title) + '</span>' +
       '<span class="gs dim">' + esc(g.sub) + '</span>' +
@@ -470,7 +491,7 @@ function renderList(env) {
       '<span class="gn dim">' + (q ? histAll.length + ' of ' : '') + history.length + '</span>' +
     '</div>';
   if (open) {
-    html += treeOrder(shown).map((e) => rowHtml(e, 'history')).join('');
+    html += groupHistory(shown).map((g) => groupHtml(g, 'history')).join('');
     if (histAll.length > shown.length) {
       html += '<button type="button" class="more-rows link" id="more-history">show ' +
         Math.min(HISTORY_PAGE, histAll.length - shown.length) + ' more of ' + histAll.length + '</button>';
@@ -512,6 +533,7 @@ function renderHead(row) {
     el.textContent = state.ref
       ? 'session ' + state.ref + ' is no longer listed'
       : 'Pick a session on the left, or send a prompt to wake one.';
+    $('head-actions').hidden = true;
     return;
   }
   const view = row.view || {};
@@ -530,6 +552,11 @@ function renderHead(row) {
   ].filter(Boolean).join('');
   el.className = 'head';
   el.innerHTML = '<h2>' + esc(row.name || '(unnamed)') + '</h2><div class="meta">' + meta + '</div>';
+  $('head-actions').hidden = false;
+  $('close').textContent = row.kind === 'live' ? 'Close' : 'Delete';
+  $('close').title = row.kind === 'live'
+    ? 'Stop this session (its saved row stays in history)'
+    : 'Drop this session from history';
 }
 
 // The Sublime sheet, rebuilt from the transcript for a session that has no
@@ -1024,6 +1051,96 @@ async function interrupt() {
   await tick();
 }
 
+// ── manage: rename / close / new session ────────────────────────────────────
+
+async function renameSession() {
+  const row = selectedRow();
+  if (!row) return;
+  const name = window.prompt('Session name', row.name || '');
+  if (name === null || !name.trim()) return;
+  clearError();
+  const env = await api('/api/rename', { method: 'POST', body: JSON.stringify({ ref: state.ref, name: name.trim() }) });
+  showError(env);
+  if (env.ok === true) { note('renamed'); await tick(); }
+}
+
+async function closeSession() {
+  const row = selectedRow();
+  if (!row) return;
+  const live = row.kind === 'live';
+  const ok = window.confirm(live
+    ? 'Close "' + (row.name || state.ref) + '"?\nThe session stops; its saved row stays in history.'
+    : 'Delete "' + (row.name || state.ref) + '" from history?');
+  if (!ok) return;
+  clearError();
+  const env = await api('/api/close', { method: 'POST', body: JSON.stringify({ ref: state.ref, remove: !live }) });
+  showError(env);
+  if (env.ok !== true) return;
+  note(live ? 'closed' : 'removed from history');
+  if (!live) { state.ref = null; history.replaceState(null, '', location.pathname + location.search); renderHead(null); unmountSheet(); $('pane').innerHTML = ''; setSource(''); showList(); }
+  await tick();
+}
+
+let backendsCache = null;
+
+async function openCreate() {
+  const form = $('create');
+  if (!form.hidden) { form.hidden = true; return; }
+  clearError();
+  if (!backendsCache) {
+    const env = await api('/api/backends');
+    if (env.ok !== true) { showError(env); return; }
+    backendsCache = env.data || {};
+  }
+  const b = backendsCache;
+  const be = $('c-backend');
+  be.innerHTML = (b.backends || []).map((x) =>
+    '<option value="' + esc(x.name) + '"' + (x.name === b.default ? ' selected' : '') + (x.available ? '' : ' disabled') + '>' +
+    esc(x.label || x.name) + (x.available ? '' : ' (unavailable)') + '</option>').join('');
+  const win = $('c-window');
+  const cur = selectedRow();
+  const curWin = cur ? windowId(cur) : '';
+  win.innerHTML = (b.windows || []).map((w) =>
+    '<option value="' + esc(w.id) + '"' + (String(w.id) === String(curWin) ? ' selected' : '') + '>' +
+    esc((w.project ? basename(w.project) : 'Window ' + w.id) + ' — ' + (w.project || 'no folder') + ' (' + w.sessions + ')') + '</option>').join('');
+  syncCreateModels();
+  $('c-note').textContent = '';
+  form.hidden = false;
+  $('c-name').focus();
+}
+
+function syncCreateModels() {
+  const b = backendsCache || {};
+  const spec = (b.backends || []).find((x) => x.name === $('c-backend').value) || {};
+  const sel = $('c-model');
+  sel.innerHTML = '<option value="">default</option>' + (spec.models || []).map((m) =>
+    '<option value="' + esc(m[0]) + '">' + esc(m[0]) + (m[1] && m[1] !== m[0] ? ' · ' + esc(m[1]) : '') + '</option>').join('');
+}
+
+async function submitCreate() {
+  const body = {
+    backend: $('c-backend').value,
+    model: $('c-model').value || undefined,
+    window: $('c-window').value,
+    name: $('c-name').value.trim() || undefined,
+    prompt: $('c-prompt').value.trim() || undefined,
+    idem: idemKey(),
+  };
+  $('c-go').disabled = true;
+  $('c-note').textContent = 'starting…';
+  const env = await api('/api/create', { method: 'POST', body: JSON.stringify(body) });
+  $('c-go').disabled = false;
+  showError(env);
+  if (env.ok !== true) { $('c-note').textContent = 'not started'; return; }
+  const d = env.data || {};
+  $('create').hidden = true;
+  $('c-name').value = ''; $('c-prompt').value = '';
+  note(d.action ? 'started; prompt ' + actionText(d) : 'started');
+  await tick();
+  const ref = (d.session || {}).agent_id || (d.session || {}).session_id;
+  if (ref) openSession(ref);
+}
+
 // ── wiring ──────────────────────────────────────────────────────────────────
 
 // Publish the visual viewport height as --app-h; the phone stylesheet uses it
@@ -1118,6 +1235,12 @@ function wire() {
 
   $('turns').addEventListener('change', () => { clearError(); refreshPane(); });
   $('reload').addEventListener('click', () => { clearError(); refreshPane(); schedule(0); });
+  $('rename').addEventListener('click', renameSession);
+  $('close').addEventListener('click', closeSession);
+  $('new').addEventListener('click', openCreate);
+  $('c-cancel').addEventListener('click', () => { $('create').hidden = true; });
+  $('c-backend').addEventListener('change', syncCreateModels);
+  $('create').addEventListener('submit', (e) => { e.preventDefault(); submitCreate(); });
   let searchTimer = null;
   $('search').addEventListener('input', () => {
     clearTimeout(searchTimer);

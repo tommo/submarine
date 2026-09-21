@@ -85,6 +85,18 @@ class SessionClient(object):
     def pending(self, ref: str) -> Dict[str, Any]:
         return self.call("pending", ref=ref)
 
+    def backends(self) -> Dict[str, Any]:
+        return self.call("backends")
+
+    def create(self, **fields: Any) -> Dict[str, Any]:
+        return self.call("create", timeout=CHAT_TIMEOUT, **fields)
+
+    def rename(self, ref: str, name: str) -> Dict[str, Any]:
+        return self.call("rename", ref=ref, name=name)
+
+    def close(self, ref: str, remove: bool = False) -> Dict[str, Any]:
+        return self.call("close", ref=ref, remove=bool(remove))
+
     def answer(self, ref: str, **fields: Any) -> Dict[str, Any]:
         return self.call("answer", ref=ref, **fields)
 

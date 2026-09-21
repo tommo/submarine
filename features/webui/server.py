@@ -10,6 +10,10 @@ One action per endpoint, named after the CLI's subcommands, so the API really is
   POST /api/interrupt              {"ref": …}                  (`interrupt`)
   GET  /api/pending?ref=…          the question / permission / plan the sheet waits on  (`pending`)
   POST /api/answer                 {"ref", "kind", "option"|"options"|"text"|"response", "qid"|"id"}  (`answer`)
+  GET  /api/backends               backends + windows a new session can use  (`backends`)
+  POST /api/create                 {"backend", "model", "name", "window"|"project", "prompt"}  (`create`)
+  POST /api/rename                 {"ref", "name"}  (`rename`)
+  POST /api/close                  {"ref", "remove"}  (`close`)
 
 Plus `GET /` and `/static/*` for the console itself. The plugin's envelope is
 returned verbatim, with `http` added, and `data.code` decides the status code —
@@ -51,6 +55,9 @@ _STATUS = {
 }
 TRANSPORT_STATUS = 503
 MAX_BODY_BYTES = 1024 * 1024
+
+_POST_ROUTES = ("/api/chat", "/api/interrupt", "/api/answer", "/api/create",
+                "/api/rename", "/api/close")
 
 _CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -171,7 +178,7 @@ class WebUIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         route, query = self._route()
-        if route in ("/api/chat", "/api/interrupt", "/api/answer"):
+        if route in _POST_ROUTES:
             return self._json(405, {"ok": False, "http": 405,
                                     "error": "use POST for %s" % route})
         if not route.startswith("/api/"):
@@ -187,6 +194,8 @@ class WebUIHandler(BaseHTTPRequestHandler):
             return self._reply(self._client.list(
                 scope=_first(query, "scope"), parent=_first(query, "parent"),
                 window=_first(query, "window")))
+        if route == "/api/backends":
+            return self._reply(self._client.backends())
         if route == "/api/pending":
             ref = _first(query, "ref")
             if not ref:
@@ -215,7 +224,7 @@ class WebUIHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         route, query = self._route()
-        if route not in ("/api/chat", "/api/interrupt", "/api/answer"):
+        if route not in _POST_ROUTES:
             return self._refuse(404, {"ok": False, "error": "no route %s" % route})
         if not self._token_ok(query):
             return self._refuse(401, {"ok": False,
@@ -223,10 +232,22 @@ class WebUIHandler(BaseHTTPRequestHandler):
         body = self._body()
         if body is None:
             return
+        if route == "/api/create":
+            fields = {}  # type: Dict[str, Any]
+            for key in ("backend", "model", "name", "window", "project", "prompt", "idem"):
+                if body.get(key) not in (None, ""):
+                    fields[key] = body[key]
+            if isinstance(fields.get("prompt"), str):
+                fields["prompt"] = fields["prompt"][:MAX_BODY_BYTES]
+            return self._reply(self._client.create(**fields))
         ref = str(body.get("ref") or "").strip()
         if not ref:
             return self._json(400, {"ok": False, "http": 400,
                                     "error": "ref is required"})
+        if route == "/api/rename":
+            return self._reply(self._client.rename(ref, str(body.get("name") or "")[:200]))
+        if route == "/api/close":
+            return self._reply(self._client.close(ref, remove=bool(body.get("remove"))))
         if route == "/api/interrupt":
             return self._reply(self._client.interrupt(ref))
         if route == "/api/answer":

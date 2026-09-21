@@ -32,7 +32,8 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
-ACTIONS = frozenset(("list", "view", "chat", "interrupt", "pending", "answer"))
+ACTIONS = frozenset(("list", "view", "chat", "interrupt", "pending", "answer",
+                     "backends", "create", "rename", "close"))
 PERMISSION_RESPONSES = frozenset(("allow", "deny", "allow_session", "allow_all"))
 PLAN_RESPONSES = frozenset(("approve", "reject"))
 #: A permission's tool_input on the wire: a Write's content or a long Bash
@@ -112,6 +113,14 @@ def dispatch(request: dict) -> dict:
             body, target = action_pending(request or {})
         elif action == "answer":
             body, target = action_answer(request or {})
+        elif action == "backends":
+            body, target = action_backends(request or {}), None
+        elif action == "create":
+            return action_create(request or {}, caller)   # may carry the chat hand-off
+        elif action == "rename":
+            body, target = action_rename(request or {})
+        elif action == "close":
+            body, target = action_close(request or {})
         else:
             body, target = action_interrupt(request or {})
     except ControlError as e:
@@ -869,3 +878,236 @@ def action_answer(params: dict) -> (dict, dict):
     body["answered"] = kind
     body["session"] = ref
     return body, ref
+
+
+# ─── backends / create / rename / close ─────────────────────────────────────
+
+
+def _windows() -> list:
+    try:
+        import sublime
+        return list(sublime.windows() or [])
+    except Exception:
+        return []
+
+
+def _window_project(window: Any) -> str:
+    try:
+        folders = window.folders() if window else None
+    except Exception:
+        folders = None
+    return (folders[0] or "").rstrip("/") if folders else ""
+
+
+def _pick_window(params: dict) -> Any:
+    """The Sublime window a new session lives in: by id, by project folder,
+    else the active one. A session needs a window (its sheet, its project)."""
+    windows = _windows()
+    if not windows:
+        raise ControlError("no_session", "Sublime has no window to create a session in")
+    wid = params.get("window")
+    if wid not in (None, ""):
+        for w in windows:
+            try:
+                if str(w.id()) == str(wid):
+                    return w
+            except Exception:
+                continue
+        raise ControlError("not_found", "no window %s" % wid,
+                           {"windows": [_window_row(w) for w in windows]})
+    project = str(params.get("project") or "").rstrip("/")
+    if project:
+        for w in windows:
+            if _window_project(w) == project:
+                return w
+        raise ControlError("not_found", "no window has project %s" % project,
+                           {"windows": [_window_row(w) for w in windows]})
+    try:
+        import sublime
+        active = sublime.active_window()
+        if active is not None:
+            return active
+    except Exception:
+        pass
+    return windows[0]
+
+
+def _window_row(window: Any) -> dict:
+    try:
+        wid = window.id()
+    except Exception:
+        wid = None
+    count = 0
+    try:
+        from core.registry import sessions_for_window
+        count = len([s for s in sessions_for_window(window)
+                     if not getattr(s, "quick_mode", False)])
+    except Exception:
+        count = 0
+    return {"id": wid, "project": _window_project(window) or None, "sessions": count}
+
+
+def action_backends(params: dict) -> dict:
+    """What a new session can be made of: backends (with availability and
+    model aliases) and the windows (projects) it can be created in."""
+    _ = params
+    out = []
+    default = "claude"
+    try:
+        import sublime
+        from plat.constants import SETTINGS_FILE
+        st = sublime.load_settings(SETTINGS_FILE)
+        default = str(st.get("default_backend", "claude") or "claude")
+        settings = {k: st.get(k) for k in ("providers", "default_models", "default_model")}
+    except Exception:
+        settings = None
+    try:
+        from backend.specs import all_backends, is_available
+        for name, spec in all_backends(settings).items():
+            try:
+                avail = bool(is_available(name, settings))
+            except Exception:
+                avail = True
+            out.append({
+                "name": name,
+                "label": spec.label or name,
+                "available": avail,
+                "pinned": bool(getattr(spec, "pinned", True)),
+                "models": [list(m) for m in (spec.default_models or [])],
+            })
+    except Exception as e:
+        raise ControlError("internal", "cannot list backends: %s" % e)
+    return {"backends": out, "default": default,
+            "windows": [_window_row(w) for w in _windows()]}
+
+
+def action_create(params: dict, caller: Any = None) -> dict:
+    """Start a new session in a window. `backend`, `model`, `name`, `window`
+    or `project`, and an optional first `prompt` (delivered through `chat`
+    once the bridge is up). The sheet is not shown: the session lives in the
+    list until someone opens it."""
+    backend = str(params.get("backend") or "").strip().lower() or None
+    model = str(params.get("model") or "").strip() or None
+    name = str(params.get("name") or "").strip()
+    prompt = str(params.get("prompt") or "").strip()
+    window = _pick_window(params)
+    if backend:
+        try:
+            from backend.specs import all_backends
+            if backend not in all_backends():
+                raise ControlError("bad_request", "unknown backend %r" % backend,
+                                   {"backends": sorted(all_backends())})
+        except ControlError:
+            raise
+        except Exception:
+            pass
+    try:
+        from ui.session_api import create_session
+        session = create_session(window, backend=backend, model=model,
+                                 focus=False, show=False, start=True)
+    except Exception as e:
+        raise ControlError("internal", "create failed: %s" % e)
+    if session is None:
+        raise ControlError("internal", "create failed")
+    if name:
+        try:
+            session._set_name(name)
+        except Exception:
+            session.name = name
+    ref = _row_ref(session)
+    _audit("create", caller, ref, True, backend or "")
+    data = {"created": True, "session": ref, "backend": getattr(session, "backend", None),
+            "model": getattr(session, "model", None), "window": _window_row(window)}
+    if not prompt:
+        return _envelope(True, data, None, ref)
+    env = action_chat({"ref": {"agent_id": ref["agent_id"]}, "prompt": prompt,
+                       "queue": "queue", "idem": params.get("idem")}, caller)
+    if isinstance(env, dict):
+        env.setdefault("data", {})
+        if isinstance(env["data"], dict):
+            env["data"].update({"created": True, "window": data["window"]})
+    return env
+
+
+def action_rename(params: dict) -> (dict, dict):
+    name = str(params.get("name") or "").strip()
+    if not name:
+        raise ControlError("bad_request", "name is required")
+    if len(name) > 200:
+        name = name[:200]
+    target = _resolve_any(params.get("ref"))
+    ref = {"agent_id": target["agent_id"], "session_id": target["session_id"],
+           "name": name, "backend": target["backend"], "kind": target["kind"]}
+    session = target["session"]
+    if session is not None:
+        try:
+            session._set_name(name)
+        except Exception:
+            session.name = name
+            try:
+                session._save_session()
+            except Exception:
+                pass
+    else:
+        from core.records import rename_saved_session
+        if not rename_saved_session(target["session_id"], name):
+            raise ControlError("not_found", "saved session %s not found" % target["session_id"])
+    try:
+        from ui.session_list import schedule_session_list_refresh
+        schedule_session_list_refresh()
+    except Exception:
+        pass
+    return {"renamed": True, "from": target["name"], "name": name, "session": ref}, ref
+
+
+def action_close(params: dict) -> (dict, dict):
+    """Live session: stop it (the host sheet hands off to a peer in single
+    mode, as Cmd+W does). Saved row: drop it from history when `remove` is
+    set, else refuse — history rows are not running anything."""
+    target = _resolve_any(params.get("ref"))
+    ref = {"agent_id": target["agent_id"], "session_id": target["session_id"],
+           "name": target["name"], "backend": target["backend"], "kind": target["kind"]}
+    remove = bool(params.get("remove"))
+    session = target["session"]
+    if session is None:
+        if not remove:
+            raise ControlError("bad_request", "%s is not running; pass remove to drop "
+                               "it from history" % (ref["name"] or ref["session_id"]))
+        from core.records import remove_saved_session
+        dropped = bool(remove_saved_session(target["session_id"]))
+        try:
+            from ui.session_list import schedule_session_list_refresh
+            schedule_session_list_refresh()
+        except Exception:
+            pass
+        return {"closed": False, "removed": dropped, "session": ref}, ref
+    window = getattr(session, "window", None)
+    if window is None:
+        try:
+            view = session.output.view if session.output else None
+            window = view.window() if view is not None else None
+        except Exception:
+            window = None
+    row = {"kind": "live", "session_id": target["session_id"], "agent_id": target["agent_id"],
+           "name": target["name"], "section": "CURRENT"}
+    try:
+        from ui.session_list import close_row
+        ok = bool(close_row(window, row))
+    except Exception:
+        ok = False
+    if not ok:
+        try:
+            session.stop()
+            ok = True
+        except Exception as e:
+            raise ControlError("internal", "close failed: %s" % e)
+    removed = False
+    if remove and target["session_id"]:
+        from core.records import remove_saved_session
+        removed = bool(remove_saved_session(target["session_id"]))
+    try:
+        from ui.session_list import schedule_session_list_refresh
+        schedule_session_list_refresh()
+    except Exception:
+        pass
+    return {"closed": True, "removed": removed, "session": ref}, ref

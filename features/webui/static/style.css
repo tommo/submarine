@@ -124,6 +124,27 @@ main {
 }
 .list-head input[type="search"]:focus { outline: none; border-color: var(--dim); }
 .counts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 11px; }
+.list-head-row { display: flex; gap: 6px; align-items: center; }
+.list-head-row input { flex: 1 1 auto; min-width: 0; }
+.list-head-row .btn { flex: 0 0 auto; white-space: nowrap; }
+
+/* new-session form under the list head */
+.create { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.create label { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--dim); flex: 1 1 0; min-width: 0; }
+.create select, .create input[type="text"], .create textarea {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px; color: var(--fg);
+  font: inherit; font-size: 12px; padding: 5px 6px; width: 100%; min-width: 0;
+}
+.create textarea { font-family: ui-monospace, Menlo, monospace; resize: vertical; }
+.create-row { display: flex; gap: 6px; align-items: center; }
+.create-row .btn { margin-left: auto; }
+.create-row .btn + .btn { margin-left: 0; }
+.create-row #c-note { flex: 1 1 auto; }
+
+.head-actions { display: flex; gap: 6px; padding: 0 12px 8px; border-bottom: 1px solid var(--line); }
+.head-actions .btn.danger { background: #3a2226; border-color: #6b3b3f; }
+.group.in-history { text-transform: none; letter-spacing: 0; color: var(--fg); border-left-color: #4a5568; background: #15181e; }
+.group.in-history .gt { font-size: 12px; font-weight: 600; }
 
 .rows { overflow-y: auto; flex: 1; }
 .empty-note { padding: 10px; margin: 0; font-size: 12px; }
@@ -459,7 +480,11 @@ main {
 
   /* The header keeps its chips on one swipeable line: ten wrapped chips would
      eat the transcript's height. */
-  .headwrap { flex-direction: row; align-items: stretch; border-bottom: 1px solid var(--line); }
+  .headwrap { flex-direction: row; align-items: stretch; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+  .head-actions { flex: 1 0 100%; padding: 4px 10px 6px; border-bottom: 0; }
+  .head-actions .btn { min-height: 36px; }
+  .create select, .create input[type="text"], .create textarea { font-size: 16px; }
+  body.composing .head-actions { display: none; }
   .head { flex: 1 1 auto; min-width: 0; border-bottom: 0; padding: 8px 12px; }
   .head h2 { font-size: 15px; }
   .head .meta { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; }

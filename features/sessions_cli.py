@@ -414,6 +414,74 @@ def cmd_answer(args) -> int:
     return 0
 
 
+def cmd_backends(args) -> int:
+    env = call("backends", timeout=args.timeout, path=args.socket)
+    if not env.get("ok"):
+        return _fail(env)
+    body = env.get("data") or {}
+    if args.json:
+        print(json.dumps(body, indent=2))
+        return 0
+    for b in body.get("backends") or []:
+        models = ", ".join(m[0] for m in (b.get("models") or []) if m)
+        print("%-10s %-22s %s%s" % (b.get("name"), b.get("label") or "",
+                                    "" if b.get("available", True) else "(unavailable) ",
+                                    models))
+    print()
+    for w in body.get("windows") or []:
+        print("window %-4s %s  (%s session%s)" % (w.get("id"), w.get("project") or "no folder",
+                                                  w.get("sessions"), "" if w.get("sessions") == 1 else "s"))
+    print("default: %s" % body.get("default"))
+    return 0
+
+
+def cmd_create(args) -> int:
+    fields = {"backend": args.backend, "model": args.model, "name": args.name,
+              "prompt": args.prompt, "idem": args.idem}
+    if args.window is not None:
+        fields["window"] = args.window
+    if args.project:
+        fields["project"] = args.project
+    env = call("create", timeout=max(args.timeout, WAIT_TIMEOUT if args.prompt else args.timeout),
+               path=args.socket, **{k: v for k, v in fields.items() if v is not None})
+    if not env.get("ok"):
+        return _fail(env)
+    body = env.get("data") or {}
+    if args.json:
+        print(json.dumps(body, indent=2))
+        return 0
+    ref = body.get("session") or {}
+    print("created %s  %s  backend=%s%s" % (ref.get("name") or "(unnamed)", ref.get("agent_id"),
+                                            body.get("backend"),
+                                            ("  prompt: " + render_chat(body)) if body.get("action") else ""))
+    return 0
+
+
+def cmd_rename(args) -> int:
+    env = call("rename", timeout=args.timeout, path=args.socket, ref=args.ref, name=args.name)
+    if not env.get("ok"):
+        return _fail(env)
+    body = env.get("data") or {}
+    print(json.dumps(body, indent=2) if args.json else "renamed: %s → %s" % (body.get("from"), body.get("name")))
+    return 0
+
+
+def cmd_close(args) -> int:
+    env = call("close", timeout=args.timeout, path=args.socket, ref=args.ref, remove=bool(args.remove))
+    if not env.get("ok"):
+        return _fail(env)
+    body = env.get("data") or {}
+    if args.json:
+        print(json.dumps(body, indent=2))
+    else:
+        ref = body.get("session") or {}
+        what = "closed" if body.get("closed") else "not running"
+        if body.get("removed"):
+            what += ", removed from history"
+        print("%s: %s" % (ref.get("name") or ref.get("agent_id"), what))
+    return 0
+
+
 MANUAL_NAME = "session-control.md"
 
 
@@ -509,6 +577,29 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--text", default=None, help="free-text answer")
     sp.add_argument("--id", default=None, help="qid / permission id / plan id guard")
     sp.set_defaults(func=cmd_answer)
+
+    sp = common(sub.add_parser("backends", help="backends and windows a new session can use"))
+    sp.set_defaults(func=cmd_backends)
+
+    sp = common(sub.add_parser("create", help="start a new session in a Sublime window"))
+    sp.add_argument("--backend", default=None, help="claude | grok | kimi | codex | a provider name")
+    sp.add_argument("--model", default=None, help="model alias for that backend")
+    sp.add_argument("--name", default=None)
+    sp.add_argument("--window", default=None, help="window id (see backends)")
+    sp.add_argument("--project", default=None, help="window by project folder")
+    sp.add_argument("--prompt", default=None, help="first prompt, delivered once the bridge is up")
+    sp.add_argument("--idem", default=None, help="replay key for the prompt")
+    sp.set_defaults(func=cmd_create)
+
+    sp = common(sub.add_parser("rename", help="rename a session (live or in history)"))
+    sp.add_argument("ref")
+    sp.add_argument("name")
+    sp.set_defaults(func=cmd_rename)
+
+    sp = common(sub.add_parser("close", help="stop a live session; --remove drops a history row"))
+    sp.add_argument("ref")
+    sp.add_argument("--remove", action="store_true", help="also drop the saved row")
+    sp.set_defaults(func=cmd_close)
 
     sub.add_parser("help", help="short usage").set_defaults(func=cmd_help)
     return p

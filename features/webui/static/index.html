@@ -48,9 +48,28 @@ window.SubmarineEditor = { ready: new Promise((r) => { window.__submarineEditorR
 <main>
   <aside class="list">
     <div class="list-head">
-      <input id="search" type="search" placeholder="Search sessions…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <div class="list-head-row">
+        <input id="search" type="search" placeholder="Search sessions…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+        <button id="new" class="btn primary" type="button" title="Start a new session in one of Sublime's windows">＋ New</button>
+      </div>
       <div id="counts" class="counts dim">…</div>
     </div>
+    <!-- New session: backend, model, window (project), name, first prompt.
+         POST /api/create; the session starts in the list, not on the host. -->
+    <form id="create" class="create" hidden>
+      <div class="create-row">
+        <label>backend <select id="c-backend"></select></label>
+        <label>model <select id="c-model"><option value="">default</option></select></label>
+      </div>
+      <label>window <select id="c-window"></select></label>
+      <input id="c-name" type="text" placeholder="Name (optional)" autocomplete="off">
+      <textarea id="c-prompt" rows="2" placeholder="First prompt (optional) — sent once the bridge is up"></textarea>
+      <div class="create-row">
+        <span id="c-note" class="dim small"></span>
+        <button type="button" id="c-cancel" class="btn">Cancel</button>
+        <button type="submit" id="c-go" class="btn primary">Start</button>
+      </div>
+    </form>
     <div id="sessions" class="rows"></div>
   </aside>
 
@@ -58,6 +77,10 @@ window.SubmarineEditor = { ready: new Promise((r) => { window.__submarineEditorR
     <div class="headwrap">
       <button id="back" class="btn back" type="button" aria-label="Back to the session list">← Sessions</button>
       <div id="head" class="head empty">Pick a session on the left, or send a prompt to wake one.</div>
+      <div id="head-actions" class="head-actions" hidden>
+        <button id="rename" class="btn tiny" type="button" title="Rename this session">Rename</button>
+        <button id="close" class="btn tiny danger" type="button" title="Stop this session (Cmd+W in Sublime)">Close</button>
+      </div>
     </div>
 
     <div class="toolbar">

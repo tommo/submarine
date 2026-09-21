@@ -14,6 +14,10 @@ submarine_sessions pending REF
 submarine_sessions answer REF question 2 | --options 1,3 | --text "…"
 submarine_sessions answer REF permission allow|deny|allow_session|allow_all
 submarine_sessions answer REF plan approve|reject
+submarine_sessions backends
+submarine_sessions create [--backend B] [--model M] [--name N] [--window ID | --project DIR] [--prompt "…"]
+submarine_sessions rename REF "new name"
+submarine_sessions close REF [--remove]
 submarine_sessions --manual
 ```
 
@@ -211,6 +215,26 @@ pending one. `--id` guards against answering a prompt that has since been
 replaced: it must match the question's `qid` / the permission or plan `id`
 from `pending`, or the call is refused with `stale`. `not_found` means nothing
 of that kind is pending.
+
+### `backends`, `create`, `rename`, `close`
+
+```
+submarine_sessions backends
+submarine_sessions create --backend grok --project /path/to/project --name scout --prompt "map the module"
+submarine_sessions rename GUEST "dock tabs"
+submarine_sessions close GUEST            # stop it; its history row stays
+submarine_sessions close old-run --remove # a history row: drop it
+```
+
+`backends` lists what a new session can be made of — each backend with its
+availability and model aliases — and the Sublime windows (id, project folder,
+session count) it can live in. `create` starts a session in that window (by
+`--window` id, `--project` folder, else the active window), viewless: it
+appears in the list and is opened from there; `--prompt` is handed to `chat`
+once the bridge is up, so the reply behaves like `chat` on a sleeping session.
+`rename` works on a live session or a history row. `close` stops a live
+session the way Cmd+W does (the host sheet hands off to a peer in single
+mode); on a history row it refuses unless `--remove`, which drops the row.
 
 ### Global options
 
