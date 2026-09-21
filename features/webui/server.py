@@ -67,6 +67,8 @@ _CONTENT_TYPES = {
     ".css": "text/css; charset=utf-8",
     ".svg": "image/svg+xml",
     ".ico": "image/x-icon",
+    ".png": "image/png",
+    ".webmanifest": "application/manifest+json",
 }
 
 #: Query field → coercion for the two read endpoints.

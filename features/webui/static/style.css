@@ -65,7 +65,8 @@ body {
 .small { font-size: 12px; }
 
 .title-row { align-items: center; gap: 8px; }
-.title-row h1 { font-size: 14px; font-weight: 700; margin: 0; flex: 0 0 auto; }
+.title-row h1 { display: flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 700; letter-spacing: 0.01em; margin: 0; flex: 0 0 auto; }
+.title-row .logo { width: 20px; height: 20px; color: var(--accent); flex: 0 0 auto; }
 .title-row .badge { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .badge {
@@ -611,6 +612,7 @@ body.working .head-actions .interrupt { display: inline-flex; align-items: cente
   .tab { min-height: 34px; padding: 2px 10px; font-size: 13px; }
   .group .gadd { width: 32px; height: 32px; font-size: 18px; }
   .title-row h1 { font-size: 16px; }
+  .title-row .logo { width: 22px; height: 22px; }
   .toolbar #turns-wrap { display: none !important; }   /* the caption's +8 does this */
   .toolbar #tail { padding: 4px 8px; }
   .caption { display: none; }

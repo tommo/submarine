@@ -1,0 +1,13 @@
+{
+  "name": "Submarine",
+  "short_name": "Submarine",
+  "description": "Sessions in a running Sublime Text: sheet, questions, edits, compose.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#16181d",
+  "theme_color": "#1d2027",
+  "icons": [
+    { "src": "/static/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/static/icon-180.png", "sizes": "180x180", "type": "image/png", "purpose": "any" }
+  ]
+}

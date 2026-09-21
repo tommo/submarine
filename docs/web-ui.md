@@ -312,6 +312,9 @@ features/webui/
 ├── __main__.py      `python3 -m features.webui`
 └── static/
     ├── index.html   the console + the CodeMirror import map
+    ├── logo.svg, favicon.svg, icon-180.png, manifest.webmanifest
+    │                the mark (also inline in the list head), tab icon,
+    │                home-screen icon and web-app manifest
     ├── app.js       list, polling, actions, which text the pane shows
     ├── highlight.js the sheet tokenizer (port of SubmarineOutput.sublime-syntax)
     ├── editor.js    CodeMirror sheet + composer (ES module; optional at runtime)

@@ -193,6 +193,19 @@ function setHash(ref) {
 
 function showList() {
   setPane('list');
+  setTitle();
+}
+
+// The tab reads like the session: "POSTFX · Submarine"; a working or
+// waiting one gets its mark in front, so a background tab still tells.
+function setTitle() {
+  const row = state.ref ? selectedRow() : null;
+  if (!row || (NARROW.matches && document.body.getAttribute('data-pane') === 'list')) {
+    document.title = 'Submarine';
+    return;
+  }
+  const mark = row.waiting ? '? ' : (row.state === 'working' ? '● ' : '');
+  document.title = mark + (row.name || '(unnamed)') + ' · Submarine';
 }
 
 // A #s=… deep link needs a list entry behind it, or the phone's back gesture
@@ -224,6 +237,7 @@ function openSession(ref, opts) {
     el.classList.toggle('on', el.getAttribute('data-ref') === (row ? rowRef(row) : ref));
   }
   renderHead(selectedRow());
+  setTitle();
   unmountSheet();
   if (state.file) { unmountFile(); state.file = null; $('filebar').hidden = true; if (state.mode === 'file') state.mode = 'edits'; }
   state.editsKey = null;
@@ -948,6 +962,7 @@ async function tick() {
   if (row && (row.state !== (state.lastState || null))) {
     state.lastState = row.state;
     renderHead(row);
+    setTitle();
   }
   const busy = working || state.pending;
   state.working = working;
