@@ -10,6 +10,8 @@ import glob
 import json
 import os
 import re
+
+from core.rewind import is_synthetic_turn
 from typing import Dict, List, Optional
 
 
@@ -24,13 +26,51 @@ _NUDGE_PROMPTS = frozenset({
 })
 
 
+_TASK_SUMMARY = re.compile(r"<summary>\s*(.*?)\s*</summary>", re.S)
+_TASK_BLOCK = re.compile(r"<task-notification>", re.I)
+
+
+def synthetic_label(text: str) -> str:
+    """The sheet's ⚙ line for a host-injected prompt (a task notification, a
+    wake, a channel message): what the live turn showed instead of the raw
+    tag block, so a resumed transcript reads the same way."""
+    t = (text or "").strip()
+    n = len(_TASK_BLOCK.findall(t))
+    if n:
+        summaries = [" ".join(m.split()) for m in _TASK_SUMMARY.findall(t)]
+        label = "⚙ %d task notification%s" % (n, "" if n == 1 else "s")
+        if summaries:
+            tail = "; ".join(summaries)
+            if len(tail) > 160:
+                tail = tail[:159] + "…"
+            label += ": " + tail
+        return label
+    first = t.split("\n", 1)[0].strip()
+    if first.startswith("["):
+        return first[:120]                       # "[Request interrupted by user]"
+    if first.startswith("<") and ">" in first:
+        tag = first[1:first.index(">")].split()[0].lstrip("/")
+        body = t.split("\n", 1)[1].strip() if "\n" in t else first[first.index(">") + 1:]
+        body = re.sub(r"</?[a-z_-]+[^>]*>", "", body)          # strip the tags
+        body = " ".join(body.split())
+        label = "⚙ %s" % tag
+        if body:
+            label += ": " + (body[:119] + "…" if len(body) > 120 else body)
+        return label
+    return "⚙ " + first[:120]
+
+
 def display_prompt(raw: str) -> str:
+    """What a resumed turn's ◎ line shows: the user's text, or the ⚙ label
+    the live sheet used for a host-injected prompt — never the raw tag block."""
     text = (raw or "").strip()
     if not text:
         return ""
     m = _USER_QUERY.search(text)
     if m:
         return m.group(1).strip()
+    if is_synthetic_turn(text):
+        return synthetic_label(text)
     return text
 
 

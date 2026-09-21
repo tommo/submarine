@@ -466,8 +466,11 @@ def action_list(params: dict) -> dict:
 
 
 def _turn_summary(turn: dict, max_chars: int) -> dict:
+    from features.resume import display_prompt
     reply = str(turn.get("reply") or "")
-    prompt = str(turn.get("prompt") or "")
+    # A host-injected prompt (task notification, wake) reads as the ⚙ label
+    # the sheet showed, not the raw tag block.
+    prompt = display_prompt(str(turn.get("prompt") or ""))
     cut = len(reply) > max_chars
     tools = turn.get("tools") or []
     return {

@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -791,3 +792,47 @@ class TestResumeTailScroll(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSyntheticPromptLabel(unittest.TestCase):
+    """A resumed transcript shows host-injected prompts the way the live
+    sheet did (`⚙ …`), never the raw <task-notification> block."""
+
+    def test_task_notification_becomes_the_sheet_label(self):
+        from features.resume import display_prompt
+        raw = ("<task-notification>\n<task-id>x1</task-id>\n<status>completed</status>\n"
+               "<summary>Background command \"grep flexbox\" completed (exit code 0)</summary>\n"
+               "</task-notification>")
+        self.assertEqual(display_prompt(raw),
+                         "⚙ 1 task notification: Background command \"grep flexbox\" completed (exit code 0)")
+        two = raw + "\n<task-notification><summary>second</summary></task-notification>"
+        self.assertTrue(display_prompt(two).startswith("⚙ 2 task notifications: "))
+
+    def test_other_injects_and_real_prompts(self):
+        from features.resume import display_prompt
+        self.assertEqual(display_prompt("[Request interrupted by user]"), "[Request interrupted by user]")
+        self.assertEqual(display_prompt("<wake>\ncarry on\n</wake>"), "⚙ wake: carry on")
+        self.assertEqual(display_prompt("fix the bug"), "fix the bug")
+        self.assertEqual(display_prompt("<user_query>\nreal\n</user_query>"), "real")
+
+    def test_painted_turn_uses_the_label(self):
+        from features import resume as r
+        painted = []
+
+        class _Out(object):
+            def prompt(self, p): painted.append(p)
+            def text(self, t): pass
+            def meta(self, d): pass
+
+        s = types.SimpleNamespace(output=_Out(), resume_id="sid", session_id="sid",
+                                  backend="claude", cwd="", agent_id="a", fork=False)
+        turns = [{"prompt": "<task-notification><summary>done</summary></task-notification>",
+                  "reply": "x" * 600, "tools": [], "ts": 1}]
+        orig = r.load_turns
+        r.load_turns = lambda *a, **k: turns
+        try:
+            r.paint_resume_preview(s)
+        finally:
+            r.load_turns = orig
+        self.assertEqual(painted, ["⚙ 1 task notification: done"])
+
