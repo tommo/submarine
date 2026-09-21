@@ -1192,7 +1192,9 @@ def _session_in_window(session, window):
 
 
 class SubmarineCycleSessionCommand(sublime_plugin.WindowCommand):
-    """Ctrl+] / Ctrl+[ — next / previous session in this window (sleeping too)."""
+    """Ctrl+] / Ctrl+[ — next / previous session in this window (sleeping
+    too). Works from a session sheet or from the Sessions list; either way
+    the target's sheet takes focus."""
 
     def run(self, direction=1):
         try:
@@ -1239,6 +1241,14 @@ class SubmarineCycleSessionCommand(sublime_plugin.WindowCommand):
                 SubmarineRevealSessionCommand)
             reveal.window = self.window
         if reveal._reveal(target, self.window):
+            # Invoked from the Sessions list too: the chord means "go there",
+            # so focus moves into the session view, not back to the list.
+            try:
+                view = target.output.view if target.output else None
+                if view is not None and view.is_valid():
+                    self.window.focus_view(view)
+            except Exception:
+                pass
             reveal._land(target)
             name = (
                 getattr(target, "display_name", None)

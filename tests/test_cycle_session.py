@@ -25,6 +25,19 @@ def _json_file(name):
 
 
 class CycleKeymapTest(unittest.TestCase):
+    def test_ctrl_brackets_also_bound_on_the_sessions_list(self):
+        import json
+        with open(os.path.join(ROOT, "Default.sublime-keymap"), encoding="utf-8") as f:
+            raw = f.read()
+        entries = json.loads("\n".join(
+            ln for ln in raw.splitlines() if not ln.lstrip().startswith("//")))
+        on_list = [e for e in entries
+                   if e.get("command") == "submarine_cycle_session"
+                   and any(c.get("key") == "setting.submarine_session_list"
+                           and c.get("operator") == "equal" and c.get("operand") is True
+                           for c in e.get("context", []))]
+        self.assertEqual(sorted(e["keys"][0] for e in on_list), ["ctrl+[", "ctrl+]"])
+
     def test_ctrl_brackets_cycle_sessions(self):
         keymap = _json_file("Default.sublime-keymap")
         nxt = [e for e in keymap
@@ -40,8 +53,9 @@ class CycleKeymapTest(unittest.TestCase):
         for e in nxt + prv:
             ctx = e.get("context") or []
             self.assertTrue(
-                any(c.get("key") == "setting.submarine_output" for c in ctx),
-                "Ctrl+[ / ] only on a session sheet")
+                any(c.get("key") in ("setting.submarine_output",
+                                     "setting.submarine_session_list") for c in ctx),
+                "Ctrl+[ / ] only on a session sheet or the Sessions list")
 
     def test_palette_lists_next_and_previous(self):
         cmds = _json_file("Default.sublime-commands")

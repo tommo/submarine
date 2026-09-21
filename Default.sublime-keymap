@@ -30,6 +30,24 @@
             { "key": "setting.submarine_session_list", "operator": "not_equal", "operand": true }
         ]
     },
+    // From the Sessions list the same chords step through the sessions and
+    // land in the session view (focus leaves the list).
+    {
+        "keys": ["ctrl+]"],
+        "command": "submarine_cycle_session",
+        "args": {"direction": 1},
+        "context": [
+            { "key": "setting.submarine_session_list", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["ctrl+["],
+        "command": "submarine_cycle_session",
+        "args": {"direction": -1},
+        "context": [
+            { "key": "setting.submarine_session_list", "operator": "equal", "operand": true }
+        ]
+    },
     {
         "keys": ["super+shift+escape"],
         "command": "submarine_interrupt"
