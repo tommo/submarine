@@ -114,19 +114,19 @@ window.SubmarineEditor = { ready: new Promise((r) => { window.__submarineEditorR
          rendered as controls; answers go through POST /api/answer. -->
     <div id="modal" class="modal" hidden></div>
 
+    <!-- One row: the editor and Send. A prompt sent mid-turn queues behind
+         the turn, as in Sublime; Interrupt is the only other control and on
+         a phone it appears only mid-turn. -->
     <form id="compose" class="compose">
-      <div id="composer" class="composer"></div>
-      <textarea id="prompt" rows="3" placeholder="Prompt this session… (Enter sends, Shift+Enter newline)"></textarea>
-      <div class="compose-row">
-        <select id="queue" title="What to do when the session is mid-turn">
-          <option value="queue">queue behind the turn</option>
-          <option value="interrupt">interrupt, then send</option>
-          <option value="reject">refuse while busy</option>
-        </select>
-        <button id="send" class="btn primary" type="submit">Send</button>
-        <button id="interrupt" class="btn danger" type="button" title="Cancel the current turn">Interrupt</button>
+      <div class="compose-main">
+        <div id="composer" class="composer"></div>
+        <textarea id="prompt" rows="1" placeholder="Prompt this session… (Enter sends, Shift+Enter newline)"></textarea>
+        <button id="send" class="btn primary send" type="submit" title="Send">Send</button>
       </div>
-      <div id="note" class="note dim"></div>
+      <div class="compose-row">
+        <button id="interrupt" class="btn danger" type="button" title="Cancel the current turn (a prompt sent mid-turn queues behind it)">Interrupt</button>
+        <span id="note" class="note dim"></span>
+      </div>
     </form>
   </section>
 </main>

@@ -127,7 +127,7 @@ curl -s -X POST localhost:8787/api/chat \
 curl -s -X POST localhost:8787/api/interrupt -d '{"ref":"GUEST"}'
 ```
 
-`chat` always carries `queue:"queue"` unless asked otherwise, and each send gets
+`chat` always carries `queue:"queue"` (the console has no policy picker; the API still takes one), and each send gets
 a fresh `idem` key so a retried browser request cannot double-send. The UI does
 not use `wait` (`chat --wait`): it polls instead, see below.
 
@@ -222,11 +222,11 @@ lose. No build step either way.
   answer the wrong prompt, and the card moves to the next question or
   disappears. The list marks such a session `?` and floats it to the top; on
   a phone the composer steps aside while a card is up.
-- **Compose**: prompt (see *The sheet* above for the editor), a queue policy
-  (`queue` behind the turn / `interrupt` then send / `reject` while busy),
-  **Send** (Enter; Shift+Enter newlines) and
-  **Interrupt** (enabled only while the selected session is `working`) — the
-  same three policies and the same cancel as `chat --queue` and `interrupt`.
+- **Compose**: prompt (see *The sheet* above for the editor) and **Send**
+  (Enter; Shift+Enter newlines); a prompt sent mid-turn queues behind the
+  turn, as it does in Sublime — there is no policy to pick — and
+  **Interrupt** (enabled only while the selected session is `working`; on a
+  phone it appears only then): the same cancel as `interrupt`.
 - Send is refused for saved rows: `chat` needs a live session (a sleeping one is
   woken by the plugin's own hand-off, and the console says so).
 

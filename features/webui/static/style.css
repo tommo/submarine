@@ -404,11 +404,13 @@ main {
   padding: 8px 12px;
   background: var(--panel);
 }
-.composer { width: 100%; }
+.compose-main { display: flex; align-items: flex-end; gap: 8px; }
+.composer { flex: 1 1 auto; min-width: 0; }
 .composer .cm-editor { width: 100%; }
 .compose textarea {
-  width: 100%;
-  resize: vertical;
+  flex: 1 1 auto;
+  min-width: 0;
+  resize: none;
   background: var(--panel-2);
   border: 1px solid var(--line);
   border-radius: 5px;
@@ -416,21 +418,12 @@ main {
   padding: 6px 8px;
   font: inherit;
   font-family: ui-monospace, Menlo, monospace;
+  line-height: 1.4;
 }
 .compose textarea:disabled { opacity: 0.5; }
+.btn.send { flex: 0 0 auto; min-height: 34px; }
 .compose-row { display: flex; gap: 8px; margin-top: 6px; align-items: center; }
-.compose select {
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  color: var(--fg);
-  font: inherit;
-  font-size: 12px;
-  padding: 4px 6px;
-}
-.compose-row .btn { margin-left: auto; }
-.compose-row .btn + .btn { margin-left: 0; }
-.note { margin-top: 4px; font-size: 11px; min-height: 14px; }
+.note { font-size: 11px; min-height: 14px; margin-left: auto; text-align: right; }
 
 /* ── phone (and any window under 761px) ─────────────────────────────────────
    One pane at a time instead of a stacked pair: the list is a full screen and
@@ -520,19 +513,25 @@ main {
   .pane { padding: 10px 12px; }
   .turn .prompt, .turn .reply, .pane pre { font-size: 13px; }
 
+  /* The composer is ONE row — editor + a 44px ↑ — until a turn is running;
+     then the policy select and Interrupt appear under it. */
   .compose {
-    padding-top: 8px;
-    padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
-    padding-left: max(12px, env(safe-area-inset-left, 0px));
-    padding-right: max(12px, env(safe-area-inset-right, 0px));
+    padding: 6px max(8px, env(safe-area-inset-right, 0px)) max(6px, env(safe-area-inset-bottom, 0px)) max(8px, env(safe-area-inset-left, 0px));
   }
+  .compose-main { gap: 6px; }
   /* 16px keeps iOS from zooming the page when the field takes focus; the box
-     starts small and grows with the text (app.js) so it leaves the transcript
-     room. */
-  .compose textarea { font-size: 16px; height: 52px; min-height: 52px; max-height: 30vh; }
-  /* Same 16px rule for the CodeMirror composer (the theme sets 13px). */
+     starts one line tall and grows with the text (app.js). */
+  .compose textarea { font-size: 16px; height: 44px; min-height: 44px; max-height: 30vh; }
   .composer .cm-editor { font-size: 16px; }
-  .composer .cm-editor .cm-content { min-height: 2.4em; }
+  .composer .cm-editor .cm-content { min-height: 1.6em; padding: 4px 0; }
+  .composer .cm-editor .cm-scroller { max-height: 30vh; }
+  .btn.send { width: 44px; min-height: 44px; padding: 0; font-size: 0; }
+  .btn.send::before { content: '↑'; font-size: 20px; line-height: 1; }
+  .compose-row { display: none; }
+  body.working .compose-row { display: flex; margin-top: 6px; }
+  body.working #interrupt { min-height: 40px; }
+  .note { display: none; }
+  .compose-row .note:not(:empty) { display: inline; }
   /* Folding and search are keyboard/pointer affordances; a thumb gets End. */
   .toolbar #fold, .toolbar #unfold, .toolbar #find { display: none !important; }
   .toolbar .tools { margin-left: auto; }
@@ -549,7 +548,8 @@ main {
   .title-row h1 { font-size: 16px; }
   .toolbar #turns-wrap { display: none !important; }   /* the caption's +8 does this */
   .toolbar #tail { padding: 4px 8px; }
-  .caption {
+  .caption { display: none; }
+  body.has-caption .caption {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -564,8 +564,7 @@ main {
 
   /* A pending modal owns the bottom of a phone screen: the composer steps
      aside (as the Sublime sheet hides it), Interrupt stays. */
-  body.has-modal .composer, body.has-modal #prompt, body.has-modal #queue, body.has-modal #send { display: none !important; }
-  body.has-modal .compose-row { grid-template-columns: 1fr; }
+  body.has-modal .compose-main { display: none !important; }
   .modal { padding: 10px 12px; max-height: 55%; }
   .modal .opt { min-height: 44px; font-size: 14px; }
   .modal .mrow.perms { display: grid; grid-template-columns: 1fr 1fr; }
@@ -579,13 +578,6 @@ main {
   body.composing .note:empty { display: none; }
 }
 
-/* Real phone widths: the compose controls stack, because a queue policy select
-   plus two buttons on one line leaves none of them thumb-sized. */
-@media (max-width: 560px) {
-  .compose-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .compose select { grid-column: 1 / -1; font-size: 16px; }
-  .compose-row .btn { margin-left: 0; font-size: 14px; }
-}
 
 /* ── sheet scopes — SubmarineOutput.hidden-tmTheme, class per scope ──────────
    Applied by highlight.js (the <pre> fallback) and by the CodeMirror
@@ -655,7 +647,7 @@ main {
    area, and app.js makes Enter a newline (Send / ⌘↩ send). Widths above 760px
    keep the two-pane layout. */
 @media (pointer: coarse) {
-  .btn, .tab, .toolbar input[type="number"], .compose select { min-height: 40px; }
+  .btn, .tab, .toolbar input[type="number"] { min-height: 40px; }
   .btn.tiny { min-height: 36px; padding: 4px 10px; font-size: 12px; }
   .row { min-height: 48px; }
   .pane.is-sheet .cm-editor { font-size: 13.5px; }

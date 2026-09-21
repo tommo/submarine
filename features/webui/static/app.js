@@ -623,6 +623,7 @@ function setSource(text) {
   state.source = text || '';
   $('source').textContent = state.source;
   $('source-phone').textContent = state.source;
+  document.body.classList.toggle('has-caption', !!state.source && state.source !== 'live sheet');
   // The Sheet tab says when it is really the transcript, for the widths that
   // hide the source label.
   const sheetTab = document.querySelector('.tab[data-mode="sheet"]');
@@ -795,6 +796,7 @@ async function tick() {
   }
   const busy = working || state.pending;
   state.working = working;
+  document.body.classList.toggle('working', working);
   $('interrupt').disabled = !working;
   setPlaceholder(promptPlaceholder(working));
   if (state.ref && row && row.kind === 'live') await refreshPending();
@@ -1032,7 +1034,7 @@ async function send() {
     body: JSON.stringify({
       ref: state.ref,
       prompt: prompt,
-      queue: $('queue').value,
+      queue: 'queue',            // mid-turn: behind the turn, as in Sublime
       idem: idemKey(),
     }),
   });
@@ -1193,12 +1195,11 @@ function sizeCompose() {
   if (state.composer) return;
   const box = $('prompt');
   box.style.height = '';
-  box.rows = NARROW.matches ? 1 : 3;
-  if (!NARROW.matches) return;
+  box.rows = 1;
   const vv = window.visualViewport;
-  const cap = Math.round(((vv && vv.height) || window.innerHeight) * 0.34);
+  const cap = Math.round(((vv && vv.height) || window.innerHeight) * (NARROW.matches ? 0.34 : 0.4));
   box.style.height = 'auto';
-  box.style.height = Math.max(52, Math.min(box.scrollHeight + 2, cap)) + 'px';
+  box.style.height = Math.max(36, Math.min(box.scrollHeight + 2, cap)) + 'px';
 }
 
 // A phone's Enter key is the way out of the field, not a send, so only a wide
