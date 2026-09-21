@@ -17,14 +17,14 @@ Dedupe is source-contains (TaskGet/TaskOutput already delivered bash-*)
 plus mirrored aliases (acp-term-* and bash-* sharing one tool_use_id).
 
 Wake budget (``background_notify`` setting: auto | always | defer):
-  A notification turn costs a full context re-send, so a batch of expected
-  completions must not wake the agent once per job. When a notification
-  turn ends with **no tool call** the agent has judged that batch ("nothing
-  to act on"): every task still running then is *acknowledged*, and its
+  A notification turn costs a full context re-send. When any turn ends with
+  **no tool call** the agent is talking to the user (an answer, a question),
+  not working: every task still running then is *acknowledged*, and its
   later `completed` result is surfaced (✓ row, unread) and **deferred** —
   its block rides along with the next real prompt instead of starting a
-  turn. Failures always wake. `defer` treats every completion that way;
-  `always` never defers.
+  turn. A turn that used tools keeps waking on the next completion (the
+  agent may be waiting on it). Failures always wake. `defer` treats every
+  completion that way; `always` never defers.
 
 Completion events differ per backend and all of them count:
   * `task_notification` carries status + summary + output_file (acp/kimi, and

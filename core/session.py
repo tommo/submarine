@@ -2595,9 +2595,13 @@ class Session:
 
     def _judge_notification_turn(self, gen):
         # type: (Optional[int]) -> None
-        """A notification turn that ended with no tool call: the agent looked
-        at the batch and had nothing to do — stop waking it for the rest."""
-        if gen is None or self._notify_turn_gen != gen:
+        """A turn that ended with no tool call is the agent talking to the
+        user — answering, asking — not working. Nothing still running in the
+        background is something it is waiting on, so those completions are
+        deferred to the next real prompt instead of waking it (a wake would
+        interrupt the conversation with "nothing to act on"). Turns that used
+        tools keep the default: the next completion wakes."""
+        if gen is None:
             return
         self._notify_turn_gen = None
         if getattr(self, "_turn_tool_calls", 0):

@@ -479,6 +479,13 @@ class BridgeEventRouter:
                     self.bg.drop_tool(tool_id)
             else:
                 self.output.tool(name, tool_input, tool_id=tool_id, background=True)
+                # A background launch is a tool call of this turn too: the
+                # wake budget must see the turn as "working", not "talking".
+                if self.on_tool_name is not None:
+                    try:
+                        self.on_tool_name(name)
+                    except Exception:
+                        pass
                 tool = None
                 try:
                     tool = self.output.find_tool_by_id(tool_id) if tool_id else None

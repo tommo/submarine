@@ -39,11 +39,12 @@
     "ui_mode": "single",
 
     // Background job completions and the agent's attention.
-    //   "auto"   — wake the agent for a completion, except that once a
-    //              notification turn ends without a tool call ("nothing to
-    //              act on"), the rest of that batch is only surfaced (✓,
-    //              unread) and its output rides along with your next prompt.
-    //              Failures always wake.
+    //   "auto"   — a completion wakes the agent only if its last turn used
+    //              tools (it may be waiting on the job). A turn that ended
+    //              with no tool call — an answer, a question to you — means
+    //              the jobs still running are not what it waits on: their
+    //              completions are surfaced (✓, unread) and ride along with
+    //              your next prompt. Failures always wake.
     //   "always" — every completion starts a notification turn (each one
     //              re-sends the whole context).
     //   "defer"  — never wake for a completion; deliver with the next prompt.

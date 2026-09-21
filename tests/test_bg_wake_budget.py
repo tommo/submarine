@@ -135,3 +135,36 @@ class TestSessionWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_a_turn_that_asks_the_user_does_not_get_woken_by_an_expiring_job(self):
+        """The model launched a job with tools, then in its next turn only
+        asked the user something. The job's expiry must not wake it."""
+        s, client = self._session()
+        g = s.bg
+        s.query("do the thing")
+        s._accept_tool_name("Bash")
+        _start(g, "t1", "u1")                             # launched in this turn
+        s._on_done({"status": "ok"}, _expected_gen=s.turn.gen)
+        s.query("which output size?")
+        s.output.text("Which output size do you mean?")     # no tool call
+        s._on_done({"status": "ok"}, _expected_gen=s.turn.gen)
+        self.assertIn("t1", g.acknowledged)
+        _done(g, "t1"); s.scheduler.fire_all()
+        self.assertFalse(s.working, "a job expiring after a question woke the model")
+        self.assertTrue(g.deferred)
+        s.query("the 1080p one")
+        wire = [c for c in client.sent if c[0] == "query"][-1][1]["prompt"]
+        self.assertIn("<task-notification>", wire)
+        self.assertTrue(wire.endswith("the 1080p one"))
+
+    def test_a_turn_that_used_tools_still_gets_woken(self):
+        s, _client = self._session()
+        g = s.bg
+        s.query("build it")
+        s._accept_tool_name("Bash")
+        _start(g, "t1", "u1")
+        s._on_done({"status": "ok"}, _expected_gen=s.turn.gen)
+        self.assertEqual(g.acknowledged, set())
+        _done(g, "t1"); s.scheduler.fire_all()
+        self.assertTrue(s.working)
+

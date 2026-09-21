@@ -321,10 +321,11 @@ Right-click selected text and choose "Ask Submarine" to query about the selectio
     // when a turn *ends*. Default if omitted: 60.
     // "auto_sleep_minutes": 60,
 
-    // Background job completions: "auto" wakes the agent, but once a
-    // notification turn ends with no tool call the rest of that batch is
-    // only surfaced and rides along with your next prompt; "always" wakes
-    // per job; "defer" never wakes. Failures always wake.
+    // Background job completions: "auto" wakes the agent only when its last
+    // turn used tools; after a turn that ended with no tool call (an
+    // answer, a question to you) completions are surfaced and ride along
+    // with your next prompt. "always" wakes per job; "defer" never wakes.
+    // Failures always wake.
     "background_notify": "auto",
 
     // Service Manager base URL for subscription usage on "with XXX…"
