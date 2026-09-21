@@ -2180,10 +2180,22 @@ class Session:
             return
         view = getattr(self.output, "view", None)
         if view is not None:
+            # The view's sleeping stamp is only meaningful for a sleeping
+            # session. On a shared host sheet it can be left by the previous
+            # occupant (or by this session's own sleep before a viewless
+            # wake); for a live session it is stale and would block the
+            # composer for good — clear it instead of honouring it.
             try:
                 st = view.settings()
                 if st.get("submarine_sleeping") or st.get("claude_sleeping"):
-                    return
+                    if self.client is not None or self.initialized:
+                        for k in ("submarine_sleeping", "claude_sleeping"):
+                            try:
+                                st.erase(k)
+                            except Exception:
+                                pass
+                    else:
+                        return
             except Exception:
                 pass
         if getattr(self, "_quick_finished", False):

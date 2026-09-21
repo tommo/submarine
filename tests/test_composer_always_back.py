@@ -105,5 +105,32 @@ class TestComposerComesBack(_SingleViewCase):
         self.assertTrue(bo.composer.input_marker_intact())
 
 
+
+    def test_stale_sleeping_stamp_on_the_host_does_not_block_a_live_session(self):
+        """Live evidence: view 20 had submarine_sleeping=true while its session
+        was awake and working; every re-plant path bailed on the stamp."""
+        from ui import keys
+        s, out, _client = _live(self.win, "e")
+        self.hv.attach(self.win, s)
+        host = out.view
+        keys.write_setting(host.settings(), keys.SLEEPING, True)   # left by a previous occupant
+        self.assertFalse(s.is_sleeping)
+        s._enter_input_with_draft()
+        self.assertTrue(out.is_input_mode(), "composer blocked by a stale sleeping stamp")
+        self.assertFalse(keys.read_setting(host.settings(), keys.SLEEPING, False))
+
+    def test_attach_sets_the_sleeping_stamp_from_the_session(self):
+        from ui import keys
+        a, ao, _ac = _live(self.win, "awake")
+        b, bo, _bc = _live(self.win, "asleep")
+        b.client = None; b.initialized = False                     # sleeping
+        self.hv.attach(self.win, b)
+        host = bo.view
+        self.assertTrue(keys.read_setting(host.settings(), keys.SLEEPING, False))
+        self.hv.attach(self.win, a)
+        self.assertFalse(keys.read_setting(host.settings(), keys.SLEEPING, False))
+        self.assertTrue(ao.is_input_mode())
+
+
 if __name__ == "__main__":
     unittest.main()

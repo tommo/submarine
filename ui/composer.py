@@ -169,9 +169,14 @@ class Composer:
             return
         if self._input_mode:
             return
-        if keys.read_setting(view.settings(), keys.SLEEPING):
-            return
         session = get_session_for_view(view)
+        if keys.read_setting(view.settings(), keys.SLEEPING):
+            # A live session under a stale sleeping stamp (left on the host
+            # sheet by a previous occupant): the stamp is wrong, not the
+            # session. Only a sleeping session honours it.
+            if session is None or getattr(session, "is_sleeping", False):
+                return
+            keys.erase_setting(view.settings(), keys.SLEEPING)
         if session is not None:
             if getattr(session, "is_sleeping", False):
                 return

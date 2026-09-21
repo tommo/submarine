@@ -599,6 +599,7 @@ class HostView(object):
             st = view.settings()
             keys.erase_setting(st, keys.HAS_QUESTION)
             keys.erase_setting(st, keys.HAS_MODAL)
+            keys.erase_setting(st, keys.SLEEPING)
         except Exception:
             pass
 
@@ -652,6 +653,15 @@ class HostView(object):
         # A question/permission that arrived while viewless was never
         # stamped; stamp it now so the 1-4/Enter/Esc keymaps fire.
         self._sync_modal_stamps(output)
+        # The sleeping stamp describes the bound session, never the sheet:
+        # a live session takes the host with it cleared, a sleeping one set.
+        try:
+            if getattr(session, "is_sleeping", False):
+                keys.write_setting(host.settings(), keys.SLEEPING, True)
+            else:
+                keys.erase_setting(host.settings(), keys.SLEEPING)
+        except Exception:
+            pass
         persist = getattr(session, "_persist_view_identity", None)
         name = getattr(session, "display_name", None) or getattr(session, "name", None)
 
