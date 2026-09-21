@@ -1124,6 +1124,18 @@ class ModalUI:
                 session = get_session_for_view(view)
             except Exception:
                 session = None
+            if session is None:
+                # Viewless (backgrounded) sheet: the session still owns this
+                # output; its composer state has to move on so the next
+                # attach shows a composer, not the modal's gap.
+                try:
+                    from core.registry import default_registry
+                    for s in default_registry.iter_sessions():
+                        if getattr(s, "output", None) is self.owner:
+                            session = s
+                            break
+                except Exception:
+                    session = None
             entered = False
             if session is not None:
                 enter = getattr(session, "_enter_input_with_draft", None)

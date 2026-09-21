@@ -955,13 +955,14 @@ class Session:
         except Exception:
             pass
         if not silent:
+            # The composer is sticky: the turn just started shows it again,
+            # with whatever draft an outside prompt displaced, so the next
+            # message can be typed (and queued) while the reply streams.
+            # _enter_input_with_draft is the single gate (modal up, sleeping,
+            # not allowed, a flag that outlived the ◎ line): no pre-checks
+            # here that could disagree with it.
             def _sticky():
-                if not self.output or self.output.is_input_mode():
-                    return
-                has_modal = getattr(self.output, "has_turn_modal_ui", None)
-                if callable(has_modal) and has_modal():
-                    return
-                if getattr(self.output, "_question_input_mode", False):
+                if not self.output:
                     return
                 self._input_mode_entered = False
                 self._enter_input_with_draft()
@@ -2118,6 +2119,14 @@ class Session:
                 pass
         if getattr(self, "_quick_finished", False):
             return
+        # A question-input flag that outlived its question is not a modal.
+        try:
+            pending_q = getattr(self.output, "pending_question", None)
+            if (getattr(self.output, "_question_input_mode", False)
+                    and not (pending_q and getattr(pending_q, "callback", None))):
+                self.output._question_input_mode = False
+        except Exception:
+            pass
         has_modal = getattr(self.output, "has_turn_modal_ui", None)
         if callable(has_modal) and has_modal():
             return
@@ -2145,17 +2154,36 @@ class Session:
                 pass
 
         if self.output.is_input_mode():
-            self._input_mode_entered = True
-            if not self.working:
-                now = time.time()
-                self.last_idle_at = now
-                self.last_activity = now
+            # The flag can outlive the composer text (a rewrite that dropped
+            # the ◎ line while the flag stayed on): then nothing would ever
+            # re-plant it, because enter_input_mode() trusts the flag. Check
+            # the marker is really in the buffer; if not, reset and re-enter.
+            intact = True
             try:
-                self.output.refresh_background_hints()
+                c = getattr(self.output, "composer", None)
+                if view is not None and c is not None and hasattr(c, "input_marker_intact"):
+                    intact = bool(c.input_marker_intact())
             except Exception:
-                pass
-            _repin_draft()
-            return
+                intact = True
+            if intact:
+                self._input_mode_entered = True
+                if not self.working:
+                    now = time.time()
+                    self.last_idle_at = now
+                    self.last_activity = now
+                try:
+                    self.output.refresh_background_hints()
+                except Exception:
+                    pass
+                _repin_draft()
+                return
+            try:
+                self.output.exit_input_mode(keep_text=False)
+            except Exception:
+                try:
+                    self.output.composer._input_mode = False
+                except Exception:
+                    pass
 
         if self._input_mode_entered and not self.working:
             if self.output.is_input_mode():

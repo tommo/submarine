@@ -703,6 +703,28 @@ class HostView(object):
                 pass
 
         _after_paint(_chrome)
+        # A live session on the host always has its composer: the snapshot it
+        # was detached with may predate a modal that hid it, and a turn that
+        # ended while it was viewless had no sheet to re-plant into.
+        def _composer():
+            enter = getattr(session, "_enter_input_with_draft", None)
+            if not callable(enter) or getattr(session, "is_sleeping", False):
+                return
+            out = getattr(session, "output", None)
+            try:
+                c = getattr(out, "composer", None)
+                # Restored intact: leave its scroll and caret exactly as the
+                # surface snapshot put them.
+                if out is not None and out.is_input_mode() and (
+                        c is None or c.input_marker_intact()):
+                    return
+            except Exception:
+                pass
+            try:
+                enter()
+            except Exception:
+                pass
+        _after_paint(_composer)
         if focus:
             try:
                 window.focus_view(host)

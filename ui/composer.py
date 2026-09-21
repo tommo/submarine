@@ -109,9 +109,22 @@ class Composer:
             self._caret_owner = owner
 
     def has_turn_modal_ui(self) -> bool:
-        if self._question_input_mode:
-            return True
         o = self.owner
+        if self._question_input_mode:
+            # Only while the question it belongs to is still pending. An
+            # interrupt (or an answer from outside) drops the question; a flag
+            # left behind would report a modal forever and the ◎ composer
+            # could never come back.
+            q = getattr(o, "pending_question", None)
+            if q is not None and getattr(q, "callback", None):
+                return True
+            self._question_input_mode = False
+            try:
+                view = o.view
+                if view is not None and view.is_valid():
+                    keys.write_setting(view.settings(), keys.QUESTION_INPUT_MODE, False)
+            except Exception:
+                pass
         if o.pending_question and o.pending_question.callback:
             return True
         if o.pending_permission and o.pending_permission.callback:

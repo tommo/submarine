@@ -655,10 +655,17 @@ class TurnRenderer:
         was_input = False
         draft = ""
         try:
-            was_input = bool(c.is_input_mode()) and not c._question_input_mode
-            if was_input:
-                draft = c.get_input_text()
-                c.exit_input_mode(keep_text=False)
+            if c._question_input_mode:
+                # The question is gone (cleared above); its inline "Other…"
+                # input goes with it, and the ◎ composer comes back below.
+                c._question_input_mode = False
+                c._input_mode = False
+                was_input = True
+            else:
+                was_input = bool(c.is_input_mode())
+                if was_input:
+                    draft = c.get_input_text()
+                    c.exit_input_mode(keep_text=False)
         except Exception:
             was_input = False
         if show_banner:
