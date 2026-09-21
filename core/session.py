@@ -1218,6 +1218,14 @@ class Session:
         self._bind_context_to_queued(prompt)
         self._queued_prompts[:] = merge_subsession_queue(self._queued_prompts, prompt)
         self._update_queue_phantom()
+        # A turn that is being cancelled must not receive the message: an
+        # inject into it either dies with the turn or surfaces one round late.
+        # It stays queued and fires as its own turn when the ACK lands.
+        interrupting = bool(getattr(self, "_interrupting", False)
+                            or getattr(self.turn, "kind", "") == "interrupting"
+                            or getattr(self, "_interrupt_stream", False))
+        if interrupting:
+            return
         if self.working and self.client and getattr(self.client, "is_alive", lambda: True)():
             if self.backend == "claude" and prompt in self._queued_prompts:
                 def _on_inj(r, p=prompt):

@@ -140,3 +140,41 @@ class TestEditQueued(unittest.TestCase):
         s, _out = self._session()
         self.assertFalse(s.edit_queued(3))
 
+
+class TestQueueAfterInterrupt(unittest.TestCase):
+    """A message typed while the turn is being cancelled is not injected into
+    the dying turn (lost, or delivered a round late); it waits in the queue
+    and starts its own turn once the cancel is acknowledged."""
+
+    def _session(self):
+        from tests.fakes import FakeClient, make_session
+        client = FakeClient()
+        s = make_session(client=client, initialized=True)
+        s.backend = "claude"
+        s.session_id = "sess-i"
+        return s, client
+
+    def test_no_inject_while_interrupting_then_fires_after_ack(self):
+        s, client = self._session()
+        s.query("first")
+        self.assertTrue(s.working)
+        s.interrupt()
+        self.assertEqual(s.turn.kind, "interrupting")
+        s.queue_prompt("after the cancel")
+        self.assertEqual([m for m, _p, _cb in client.sent if m == "inject_message"], [],
+                         "injected into the turn being cancelled")
+        self.assertEqual(s._queued_prompts, ["after the cancel"])
+        # the bridge acknowledges the cancel
+        _m, _p, cb = [c for c in client.sent if c[0] == "query"][-1]
+        cb({"status": "interrupted"})
+        s.scheduler.fire_all()
+        queries = [p.get("prompt") for m, p, _cb in client.sent if m == "query"]
+        self.assertEqual(queries[-1], "after the cancel", "queued message not sent after the ACK")
+        self.assertEqual(s._queued_prompts, [])
+
+    def test_a_normal_mid_turn_message_is_still_injected(self):
+        s, client = self._session()
+        s.query("first")
+        s.queue_prompt("meanwhile")
+        self.assertEqual([m for m, _p, _cb in client.sent if m == "inject_message"], ["inject_message"])
+
