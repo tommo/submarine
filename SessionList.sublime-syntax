@@ -111,7 +111,7 @@ contexts:
     # Custom providers (stepfun, openrouter, …) must match too — otherwise
     # we never enter row_title and the rest of the line loses its colors.
     - match: '(?:[A-Za-z][A-Za-z0-9_-]{0,7}|[A-Z]{2,3})\b'
-      scope: storage.type.backend.session-list
+      scope: storage.type.backend.torn-off.session-list
       set: row_title_torn-off
     - match: '$'
       pop: true
@@ -129,7 +129,7 @@ contexts:
     # Custom providers (stepfun, openrouter, …) must match too — otherwise
     # we never enter row_title and the rest of the line loses its colors.
     - match: '(?:[A-Za-z][A-Za-z0-9_-]{0,7}|[A-Z]{2,3})\b'
-      scope: storage.type.backend.session-list
+      scope: storage.type.backend.working.session-list
       set: row_title_working
     - match: '$'
       pop: true
@@ -147,7 +147,7 @@ contexts:
     # Custom providers (stepfun, openrouter, …) must match too — otherwise
     # we never enter row_title and the rest of the line loses its colors.
     - match: '(?:[A-Za-z][A-Za-z0-9_-]{0,7}|[A-Z]{2,3})\b'
-      scope: storage.type.backend.session-list
+      scope: storage.type.backend.input.session-list
       set: row_title_input
     - match: '$'
       pop: true
@@ -165,7 +165,7 @@ contexts:
     # Custom providers (stepfun, openrouter, …) must match too — otherwise
     # we never enter row_title and the rest of the line loses its colors.
     - match: '(?:[A-Za-z][A-Za-z0-9_-]{0,7}|[A-Z]{2,3})\b'
-      scope: storage.type.backend.session-list
+      scope: storage.type.backend.unread.session-list
       set: row_title_unread
     - match: '$'
       pop: true
@@ -183,7 +183,7 @@ contexts:
     # Custom providers (stepfun, openrouter, …) must match too — otherwise
     # we never enter row_title and the rest of the line loses its colors.
     - match: '(?:[A-Za-z][A-Za-z0-9_-]{0,7}|[A-Z]{2,3})\b'
-      scope: storage.type.backend.session-list
+      scope: storage.type.backend.ready.session-list
       set: row_title_ready
     - match: '$'
       pop: true
@@ -201,7 +201,7 @@ contexts:
     # Custom providers (stepfun, openrouter, …) must match too — otherwise
     # we never enter row_title and the rest of the line loses its colors.
     - match: '(?:[A-Za-z][A-Za-z0-9_-]{0,7}|[A-Z]{2,3})\b'
-      scope: storage.type.backend.session-list
+      scope: storage.type.backend.sleeping.session-list
       set: row_title_sleeping
     - match: '$'
       pop: true
@@ -219,7 +219,7 @@ contexts:
     # Custom providers (stepfun, openrouter, …) must match too — otherwise
     # we never enter row_title and the rest of the line loses its colors.
     - match: '(?:[A-Za-z][A-Za-z0-9_-]{0,7}|[A-Z]{2,3})\b'
-      scope: storage.type.backend.session-list
+      scope: storage.type.backend.saved.session-list
       set: row_title_saved
     - match: '$'
       pop: true

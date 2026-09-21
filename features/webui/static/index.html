@@ -109,6 +109,13 @@ window.SubmarineEditor = { ready: new Promise((r) => { window.__submarineEditorR
       <button id="more" class="link small" type="button">+8 older turns</button>
     </div>
 
+    <!-- Code view strip: shown above the pane while a file is open. -->
+    <div id="filebar" class="filebar" hidden>
+      <button id="file-back" class="btn tiny" type="button" title="Back to the edits">← Edits</button>
+      <span id="file-path" class="fpath"></span>
+      <button id="file-find" class="btn tiny" type="button" title="Search in this file (Cmd/Ctrl-F)">Find</button>
+      <button id="file-open" class="btn tiny" type="button" title="Open in Sublime at this line">Sublime</button>
+    </div>
     <div id="pane" class="pane"></div>
 
     <!-- What the sheet is waiting on — a question, a permission, a plan —

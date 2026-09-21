@@ -77,18 +77,15 @@
         },
         {
             "scope": "meta.title.working.session-list",
-            "foreground": "#f4f6f3",
-            "font_style": "bold"
+            "foreground": "#f4f6f3"
         },
         {
             "scope": "meta.title.input.session-list",
-            "foreground": "#ffcc66",
-            "font_style": "bold"
+            "foreground": "#ffcc66"
         },
         {
             "scope": "meta.title.unread.session-list",
-            "foreground": "#f4f6f3",
-            "font_style": "bold"
+            "foreground": "#f4f6f3"
         },
         {
             "scope": "meta.title.ready.session-list",
@@ -104,13 +101,20 @@
         },
         {
             "scope": "meta.title.saved.session-list",
-            "foreground": "#7d8594",
-            "font_style": "italic"
+            "foreground": "#7d8594"
         },
         {
             "scope": "keyword.bound.session-list",
             "foreground": "#73d0ff",
             "font_style": "bold"
+        },
+        {
+            "scope": "storage.type.backend.sleeping.session-list",
+            "foreground": "#3f6f7a"
+        },
+        {
+            "scope": "storage.type.backend.saved.session-list",
+            "foreground": "#3a5f68"
         }
     ]
 }

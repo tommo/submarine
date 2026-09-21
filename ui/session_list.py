@@ -1186,19 +1186,38 @@ def reveal_live_session(window, session, focus: bool = True,
 
 
 def reveal_session_bottom(session) -> None:
-    """Scroll to ◎ / EOF. Never wake a sleeping session."""
+    """Scroll to ◎ / EOF and put the caret there. Never wake a sleeping
+    session.
+
+    The caret matters: the renderer follows the tail only while the caret
+    owner is the draft, so a reveal that left the caret in history (where a
+    click or a search had put it) showed a sheet that then stopped scrolling
+    with the reply. Coming here from the list or a shortcut means "show me
+    the live end".
+    """
     out = getattr(session, "output", None)
     view = out.view if out else None
     if not view or not view.is_valid():
         return
     try:
+        out.set_caret_owner("draft")
+    except Exception:
+        pass
+    try:
         if out.is_input_mode():
             out.scroll_composer_chrome(force=True)
+            try:
+                out.restore_draft_caret(force=True)
+            except Exception:
+                pass
             return
     except Exception:
         pass
     try:
         end = view.size()
+        if sublime is not None:
+            view.sel().clear()
+            view.sel().add(sublime.Region(end, end))
         view.show(sublime.Region(end, end), False)
         _x, y = view.text_to_layout(end)
         vh = float(view.viewport_extent()[1])

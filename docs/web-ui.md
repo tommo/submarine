@@ -118,6 +118,7 @@ without a code — the socket is missing — 503).
 | `POST /api/rename` | `rename` | `{"ref", "name"}` |
 | `POST /api/close` | `close` | `{"ref", "remove"}` — stop a live session; `remove` drops a history row |
 | `POST /api/open` | `open` | `{"ref", "file_path", "line"}` — open an existing file at a line in the session's Sublime window |
+| `GET /api/file` | `read` | `path` (required), `ref`, `max_bytes` — a text file's contents (existing files, UTF-8, ≤ 2 MB) for the code view |
 
 ```bash
 curl -s localhost:8787/api/list | jq '.data.count'
@@ -169,7 +170,7 @@ not use `wait` (`chat --wait`): it polls instead, see below.
 |---|---|---|---|
 | Sheet (default) | `text`, else `tail` | the rendered output view; without one, the last N turns rebuilt in the sheet's grammar | no — it falls back |
 | Transcript | `tail` | the last N turns from the backend transcript, in the sheet's grammar | no — closed sessions work |
-| Edits | `edits` | the Edit/Write rows this session made: each unfolds to its unified diff, **open** jumps to `path:line` in Sublime (`POST /api/open`) | no |
+| Edits | `edits` | the Edit/Write rows this session made: each unfolds to its unified diff; tapping the path opens the **code view** — the file read-only in CodeMirror (line numbers, the file's language colours, `GET /api/file`) at that line, with Find and a **Sublime** button that opens it there (`POST /api/open`) | no |
 
 ### The sheet
 

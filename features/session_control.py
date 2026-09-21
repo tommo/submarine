@@ -33,7 +33,9 @@ import time
 from typing import Any, Dict, List, Optional
 
 ACTIONS = frozenset(("list", "view", "chat", "interrupt", "pending", "answer",
-                     "backends", "create", "rename", "close", "open"))
+                     "backends", "create", "rename", "close", "open", "read"))
+#: `read` returns at most this much of a file (the browser code view).
+MAX_READ_BYTES = 2 * 1024 * 1024
 PERMISSION_RESPONSES = frozenset(("allow", "deny", "allow_session", "allow_all"))
 PLAN_RESPONSES = frozenset(("approve", "reject"))
 #: A permission's tool_input on the wire: a Write's content or a long Bash
@@ -123,6 +125,8 @@ def dispatch(request: dict) -> dict:
             body, target = action_close(request or {})
         elif action == "open":
             body, target = action_open(request or {})
+        elif action == "read":
+            body, target = action_read(request or {})
         else:
             body, target = action_interrupt(request or {})
     except ControlError as e:
@@ -1166,3 +1170,42 @@ def action_open(params: dict) -> (dict, dict):
         raise ControlError("internal", "open failed: %s" % e)
     return {"opened": path, "line": line or None, "window": _window_row(window),
             "session": ref}, ref
+
+
+def action_read(params: dict) -> (dict, dict):
+    """A file's text for the browser code view: existing regular files only,
+    UTF-8 (binary refused), clipped to MAX_READ_BYTES."""
+    import os
+    path = str(params.get("file_path") or "").strip()
+    if not path:
+        raise ControlError("bad_request", "file_path is required")
+    path = os.path.expanduser(path)
+    if not os.path.isfile(path):
+        raise ControlError("not_found", "no such file: %s" % path)
+    ref = None
+    if params.get("ref"):
+        target = _resolve_any(params.get("ref"))
+        ref = {"agent_id": target["agent_id"], "session_id": target["session_id"],
+               "name": target["name"], "backend": target["backend"], "kind": target["kind"]}
+    try:
+        limit = int(params.get("max_bytes") or MAX_READ_BYTES)
+    except (TypeError, ValueError):
+        limit = MAX_READ_BYTES
+    limit = max(1024, min(limit, MAX_READ_BYTES))
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            raw = f.read(limit + 1)
+    except OSError as e:
+        raise ControlError("internal", "cannot read %s: %s" % (path, e))
+    if b"\x00" in raw[:8192]:
+        raise ControlError("bad_request", "%s is not a text file" % path)
+    truncated = len(raw) > limit
+    text = raw[:limit].decode("utf-8", "replace")
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = None
+    return {"file_path": path, "size": size, "truncated": truncated,
+            "text": text, "lines": text.count("\n") + (0 if text.endswith("\n") else 1),
+            "mtime": mtime, "session": ref}, ref

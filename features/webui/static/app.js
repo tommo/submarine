@@ -40,6 +40,8 @@ const state = {
   lastState: null,
   modal: null,        // the pending modal body from /api/pending, if any
   editsKey: null,     // what the Edits pane was last drawn from
+  file: null,         // {path, line, text} while the code view is open
+  fileView: null,     // the mounted CodeMirror file view (or <pre> fallback)
   editor: undefined,  // CodeMirror API from editor.js, null when unavailable
   sheet: null,        // the mounted sheet (CodeMirror or <pre>)
   composer: null,     // the CodeMirror composer, when the editor loaded
@@ -213,6 +215,7 @@ function openSession(ref, opts) {
   }
   renderHead(selectedRow());
   unmountSheet();
+  if (state.file) { unmountFile(); state.file = null; $('filebar').hidden = true; if (state.mode === 'file') state.mode = 'edits'; }
   state.editsKey = null;
   $('pane').innerHTML = '<p class="empty">loading…</p>';
   $('pane').scrollTop = 0;
@@ -706,8 +709,8 @@ function renderEdits(body) {
     html += '<details class="edit" data-key="' + esc((e.id || '') + '|' + (e.i !== undefined ? e.i : '') + '|' + path + '|' + (e.line || '')) +
       '" data-path="' + esc(path) + '" data-line="' + esc(e.line || '') + '">' +
       '<summary><span class="sm-tool-done">✔</span> <span class="etool">' + esc(e.tool || '?') + '</span> ' +
-        '<span class="path" title="' + esc(path) + '">' + esc(short) + (e.line ? '<span class="eline">:' + esc(e.line) + '</span>' : '') + '</span>' +
-        '<button type="button" class="btn tiny eopen" title="Open in Sublime at this line">open</button>' +
+        '<button type="button" class="path elink" title="View ' + esc(path) + '">' + esc(short) + (e.line ? '<span class="eline">:' + esc(e.line) + '</span>' : '') + '</button>' +
+        '<button type="button" class="btn tiny eopen" title="Open in Sublime at this line">Sublime</button>' +
       '</summary>' +
       (diff ? '<pre class="ediff">' + window.SubmarineHL.toHtml('```diff\n' + diff + '\n```', 'conversation').split('\n').slice(1, -1).join('\n') + '</pre>'
             : '<p class="dim small">no diff recorded for this edit</p>') +
@@ -715,6 +718,78 @@ function renderEdits(body) {
     '</details>';
   }
   return html;
+}
+
+// ── code view ───────────────────────────────────────────────────────────────
+// A file the session edited, read through /api/file and shown read-only in
+// CodeMirror (line numbers, the file's language colours) at the edit's line.
+// It is a mode of the pane (like edits) so the poll leaves it alone.
+
+function unmountFile() {
+  if (state.fileView && state.fileView.destroy) state.fileView.destroy();
+  state.fileView = null;
+  $('pane').classList.remove('is-sheet');
+}
+
+async function openFile(path, line) {
+  if (!path) return;
+  clearError();
+  state.mode = 'file';
+  state.file = { path: path, line: line || 0, text: null };
+  unmountSheet();
+  $('pane').innerHTML = '<p class="empty">loading ' + esc(basename(path)) + '…</p>';
+  showFileBar();
+  syncToolbar();
+  const env = await api('/api/file?path=' + encodeURIComponent(path) + (state.ref ? '&ref=' + encodeURIComponent(state.ref) : ''));
+  if (state.mode !== 'file' || !state.file || state.file.path !== path) return;
+  if (env.ok !== true) {
+    $('pane').innerHTML = '<p class="empty">' + esc(env.error || 'cannot read ' + path) + '</p>';
+    showError(env);
+    return;
+  }
+  const body = env.data || {};
+  state.file.text = body.text || '';
+  const pane = $('pane');
+  pane.innerHTML = '';
+  pane.classList.add('is-sheet');
+  await editorReady;
+  if (state.editor && state.editor.createFileView) {
+    state.fileView = state.editor.createFileView(pane, { text: state.file.text, path: path, line: line });
+  } else {
+    const pre = document.createElement('pre');
+    pre.className = 'sheet code';
+    const lang = window.SubmarineHL.langForPath(path);
+    const st = window.SubmarineHL.codeState(lang);
+    pre.innerHTML = state.file.text.split('\n').map((l, i) =>
+      '<span class="ln' + (i + 1 === line ? ' hit' : '') + '" id="L' + (i + 1) + '">' + (i + 1) + '</span>' +
+      window.SubmarineHL.tokenizeLine(l, st).map(([c, t]) => c ? '<span class="' + c + '">' + esc(t) + '</span>' : esc(t)).join('')).join('\n');
+    pane.appendChild(pre);
+    state.fileView = { destroy: () => pre.remove(), goTo: (n) => { const el = pre.querySelector('#L' + n); if (el) el.scrollIntoView({ block: 'center' }); },
+                       openSearch: () => note('search needs the CodeMirror editor (CDN unreachable)') };
+    if (line) state.fileView.goTo(line);
+  }
+  if (body.truncated) note('file truncated at ' + Math.round(state.file.text.length / 1024) + ' KB');
+}
+
+function showFileBar() {
+  const f = state.file;
+  $('filebar').hidden = !f;
+  if (!f) return;
+  const row = selectedRow();
+  const project = row ? projectOf(row) : '';
+  const short = project && f.path.startsWith(project + '/') ? f.path.slice(project.length + 1) : f.path;
+  $('file-path').textContent = short + (f.line ? ':' + f.line : '');
+  $('file-path').title = f.path;
+}
+
+function closeFile() {
+  unmountFile();
+  state.file = null;
+  $('filebar').hidden = true;
+  state.mode = 'edits';
+  state.editsKey = null;
+  for (const t of document.querySelectorAll('.tab')) t.classList.toggle('on', t.getAttribute('data-mode') === 'edits');
+  refreshPane();
 }
 
 async function openInSublime(path, line) {
@@ -726,6 +801,13 @@ async function openInSublime(path, line) {
 
 function wireEdits() {
   const pane = $('pane');
+  for (const b of pane.querySelectorAll('.elink')) {
+    b.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const d = b.closest('.edit');
+      openFile(d.getAttribute('data-path'), Number(d.getAttribute('data-line')) || 0);
+    });
+  }
   for (const b of pane.querySelectorAll('.eopen')) {
     b.addEventListener('click', (e) => {
       e.preventDefault(); e.stopPropagation();
@@ -752,8 +834,8 @@ function turnsWanted() {
 }
 
 function syncToolbar() {
-  const sheetish = state.mode !== 'edits';
-  $('turns-wrap').hidden = state.mode === 'edits' || (state.mode === 'sheet' && state.source === 'live sheet');
+  const sheetish = state.mode !== 'edits' && state.mode !== 'file';
+  $('turns-wrap').hidden = !sheetish || (state.mode === 'sheet' && state.source === 'live sheet');
   for (const id of ('fold unfold find tail').split(' ')) $(id).hidden = !sheetish;
   $('fold').disabled = $('unfold').disabled = $('find').disabled = !state.editor;
 }
@@ -769,6 +851,7 @@ async function refreshPane(opts) {
   const ref = 'ref=' + encodeURIComponent(state.ref);
   let env;
   let mode = state.mode;
+  if (mode === 'file') return;          // static until closed
   if (mode === 'edits') {
     env = await api('/api/view?' + ref + '&mode=edits&limit=50');
     if (seq !== paneSeq) return;
@@ -1325,6 +1408,7 @@ function wire() {
     tab.addEventListener('click', () => {
       for (const other of document.querySelectorAll('.tab')) other.classList.remove('on');
       tab.classList.add('on');
+      if (state.file) { unmountFile(); state.file = null; $('filebar').hidden = true; }
       state.mode = tab.getAttribute('data-mode');
       state.editsKey = null;
       clearError();
@@ -1334,6 +1418,9 @@ function wire() {
 
   $('turns').addEventListener('change', () => { clearError(); refreshPane(); });
   $('reload').addEventListener('click', () => { clearError(); refreshPane(); schedule(0); });
+  $('file-back').addEventListener('click', closeFile);
+  $('file-find').addEventListener('click', () => { if (state.fileView) state.fileView.openSearch(); });
+  $('file-open').addEventListener('click', () => { if (state.file) openInSublime(state.file.path, state.file.line); });
   $('rename').addEventListener('click', () => { $('head-actions').classList.remove('open'); renameSession(); });
   $('close').addEventListener('click', () => { $('head-actions').classList.remove('open'); closeSession(); });
   $('more-actions').addEventListener('click', (e) => { e.stopPropagation(); $('head-actions').classList.toggle('open'); });

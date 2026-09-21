@@ -592,6 +592,10 @@ class SubmarineRevealSessionCommand(sublime_plugin.WindowCommand):
             except Exception:
                 pass
         try:
+            out.set_caret_owner("draft")
+        except Exception:
+            pass
+        try:
             if out.is_input_mode():
                 out.focus_composer(
                     force_show=True, steal_focus=True, park_at_end=True)

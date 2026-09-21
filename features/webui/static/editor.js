@@ -52,14 +52,16 @@ if (cm) {
 
   function buildDecorations(doc, startCtx) {
     const builder = new RangeSetBuilder();
-    const st = HL.initialState();
-    if (startCtx) st.ctx = startCtx;
+    // startCtx: a context name, or a full tokenizer state (the file view
+    // passes HL.codeState(lang) so every line is code of that language).
+    const st = (startCtx && typeof startCtx === 'object') ? Object.assign({}, startCtx) : HL.initialState();
+    if (typeof startCtx === 'string') st.ctx = startCtx;
     for (let n = 1; n <= doc.lines; n++) {
       const line = doc.line(n);
       const wasCode = st.ctx === 'code';
       const segs = HL.tokenizeLine(line.text, st);
       const nowCode = st.ctx === 'code';
-      if (wasCode || nowCode) builder.add(line.from, line.from, codeLine);
+      if ((wasCode || nowCode) && !(startCtx && typeof startCtx === 'object')) builder.add(line.from, line.from, codeLine);
       let pos = line.from;
       for (const [cls, s] of segs) {
         if (!s) continue;
@@ -236,6 +238,57 @@ if (cm) {
     };
   }
 
+  // ── a file (the code view) ──────────────────────────────────────────────
+  // Read-only, line numbers, the sheet's code colours for the file's
+  // language, opened at a line.
+
+  const fileTheme = EditorView.theme({
+    '.cm-gutters': { backgroundColor: '#1a1e29', color: '#5c6773', borderRight: '1px solid #2f333d', minWidth: '40px' },
+    '.cm-lineNumbers .cm-gutterElement': { padding: '0 8px 0 10px', minWidth: '36px' },
+    '.cm-activeLineGutter': { backgroundColor: '#262d3a', color: '#cbccc6' },
+    '.cm-activeLine': { backgroundColor: '#262d3a55' },
+  }, { dark: true });
+
+  function createFileView(parent, opts) {
+    const o = opts || {};
+    const lang = o.lang || HL.langForPath(o.path);
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: String(o.text || ''),
+        extensions: [
+          EditorState.readOnly.of(true),
+          EditorView.editable.of(false),
+          lineNumbers(),
+          drawSelection(),
+          highlightActiveLine(),
+          highlightSelectionMatches(),
+          highlighter(HL.codeState(lang)),
+          sheetTheme,
+          fileTheme,
+          keymap.of([...searchKeymap, ...defaultKeymap]),
+        ],
+      }),
+    });
+    function goTo(lineNo) {
+      const n = Math.max(1, Math.min(view.state.doc.lines, Number(lineNo) || 1));
+      const line = view.state.doc.line(n);
+      view.dispatch({
+        selection: { anchor: line.from },
+        effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
+      });
+    }
+    if (o.line) requestAnimationFrame(() => goTo(o.line));
+    return {
+      view,
+      dom: view.dom,
+      goTo,
+      openSearch: () => { for (const k of searchKeymap) if (k.key === 'Mod-f') return k.run(view); },
+      focus: () => view.focus(),
+      destroy: () => view.destroy(),
+    };
+  }
+
   // ── the composer ────────────────────────────────────────────────────────
 
   function createComposer(parent, opts) {
@@ -286,5 +339,5 @@ if (cm) {
     };
   }
 
-  settle({ createSheet, createComposer, cm });
+  settle({ createSheet, createComposer, createFileView, cm });
 }

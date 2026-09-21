@@ -71,6 +71,26 @@
   const KW_SET = {};
   for (const k of Object.keys(KW)) KW_SET[k] = new Set(KW[k].split(/\s+/));
 
+  // File extension → fence language, for the code view.
+  const EXT_LANG = {
+    py: 'python', nim: 'nim', js: 'js', mjs: 'js', ts: 'ts', tsx: 'ts', jsx: 'js', json: 'json',
+    sh: 'sh', bash: 'sh', zsh: 'sh', rs: 'rust', go: 'go', c: 'c', h: 'c', cc: 'cpp', cpp: 'cpp',
+    hpp: 'cpp', m: 'c', mm: 'cpp', yaml: 'yaml', yml: 'yaml', html: 'html', css: 'css', sql: 'sql',
+    rb: 'ruby', lua: 'lua', diff: 'diff', patch: 'diff', xml: 'xml', md: 'md', toml: 'toml',
+    txt: 'text', swift: 'common', kt: 'common', java: 'common', cs: 'common', glsl: 'common',
+    wgsl: 'common', hlsl: 'common',
+  };
+
+  function langForPath(path) {
+    const m = /\.([A-Za-z0-9]+)$/.exec(String(path || ''));
+    return m ? (EXT_LANG[m[1].toLowerCase()] || '') : '';
+  }
+
+  // A state that tokenizes every line as code of `lang` (no fence needed).
+  function codeState(lang) {
+    return { ctx: 'code', fence: '\u0000', family: codeFamily(lang) };
+  }
+
   function codeFamily(lang) {
     const l = String(lang || '').toLowerCase();
     if (!l) return 'plain';
@@ -202,6 +222,7 @@
   // state the next line starts in — the sublime-syntax push/pop, flattened.
   function tokenizeLine(line, st) {
     if (st.ctx === 'code') {
+      if (st.fence === '\u0000') return tokenizeCode(line, st.family);   // a whole file: no fence to close
       const closeRe = new RegExp('^' + st.fence.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '```\\s*$');
       if (closeRe.test(line) || /^\s*```\s*$/.test(line)) {
         st.ctx = 'conversation'; st.fence = null; st.family = null;
@@ -269,6 +290,8 @@
 
   global.SubmarineHL = {
     initialState: initialState,
+    codeState: codeState,
+    langForPath: langForPath,
     tokenizeLine: tokenizeLine,
     tokenizeInline: tokenizeInline,
     toHtml: toHtml,

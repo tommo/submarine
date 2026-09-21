@@ -102,6 +102,14 @@ class SessionClient(object):
             fields["line"] = line
         return self.call("open", **fields)
 
+    def read(self, ref: Optional[str], file_path: str, max_bytes: Any = None) -> Dict[str, Any]:
+        fields = {"file_path": file_path}  # type: Dict[str, Any]
+        if ref:
+            fields["ref"] = ref
+        if max_bytes:
+            fields["max_bytes"] = max_bytes
+        return self.call("read", **fields)
+
     def close(self, ref: str, remove: bool = False) -> Dict[str, Any]:
         return self.call("close", ref=ref, remove=bool(remove))
 

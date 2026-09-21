@@ -145,3 +145,35 @@ class TestCreateAndBackends(_SingleViewCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRead(unittest.TestCase):
+    def test_reads_text_and_refuses_binary_and_missing(self):
+        d = tempfile.mkdtemp(prefix="submarine-test-")
+        t = os.path.join(d, "a.nim")
+        with open(t, "w") as f:
+            f.write("proc x() =\n  discard\n")
+        body, ref = sc.action_read({"file_path": t})
+        self.assertEqual(body["text"], "proc x() =\n  discard\n")
+        self.assertEqual(body["lines"], 2)
+        self.assertFalse(body["truncated"])
+        self.assertIsNone(ref)
+        b = os.path.join(d, "b.bin")
+        with open(b, "wb") as f:
+            f.write(b"\x00\x01\x02")
+        with self.assertRaises(sc.ControlError) as cm:
+            sc.action_read({"file_path": b})
+        self.assertEqual(cm.exception.code, "bad_request")
+        with self.assertRaises(sc.ControlError) as cm:
+            sc.action_read({"file_path": os.path.join(d, "nope")})
+        self.assertEqual(cm.exception.code, "not_found")
+
+    def test_clips_to_max_bytes(self):
+        d = tempfile.mkdtemp(prefix="submarine-test-")
+        t = os.path.join(d, "big.txt")
+        with open(t, "w") as f:
+            f.write("x" * 5000)
+        body, _ = sc.action_read({"file_path": t, "max_bytes": 2048})
+        self.assertTrue(body["truncated"])
+        self.assertEqual(len(body["text"]), 2048)
+

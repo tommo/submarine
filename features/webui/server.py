@@ -15,6 +15,7 @@ One action per endpoint, named after the CLI's subcommands, so the API really is
   POST /api/rename                 {"ref", "name"}  (`rename`)
   POST /api/close                  {"ref", "remove"}  (`close`)
   POST /api/open                   {"ref", "file_path", "line"} — open the file in Sublime  (`open`)
+  GET  /api/file?path=…&ref=…      a text file's contents, for the code view  (`read`)
 
 Plus `GET /` and `/static/*` for the console itself. The plugin's envelope is
 returned verbatim, with `http` added, and `data.code` decides the status code —
@@ -197,6 +198,13 @@ class WebUIHandler(BaseHTTPRequestHandler):
                 window=_first(query, "window")))
         if route == "/api/backends":
             return self._reply(self._client.backends())
+        if route == "/api/file":
+            path = _first(query, "path")
+            if not path:
+                return self._json(400, {"ok": False, "http": 400,
+                                        "error": "path is required"})
+            return self._reply(self._client.read(
+                _first(query, "ref"), path[:4096], _int_or_none(_first(query, "max_bytes"))))
         if route == "/api/pending":
             ref = _first(query, "ref")
             if not ref:
