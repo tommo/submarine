@@ -365,6 +365,8 @@ body.working .head-actions .interrupt { display: inline-flex; align-items: cente
   background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer;
 }
 .phone-only { display: none; }
+.backdrop { display: none; }
+@media (max-width: 760px) { .backdrop { display: block; } }
 .caption { display: none; }
 /* The Sheet tab says when it is really the transcript (the source label is
    hidden at narrower widths). */
@@ -517,25 +519,50 @@ body.working .head-actions .interrupt { display: inline-flex; align-items: cente
     overflow: hidden;             /* the panes scroll, not the document */
   }
 
-  main { flex-direction: column; }
-  body[data-pane="list"] .detail { display: none; }
-  body[data-pane="detail"] .list { display: none; }
+  main { flex-direction: column; position: relative; }
+  .detail { flex: 1 1 auto; }
 
   .btn { min-height: 44px; }
 
+  /* The list is a sheet over the session view: slides up from the bottom,
+     backdrop dims the view; ☰ / the session name open it, a row / the
+     backdrop / ✕ / Esc / a swipe down on its head close it. */
   .list {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    top: max(24px, env(safe-area-inset-top, 0px));
     width: auto;
     max-width: none;
     min-width: 0;
     max-height: none;
-    flex: 1 1 auto;
+    z-index: 30;
     border-right: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 14px 14px 0 0;
+    background: var(--bg);
+    box-shadow: 0 -12px 40px rgba(0,0,0,0.5);
     padding-left: env(safe-area-inset-left, 0px);
     padding-right: env(safe-area-inset-right, 0px);
+    transform: translateY(105%);
+    transition: transform 0.22s ease-out;
+    visibility: hidden;
   }
-  .detail { flex: 1 1 auto; }
+  body.list-open .list { transform: none; visibility: visible; }
+  .backdrop {
+    position: fixed; inset: 0; z-index: 29;
+    background: rgba(0,0,0,0.45);
+    opacity: 0; pointer-events: none; transition: opacity 0.22s ease-out;
+  }
+  body.list-open .backdrop { opacity: 1; pointer-events: auto; }
+  .list-head { border-radius: 14px 14px 0 0; }
+  .list-head::before {
+    /* grab handle */
+    content: ''; display: block; width: 36px; height: 4px; border-radius: 2px;
+    background: #3a4150; margin: 0 auto 6px;
+  }
+  @media (prefers-reduced-motion: reduce) { .list, .backdrop { transition: none; } }
 
-  .list-head { padding: max(8px, env(safe-area-inset-top, 0px)) 12px 6px; }
+  .list-head { padding: 6px 12px 6px; }
   .list-head input[type="search"] { font-size: 16px; padding: 8px 10px; }   /* no iOS zoom */
   .group { padding: 9px 12px 7px 10px; }
   .group .gt { font-size: 14px; }

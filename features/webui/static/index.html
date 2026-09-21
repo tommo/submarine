@@ -45,6 +45,8 @@ window.SubmarineEditor = { ready: new Promise((r) => { window.__submarineEditorR
 <div id="error" class="error" hidden></div>
 
 <main>
+  <!-- Phone: the list is a sheet over the session view; this dims the view. -->
+  <div id="backdrop" class="backdrop" aria-hidden="true"></div>
   <aside class="list">
     <!-- The list owns the page chrome: title, connection, refresh. -->
     <div class="list-head">
@@ -52,6 +54,7 @@ window.SubmarineEditor = { ready: new Promise((r) => { window.__submarineEditorR
         <h1><span class="logo" aria-hidden="true"></span>Submarine</h1>
         <span id="conn" class="badge">connecting…</span>
         <button id="refresh" class="btn tiny" type="button" title="Reload the list and this session">⟳</button>
+        <button id="list-close" class="btn tiny phone-only" type="button" aria-label="Close the list">✕</button>
       </div>
       <div class="list-head-row">
         <input id="search" type="search" placeholder="Search sessions…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
@@ -81,7 +84,7 @@ window.SubmarineEditor = { ready: new Promise((r) => { window.__submarineEditorR
 
   <section class="detail">
     <div class="headwrap">
-      <button id="back" class="btn back" type="button" aria-label="Back to the session list" title="Sessions">←</button>
+      <button id="back" class="btn back" type="button" aria-label="Sessions" title="Sessions">☰</button>
       <div id="head" class="head empty">Pick a session on the left.</div>
       <div id="head-actions" class="head-actions" hidden>
         <button id="interrupt" class="btn tiny danger interrupt" type="button" title="Cancel the current turn (a prompt sent mid-turn queues behind it)">■ Interrupt</button>

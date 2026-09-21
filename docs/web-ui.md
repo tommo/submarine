@@ -255,14 +255,11 @@ lose. No build step either way.
 The two panes become one at a time, the way the rest of the phone navigates —
 a list you tap into, and a way back out:
 
-- **The list is the whole screen** to start with (the page title, connection badge and ⟳ live in its head — there is no separate top bar); tapping a session swaps in
-  the transcript and compose full-screen. The tapped row stays marked, so
-  coming back shows where you were.
-- **The open session lives in the URL** as `#s=<ref>`, so a session is a link:
-  a bookmarked or sent URL opens straight into it. The browser's back gesture
-  (or the Android back button) returns to the list, and the **← Sessions**
-  button in the detail header is the same move — it pops the entry the tap
-  pushed, so both routes stay in step. Going *forward* reopens the session.
+- **The session view is the screen; the list is a sheet over it.** ☰ in
+  the header (or tapping the session name) slides the list up over the
+  view; tapping a row picks it and drops the sheet; the backdrop, ✕, Esc or
+  a swipe down on its head close it. With no session open the sheet is up.
+- **The open session lives in the URL** as `#s=<ref>`, so a session is a link.
 - **Compose is pinned to the bottom**, under a transcript that scrolls. On a
   phone Enter inserts a newline and the **Send** button delivers, so a soft
   keyboard cannot send a half-typed prompt by accident; wide screens keep

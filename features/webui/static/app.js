@@ -170,14 +170,26 @@ function showError(env) {
 }
 
 // ── navigation ──────────────────────────────────────────────────────────────
-// A phone shows the list or the detail, never both. Which one is a body
-// attribute the CSS reads; which session is open lives in the URL hash, so a
-// detail view is a link and the browser/OS back gesture returns to the list.
-// On a wide screen both panes are visible, setPane does nothing visible, and
-// the hash still makes a session linkable.
+// A phone shows the session view; the list is a sheet that slides over it
+// (☰ in the header opens it, the backdrop / a row / ✕ closes it). Which
+// session is open lives in the URL hash, so it is a link. On a wide screen
+// both panes are visible and the list state is inert.
 
 function setPane(pane) {
   document.body.setAttribute('data-pane', pane);
+  document.body.classList.toggle('list-open', pane === 'list');
+  if (pane === 'list' && NARROW.matches) {
+    try { $('search').blur(); } catch (e) { /* no-op */ }
+  }
+}
+
+function listOpen() {
+  return document.body.classList.contains('list-open');
+}
+
+function closeList() {
+  if (listOpen()) setPane('detail');
+  setTitle();
 }
 
 function refFromHash() {
@@ -200,7 +212,7 @@ function showList() {
 // waiting one gets its mark in front, so a background tab still tells.
 function setTitle() {
   const row = state.ref ? selectedRow() : null;
-  if (!row || (NARROW.matches && document.body.getAttribute('data-pane') === 'list')) {
+  if (!row) {
     document.title = 'Submarine';
     return;
   }
@@ -208,20 +220,14 @@ function setTitle() {
   document.title = mark + (row.name || '(unnamed)') + ' · Submarine';
 }
 
-// A #s=… deep link needs a list entry behind it, or the phone's back gesture
-// would leave the page rather than show the list.
 function claimInitialHash() {
-  const ref = refFromHash();
-  if (!ref) return null;
-  history.replaceState(null, '', location.pathname + location.search);
-  history.pushState(null, '', '#s=' + encodeURIComponent(ref));
-  return ref;
+  return refFromHash();
 }
 
 function onHashChange() {
   const ref = refFromHash();
   if (!ref) { showList(); return; }
-  if (ref === state.ref) { setPane('detail'); return; }
+  if (ref === state.ref) { closeList(); return; }
   openSession(ref, { hash: false });
 }
 
@@ -607,6 +613,7 @@ function renderHead(row) {
   const ids = 'agent ' + (row.agent_id || '–') + '\nsession ' + (row.session_id || '–');
   el.className = 'head';
   el.innerHTML = '<h2 title="' + esc(ids) + '">' + esc(row.name || '(unnamed)') + '</h2><div class="meta">' + meta + '</div>';
+  el.onclick = () => { if (NARROW.matches) showList(); };
   $('head-actions').hidden = false;
   $('close').textContent = row.kind === 'live' ? 'Close' : 'Delete';
   $('close').title = row.kind === 'live'
@@ -1437,12 +1444,20 @@ async function mountComposer() {
 function wire() {
   $('refresh').addEventListener('click', () => { clearError(); refreshPane(); schedule(0); });
 
-  $('back').addEventListener('click', () => {
-    // The entry we pushed for the open session, when there is one, so this is
-    // the same move as the browser's own back.
-    if (refFromHash()) history.back();
-    else showList();
-  });
+  $('back').addEventListener('click', () => { if (listOpen()) closeList(); else showList(); });
+  $('list-close').addEventListener('click', closeList);
+  $('backdrop').addEventListener('click', closeList);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && listOpen() && NARROW.matches) closeList(); });
+  // A swipe down on the sheet's head closes it.
+  (function () {
+    let y0 = null;
+    const head = document.querySelector('.list-head');
+    head.addEventListener('touchstart', (e) => { y0 = e.touches[0].clientY; }, { passive: true });
+    head.addEventListener('touchend', (e) => {
+      if (y0 !== null && e.changedTouches[0].clientY - y0 > 60) closeList();
+      y0 = null;
+    }, { passive: true });
+  })();
   window.addEventListener('hashchange', onHashChange);
 
   for (const tab of document.querySelectorAll('.tab')) {
