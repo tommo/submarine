@@ -367,7 +367,7 @@ function rowHtml(entry, section) {
                                        plan: 'plan needs approval' }[row.waiting] || row.waiting) : '';
   const tree = entry.depth ? '<span class="tree" style="--d:' + Math.min(entry.depth, 6) + '">↳</span>' : '';
   return '<button type="button" class="row' + (rowMatches(row, state.ref) ? ' on' : '') +
-      (row.state === 'working' ? ' working' : '') + (row.waiting ? ' waiting' : '') +
+      ' ' + markClass + (row.waiting ? ' waiting' : '') +
     '" data-ref="' + esc(ref) + '" title="' + esc((row.agent_id || '') + '  ' + (row.session_id || '')) + '">' +
       '<span class="r1">' +
         '<span class="cur">' + (bound ? '▸' : '') + '</span>' +

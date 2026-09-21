@@ -191,7 +191,11 @@ main {
 .row .mark.sleeping { color: var(--accent); }
 .row .mark.error { color: var(--bad); }
 .row .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row.working .name, .row.waiting .name { color: #fff; }
+/* title weight follows the state, like the Sublime list's meta.title.<state> */
+.row.working .name, .row.unread .name { color: #f4f6f3; font-weight: 600; }
+.row.waiting .name { color: #ffcc66; font-weight: 600; }
+.row.sleeping .name { color: #8a93a3; }
+.row.saved .name { color: #7d8594; font-style: italic; }
 .row .age { flex: 0 0 auto; }
 .row .r2 { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 11px; padding-left: 20px; min-width: 0; }
 .row .r2 .bits { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

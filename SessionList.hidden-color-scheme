@@ -74,6 +74,43 @@
         {
             "scope": "keyword.operator.session-list",
             "foreground": "#73d0ff"
+        },
+        {
+            "scope": "meta.title.working.session-list",
+            "foreground": "#f4f6f3",
+            "font_style": "bold"
+        },
+        {
+            "scope": "meta.title.input.session-list",
+            "foreground": "#ffcc66",
+            "font_style": "bold"
+        },
+        {
+            "scope": "meta.title.unread.session-list",
+            "foreground": "#f4f6f3",
+            "font_style": "bold"
+        },
+        {
+            "scope": "meta.title.ready.session-list",
+            "foreground": "#cbccc6"
+        },
+        {
+            "scope": "meta.title.torn-off.session-list",
+            "foreground": "#cbccc6"
+        },
+        {
+            "scope": "meta.title.sleeping.session-list",
+            "foreground": "#8a93a3"
+        },
+        {
+            "scope": "meta.title.saved.session-list",
+            "foreground": "#7d8594",
+            "font_style": "italic"
+        },
+        {
+            "scope": "keyword.bound.session-list",
+            "foreground": "#73d0ff",
+            "font_style": "bold"
         }
     ]
 }

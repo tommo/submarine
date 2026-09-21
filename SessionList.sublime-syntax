@@ -4,6 +4,10 @@ name: Session List
 scope: text.session-list
 hidden: true
 
+# Row titles take a scope per state (meta.title.<state>.session-list), so
+# the colour scheme can weight a working or waiting session's title and dim
+# a sleeping or saved one: the mark decides which title context a row enters.
+
 contexts:
   main:
     - match: '^SESSIONS\b'
@@ -30,60 +34,60 @@ contexts:
 
     - match: '^⊡'
       scope: keyword.torn-off.session-list
-      push: row_rest
+      push: row_rest_torn-off
 
     - match: '^●'
       scope: keyword.working.session-list
-      push: row_rest
+      push: row_rest_working
 
     - match: '^\?'
       scope: keyword.input.session-list
-      push: row_rest
+      push: row_rest_input
 
     - match: '^!'
       scope: keyword.unread.session-list
-      push: row_rest
+      push: row_rest_unread
 
     - match: '^○'
       scope: keyword.ready.session-list
-      push: row_rest
+      push: row_rest_ready
 
     - match: '^⏸'
       scope: keyword.sleeping.session-list
-      push: row_rest
+      push: row_rest_sleeping
 
     - match: '^·'
       scope: comment.mark.session-list
-      push: row_rest
+      push: row_rest_saved
 
   row_lead:
     - match: '⊡'
       scope: keyword.torn-off.session-list
-      set: row_rest
+      set: row_rest_torn-off
 
     - match: '●'
       scope: keyword.working.session-list
-      set: row_rest
+      set: row_rest_working
 
     - match: '\?'
       scope: keyword.input.session-list
-      set: row_rest
+      set: row_rest_input
 
     - match: '!'
       scope: keyword.unread.session-list
-      set: row_rest
+      set: row_rest_unread
 
     - match: '○'
       scope: keyword.ready.session-list
-      set: row_rest
+      set: row_rest_ready
 
     - match: '⏸'
       scope: keyword.sleeping.session-list
-      set: row_rest
+      set: row_rest_sleeping
 
     - match: '·'
       scope: comment.mark.session-list
-      set: row_rest
+      set: row_rest_saved
 
     - match: '$'
       pop: true
@@ -98,7 +102,7 @@ contexts:
     - match: '$'
       pop: true
 
-  row_rest:
+  row_rest_torn-off:
     - match: '↳'
       scope: comment.tree.session-list
     - match: '[△★✨]'
@@ -108,12 +112,126 @@ contexts:
     # we never enter row_title and the rest of the line loses its colors.
     - match: '(?:[A-Za-z][A-Za-z0-9_-]{0,7}|[A-Z]{2,3})\b'
       scope: storage.type.backend.session-list
-      set: row_title
+      set: row_title_torn-off
     - match: '$'
       pop: true
 
-  row_title:
-    # The pin sits between the backend column and the title.
+  row_title_torn-off:
+    - meta_scope: meta.title.torn-off.session-list
+    - include: row_title_tokens
+
+  row_rest_working:
+    - match: '↳'
+      scope: comment.tree.session-list
+    - match: '[△★✨]'
+      scope: keyword.star.session-list
+    # First token is the backend column (padded to 8, or compact GR/CL).
+    # Custom providers (stepfun, openrouter, …) must match too — otherwise
+    # we never enter row_title and the rest of the line loses its colors.
+    - match: '(?:[A-Za-z][A-Za-z0-9_-]{0,7}|[A-Z]{2,3})\b'
+      scope: storage.type.backend.session-list
+      set: row_title_working
+    - match: '$'
+      pop: true
+
+  row_title_working:
+    - meta_scope: meta.title.working.session-list
+    - include: row_title_tokens
+
+  row_rest_input:
+    - match: '↳'
+      scope: comment.tree.session-list
+    - match: '[△★✨]'
+      scope: keyword.star.session-list
+    # First token is the backend column (padded to 8, or compact GR/CL).
+    # Custom providers (stepfun, openrouter, …) must match too — otherwise
+    # we never enter row_title and the rest of the line loses its colors.
+    - match: '(?:[A-Za-z][A-Za-z0-9_-]{0,7}|[A-Z]{2,3})\b'
+      scope: storage.type.backend.session-list
+      set: row_title_input
+    - match: '$'
+      pop: true
+
+  row_title_input:
+    - meta_scope: meta.title.input.session-list
+    - include: row_title_tokens
+
+  row_rest_unread:
+    - match: '↳'
+      scope: comment.tree.session-list
+    - match: '[△★✨]'
+      scope: keyword.star.session-list
+    # First token is the backend column (padded to 8, or compact GR/CL).
+    # Custom providers (stepfun, openrouter, …) must match too — otherwise
+    # we never enter row_title and the rest of the line loses its colors.
+    - match: '(?:[A-Za-z][A-Za-z0-9_-]{0,7}|[A-Z]{2,3})\b'
+      scope: storage.type.backend.session-list
+      set: row_title_unread
+    - match: '$'
+      pop: true
+
+  row_title_unread:
+    - meta_scope: meta.title.unread.session-list
+    - include: row_title_tokens
+
+  row_rest_ready:
+    - match: '↳'
+      scope: comment.tree.session-list
+    - match: '[△★✨]'
+      scope: keyword.star.session-list
+    # First token is the backend column (padded to 8, or compact GR/CL).
+    # Custom providers (stepfun, openrouter, …) must match too — otherwise
+    # we never enter row_title and the rest of the line loses its colors.
+    - match: '(?:[A-Za-z][A-Za-z0-9_-]{0,7}|[A-Z]{2,3})\b'
+      scope: storage.type.backend.session-list
+      set: row_title_ready
+    - match: '$'
+      pop: true
+
+  row_title_ready:
+    - meta_scope: meta.title.ready.session-list
+    - include: row_title_tokens
+
+  row_rest_sleeping:
+    - match: '↳'
+      scope: comment.tree.session-list
+    - match: '[△★✨]'
+      scope: keyword.star.session-list
+    # First token is the backend column (padded to 8, or compact GR/CL).
+    # Custom providers (stepfun, openrouter, …) must match too — otherwise
+    # we never enter row_title and the rest of the line loses its colors.
+    - match: '(?:[A-Za-z][A-Za-z0-9_-]{0,7}|[A-Z]{2,3})\b'
+      scope: storage.type.backend.session-list
+      set: row_title_sleeping
+    - match: '$'
+      pop: true
+
+  row_title_sleeping:
+    - meta_scope: meta.title.sleeping.session-list
+    - include: row_title_tokens
+
+  row_rest_saved:
+    - match: '↳'
+      scope: comment.tree.session-list
+    - match: '[△★✨]'
+      scope: keyword.star.session-list
+    # First token is the backend column (padded to 8, or compact GR/CL).
+    # Custom providers (stepfun, openrouter, …) must match too — otherwise
+    # we never enter row_title and the rest of the line loses its colors.
+    - match: '(?:[A-Za-z][A-Za-z0-9_-]{0,7}|[A-Z]{2,3})\b'
+      scope: storage.type.backend.session-list
+      set: row_title_saved
+    - match: '$'
+      pop: true
+
+  row_title_saved:
+    - meta_scope: meta.title.saved.session-list
+    - include: row_title_tokens
+
+  # The pin sits between the backend column and the title; the right-hand
+  # meta (query count, status word, age) keeps its own colours whatever the
+  # title's state scope says.
+  row_title_tokens:
     - match: '✨'
       scope: keyword.star.session-list
     - match: '\s+\d+q\b'
@@ -135,3 +253,9 @@ contexts:
       pop: true
     - match: '$'
       pop: true
+
+  # Kept for anything that still names the old generic contexts.
+  row_rest:
+    - include: row_rest_ready
+  row_title:
+    - include: row_title_ready
