@@ -94,9 +94,19 @@ machine, run with your agent's permissions. Two things matter:
   an SSH tunnel from wherever you want to browse.
 
 There is no TLS: the token travels in clear text on the wire. Treat it as a
-LAN-only convenience, not as authentication over the internet. From outside
-the LAN, reach it over a private network (VPN / overlay / SSH tunnel) and
-bind to that address: [docs/web-ui-remote.md](web-ui-remote.md).
+LAN-only convenience, not as authentication over the internet.
+
+### From outside the LAN
+
+Reach it over a private network you already trust — a VPN or overlay, or an
+SSH tunnel — never the open internet. Bind to that network's address with a
+token (`--host <private-address> --token <secret>`), open
+`http://<private-address>:8787/?token=<secret>` once (the page keeps the
+token and drops it from the URL), add to Home Screen. An SSH tunnel is the
+same with `--host 127.0.0.1` and `ssh -L 8787:127.0.0.1:8787 <machine>`.
+Do not port-forward the router to it, and a public tunnel (Cloudflare,
+ngrok) needs real authentication in front — the shared token alone is not
+enough for an internet-facing port.
 
 ## 4. HTTP API
 

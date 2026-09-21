@@ -118,10 +118,9 @@ new / rename / close. A prompt sent from outside shows as `◎ 📨 …` on the
 sheet. Phone layout included. CodeMirror loads from esm.sh; offline the
 console degrades to a `<pre>` and a textarea.
 
-**Usage docs:** [docs/session-control.md](docs/session-control.md) (CLI),
+**Usage docs:** [docs/session-control.md](docs/session-control.md) (CLI) and
 [docs/web-ui.md](docs/web-ui.md) (browser console, `--host` / `--port` /
-`--token`) and [docs/web-ui-remote.md](docs/web-ui-remote.md) (from outside
-the LAN: over a private network).
+`--token`, remote access).
 
 ## Usage
 
