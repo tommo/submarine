@@ -1170,6 +1170,46 @@ class TestRenderSessionList(unittest.TestCase):
             ),
         )
         self.assertEqual(sl._status_of(unread_working), "working")
+        # A reply not yet seen still needs you after the bridge went to sleep:
+        # the row keeps `!` (attention band), not `⏸`.
+        unread_asleep = types.SimpleNamespace(
+            is_sleeping=True, working=False, unread=True, _compacting=False,
+            output=types.SimpleNamespace(
+                pending_permission=None, pending_question=None, pending_plan=None,
+            ),
+        )
+        self.assertEqual(sl._status_of(unread_asleep), "unread")
+        read_asleep = types.SimpleNamespace(
+            is_sleeping=True, working=False, unread=False, _compacting=False,
+            output=types.SimpleNamespace(
+                pending_permission=None, pending_question=None, pending_plan=None,
+            ),
+        )
+        self.assertEqual(sl._status_of(read_asleep), "sleeping")
+        # A halted turn (bridge died, provider error) is idle but stuck: the
+        # row says so, in the attention band, until the next turn clears it.
+        halted = types.SimpleNamespace(
+            is_sleeping=False, working=False, unread=False, _compacting=False,
+            error_halted=True,
+            output=types.SimpleNamespace(
+                pending_permission=None, pending_question=None, pending_plan=None,
+            ),
+        )
+        self.assertEqual(sl._status_of(halted), "error")
+        self.assertEqual(sl._mark("error"), "✘")
+        self.assertEqual(sl._LIVE_BAND["error"], sl._LIVE_BAND["unread"])
+        self.assertEqual(
+            sl._stamp_of({"kind": "live", "status": "error"}), "err")
+        asking = types.SimpleNamespace(
+            is_sleeping=False, working=False, unread=False, _compacting=False,
+            error_halted=True,
+            output=types.SimpleNamespace(
+                pending_permission=None, pending_plan=None,
+                pending_question=types.SimpleNamespace(
+                    callback=lambda *_a, **_k: None),
+            ),
+        )
+        self.assertEqual(sl._status_of(asking), "input", "a pending ask wins")
         bg_idle = types.SimpleNamespace(
             is_sleeping=False, working=False, unread=False, _compacting=False,
             output=types.SimpleNamespace(

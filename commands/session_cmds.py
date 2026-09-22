@@ -743,7 +743,7 @@ class SubmarineResumeCommand(sublime_plugin.WindowCommand):
 
 
 class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
-    """Switch between active sessions / start a new one (Cmd+\\)."""
+    """The active session's actions / start a new one (Cmd+\\)."""
 
     def run(self, backend=None, model=None):
         if backend is None:
@@ -819,37 +819,8 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
             items.append(["%s%s%s" % (prefix, star, name), detail])
             actions.append(("focus", active_session))
 
-        other = [(v, s) for v, s in sessions_in_window
-                 if v != active_view_id and s is not active_session]
-
-        def _session_list_key(pair):
-            _v, s = pair
-            if s.is_sleeping:
-                liveness = 2
-            elif s.working:
-                liveness = 0
-            else:
-                liveness = 1
-            starred_rank = 0 if s.session_id in starred else 1
-            return (liveness, starred_rank)
-
-        other.sort(key=_session_list_key)
-        for view_id, s in other:
-            name = s.name or "(unnamed)"
-            is_starred = s.session_id in starred
-            if s.is_sleeping:
-                marker = "⏸ " + ("★ " if is_starred else "")
-                status = "sleeping"
-            elif s.working:
-                marker = "\u2022 " + ("★ " if is_starred else "")
-                status = "working..."
-            else:
-                marker = "★ " if is_starred else "  "
-                status = "ready"
-            cost = "$%.4f" % s.total_cost if s.total_cost > 0 else ""
-            detail = "%s  %s  %sq" % (status, cost, s.query_count) if cost else "%s  %sq" % (status, s.query_count)
-            items.append(["%s%s" % (marker, name), detail])
-            actions.append(("focus", s))
+        # Other sessions live in the Sessions list (Cmd+Shift+\); this panel
+        # is the active session and what to start next.
 
         if in_output_view and active_session:
             if active_session.session_id:
@@ -885,6 +856,20 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
             actions.append(("set_model", model_id))
 
         if in_output_view and active_session:
+            from core.session import _is_claude_bridge
+            try:
+                same_family = _is_claude_bridge(
+                    backend_specs.get(active_session.backend,
+                                      active_session.settings))
+            except Exception:
+                same_family = False
+            if same_family:
+                items.append([
+                    "⇄ Change Provider…",
+                    "Move THIS session to another Claude-bridge provider "
+                    "(official ↔ (CC) …), keeping its history",
+                ])
+                actions.append(("change_provider", active_session))
             items.append(["🍴 Fork Session", "Create new session with copy of history"])
             actions.append(("fork", active_session))
 
@@ -923,6 +908,10 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
                 return
             if action == "set_model":
                 sublime.set_timeout(lambda: self.run(backend=backend, model=data), 0)
+                return
+            if action == "change_provider":
+                sublime.set_timeout(
+                    lambda: self.window.run_command("submarine_change_provider"), 0)
                 return
             if action == "toggle_star" and data and data.session_id:
                 now_starred = toggle_bookmark(
@@ -1155,7 +1144,11 @@ class SubmarineSessionListCommand(sublime_plugin.WindowCommand):
 def cycle_sessions_for_window(window):
     """The sessions Ctrl+] / Ctrl+[ step through: every current session of
     this window, sleeping ones included — a sleeping sheet is still a place
-    to go back to (revealing it does not wake it). Quick agents stay out."""
+    to go back to (revealing it does not wake it). Quick agents stay out.
+
+    The order is the Sessions list's CURRENT order (status bands, starred
+    pins, children under their parent), so the chord walks the list as it
+    reads; a session the list does not know yet goes last."""
     from core.registry import default_registry
     out = []
     for s in default_registry.iter_sessions():
@@ -1164,7 +1157,16 @@ def cycle_sessions_for_window(window):
         if window is not None and not _session_in_window(s, window):
             continue
         out.append(s)
+    order = {}
+    try:
+        from ui.session_list import live_agent_ids_in_list_order
+        for i, aid in enumerate(live_agent_ids_in_list_order(window)):
+            order.setdefault(aid, i)
+    except Exception:
+        order = {}
+    tail = len(order)
     out.sort(key=lambda sess: (
+        order.get(str(getattr(sess, "agent_id", "") or ""), tail),
         -float(getattr(sess, "last_access", 0) or 0),
         str(getattr(sess, "agent_id", "") or ""),
     ))

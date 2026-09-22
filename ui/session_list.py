@@ -60,7 +60,8 @@ CUR_CELL = CUR_MARK + " "
 BLANK_CELL = " " * len(CUR_CELL)
 STAR_MARK = "✨"  # pinned session, before the title
 _LIVE_BAND = {
-    "input": 0, "unread": 0, "working": 1, "bg": 1, "ready": 1, "sleeping": 2,
+    "input": 0, "error": 0, "unread": 0,
+    "working": 1, "bg": 1, "ready": 1, "sleeping": 2,
 }
 
 
@@ -197,10 +198,20 @@ def _has_live_bg_tools(session) -> bool:
 
 
 def _status_of(session) -> str:
+    # Unread outranks sleeping: a reply you have not seen still needs you,
+    # whether or not the bridge was put to sleep since. Opening the sheet
+    # clears it (HostView._finish_bound), not the sleep.
+    if getattr(session, "unread", False) and getattr(session, "is_sleeping", False):
+        return "unread"
     if getattr(session, "is_sleeping", False):
         return "sleeping"
     if awaiting_input(session):
         return "input"
+    # A halted turn (bridge died, provider error, failed handshake) needs
+    # you: the session is idle but nothing will happen until you look.
+    # `query()` clears the flag, so the row stops shouting on the next turn.
+    if getattr(session, "error_halted", False):
+        return "error"
     # Kimi /compact: session/prompt returns end_turn immediately while
     # compaction continues. working can drop; _compacting is the live flag.
     if getattr(session, "working", False) or getattr(session, "_compacting", False):
@@ -240,6 +251,7 @@ def _section_sort_key(row: dict) -> Tuple[int, float]:
 def _mark(status: str) -> str:
     return {
         "input": "?",
+        "error": "✘",
         "unread": "!",
         "working": "●",
         "bg": "⚙",
@@ -712,6 +724,7 @@ _STAMP = {
     "ready": "idle",
     "input": "wait",
     "unread": "new",
+    "error": "err",
 }
 _GAP = 2   # after Nq, before state — must be > 1 (the space before Nq)
 _STAMP_W = 4
@@ -2351,6 +2364,44 @@ def _place_caret_on_session(view, sid, kind=None) -> None:
         view.settings().set(FOLLOW_GEN_KEY, gen)
     except Exception:
         pass
+
+
+def live_agent_ids_in_list_order(window) -> List[str]:
+    """CURRENT rows, top to bottom, as the Sessions list shows (or would
+    show) them: the order Ctrl+] / Ctrl+[ step through.
+
+    An open list in this window is the authority — its stored row index is
+    exactly what the user is looking at. Without one, the same build
+    (`collect_live` → `tree_order`, starred pins and status bands included).
+    """
+    if window is not None:
+        try:
+            views = list(window.views())
+        except Exception:
+            views = []
+        for v in views:
+            try:
+                if not (v.settings().get(SETTING) and v.is_valid()):
+                    continue
+                index = json.loads(v.settings().get(ROWS_KEY) or "[]")
+            except Exception:
+                continue
+            ids = [str(r.get("agent_id")) for r in index
+                   if r.get("kind") == "live" and r.get("agent_id")]
+            if ids:
+                return ids
+    cwd = ""
+    try:
+        if window is not None and window.folders():
+            cwd = window.folders()[0]
+    except Exception:
+        cwd = ""
+    try:
+        starred = set(load_bookmarks(cwd or None) or ())
+    except Exception:
+        starred = set()
+    rows = tree_order(collect_live(window), starred)
+    return [str(r.get("agent_id")) for r in rows if r.get("agent_id")]
 
 
 def sync_list_to_session(window, session) -> bool:

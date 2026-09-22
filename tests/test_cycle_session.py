@@ -96,8 +96,38 @@ class AwakeSessionsTest(unittest.TestCase):
             self.reg.register_session(s)
         ids = [getattr(s, "session_id", None)
                for s in sc.cycle_sessions_for_window(self.win)]
-        self.assertEqual(ids, ["sleep", "live"])   # most recently touched first
+        # The Sessions list's order, not access time: awake rows sit above
+        # sleeping ones there, so the chord walks the list as it reads.
+        self.assertEqual(ids, ["live", "sleep"])
         self.assertNotIn("foreign", ids)
+
+    def test_an_open_list_dictates_the_order(self):
+        """What the user sees is the authority: a child nested under its
+        parent, a starred row pinned on top — the stored row index of the
+        window's Sessions list, top to bottom."""
+        import commands.session_cmds as sc
+        from ui.session_list import ROWS_KEY, SETTING
+
+        made = []
+        for sid in ("a", "b", "c"):
+            s = make_session(
+                window=self.win, initialized=True, client=FakeClient(),
+                registry=self.reg)
+            s.session_id = sid
+            s.agent_id = sid * 2
+            s.last_access = {"a": 3, "b": 2, "c": 1}[sid]
+            self.reg.register_session(s)
+            made.append(s)
+        lst = self.win.new_file()
+        lst.settings().set(SETTING, True)
+        lst.settings().set(ROWS_KEY, json.dumps([
+            {"kind": "live", "agent_id": "cc", "line": 2},
+            {"kind": "saved", "agent_id": "zz", "line": 3},
+            {"kind": "live", "agent_id": "aa", "line": 4},
+            {"kind": "live", "agent_id": "bb", "line": 5},
+        ]))
+        ids = [s.session_id for s in sc.cycle_sessions_for_window(self.win)]
+        self.assertEqual(ids, ["c", "a", "b"])
 
     def test_cycle_wraps_to_the_other_session(self):
         import commands.session_cmds as sc

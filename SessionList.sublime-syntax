@@ -29,7 +29,7 @@ contexts:
       scope: keyword.bound.session-list
       push: row_lead
 
-    - match: '^  (?=[⊡●!?○⏸·])'
+    - match: '^  (?=[⊡●!?✘○⏸·])'
       push: row_lead
 
     - match: '^⊡'
@@ -43,6 +43,10 @@ contexts:
     - match: '^\?'
       scope: keyword.input.session-list
       push: row_rest_input
+
+    - match: '^✘'
+      scope: keyword.error.session-list
+      push: row_rest_error
 
     - match: '^!'
       scope: keyword.unread.session-list
@@ -72,6 +76,10 @@ contexts:
     - match: '\?'
       scope: keyword.input.session-list
       set: row_rest_input
+
+    - match: '✘'
+      scope: keyword.error.session-list
+      set: row_rest_error
 
     - match: '!'
       scope: keyword.unread.session-list
@@ -154,6 +162,24 @@ contexts:
 
   row_title_input:
     - meta_scope: meta.title.input.session-list
+    - include: row_title_tokens
+
+  row_rest_error:
+    - match: '↳'
+      scope: comment.tree.session-list
+    - match: '[△★✨]'
+      scope: keyword.star.session-list
+    # First token is the backend column (padded to 8, or compact GR/CL).
+    # Custom providers (stepfun, openrouter, …) must match too — otherwise
+    # we never enter row_title and the rest of the line loses its colors.
+    - match: '(?:[A-Za-z][A-Za-z0-9_-]{0,7}|[A-Z]{2,3})\b'
+      scope: storage.type.backend.error.session-list
+      set: row_title_error
+    - match: '$'
+      pop: true
+
+  row_title_error:
+    - meta_scope: meta.title.error.session-list
     - include: row_title_tokens
 
   row_rest_unread:

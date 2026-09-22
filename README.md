@@ -155,9 +155,9 @@ All commands available via Command Palette (`Cmd+Shift+P`): type "Submarine"
 | Devtools Reload Package | - | Soft-reload the package |
 | Devtools Reload Package (hard) | - | Full ignored_packages cycle |
 | New Session | - | Start a fresh session (default backend) |
-| Switch Session… | `Cmd+\` | Quick panel: active sessions, new session, backends (`with Grok…` / `with Kimi Code…` show live subscription usage from Service Manager when available). `Cmd+Alt+\` is an alias |
+| Switch Session… | `Cmd+\` | Quick panel: the active session's actions, new session, backends (`with Grok…` / `with Kimi Code…` show live subscription usage from Service Manager when available). `Cmd+Alt+\` is an alias |
 | Session List | - | Scratch list of live + saved sessions |
-| Session List Reveal (keep focus) | - | Reveal list without stealing focus |
+| Reveal Session from List (keep focus) | - | Show the row's session, focus stays on the list |
 | Toggle Session List / View | `Cmd+Shift+\` | Sessions list ↔ session view |
 | Next / Previous Session | `Ctrl+]` / `Ctrl+[` | Cycle this window's sessions (sleeping too), from the sheet or the list; the list follows |
 | Open Session JSONL | - | Open this session’s transcript |
@@ -528,26 +528,26 @@ always passed — never a fresh session).
 
 - **Sleep** — kills the bridge process; view shows `⏸`
 - **Wake** — press Enter in a sleeping view, or **Wake Session**
-- Switch panel shows sleeping sessions with `⏸`
+- The switch panel shows a sleeping active session with `⏸`
 - `auto_sleep_minutes` auto-sleeps idle sessions (default 60 if omitted; `0` =
   disabled). Timer starts when a turn *ends*. **Toggle Auto-Sleep for This
   Session** sets `sleep_disabled` on that sheet only
 - **Hide Session** closes the view but keeps the bridge running
 - The **Session List** shows CURRENT (`▸` bound, `●` working, `?` waiting,
-  `!` unread, `○` ready, `⏸` sleeping) above HISTORY, children under their
+  `!` unread, `✘` halted on an error, `○` ready, `⏸` sleeping) above HISTORY, children under their
   parent with `↳`. Closing a parent asks about its children. Resumed
   transcripts show host-injected prompts as `⚙ …`, never the raw tag block.
 
 ### Fork / switch / undo
 
-- **Fork Session** / **Fork Session...** — branch from the current or a saved
+- **Fork Session** / **Fork Session…** — branch from the current or a saved
   transcript (`resume_id` + `fork=True`)
 - MCP `spawn_session(fork_current=…)` / `fork_from_agent_id=…` — same backend
   family only (`list_backends` reports the rule)
 - **Undo Message** — Claude jsonl rewind / Grok conversation-only rewind.
   Synthetic turns tagged `channel` / `timer` / `inject` are skipped so old
   transcripts stay clean
-- **Search Sessions** / **View Session History...** / **Open Session JSONL**
+- **Search Sessions…** / **Show Session History…** / **Open Session JSONL**
 
 ## Output View
 
