@@ -184,6 +184,21 @@ def subsession_notify_key(prompt):
     return ("subsession:" + m.group(0).lower()) if m else ""
 
 
+def subsession_display(child_session):
+    # type: (Any) -> str
+    """The ◎ row for a child's completion: its name, never its report."""
+    name = ""
+    try:
+        name = str(getattr(child_session, "display_name", None)
+                   or getattr(child_session, "name", None) or "").strip()
+    except Exception:
+        name = ""
+    name = " ".join(name.split())
+    if len(name) > 60:
+        name = name[:59] + "…"
+    return "📬 %s finished" % name if name else "📬 Subsession complete"
+
+
 def is_stock_subsession_wake(prompt):
     # type: (str) -> bool
     s = (prompt or "").lstrip()
@@ -880,15 +895,20 @@ class SessionRegistry:
                     entry.get("child_id"),
                 )
 
+            shown = subsession_display(child_session)
             try:
                 if getattr(parent, "working", False):
-                    parent.queue_prompt(body)
+                    parent.queue_prompt(body, display=shown)
                 elif getattr(parent, "is_sleeping", False):
                     parent._queued_prompts = merge_subsession_queue(
                         getattr(parent, "_queued_prompts", None) or [], body)
+                    try:
+                        parent._queued_display[body] = shown
+                    except Exception:
+                        pass
                     parent.wake()
                 else:
-                    parent.query(body, display_prompt="📬 Subsession complete")
+                    parent.query(body, display_prompt=shown)
                 delivered_parents.add(parent_key)
                 n += 1
                 mark_child_parent_notified(child_session)

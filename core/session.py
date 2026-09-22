@@ -321,6 +321,10 @@ class Session:
         self._resume_cwd_resolved = ""
         self._queued_prompts = []  # type: List[str]
         self._queued_ctx = {}  # type: Dict[str, dict]
+        # Queued prompt text → the short row it is shown as (chips, and the
+        # ◎ row when it fires). A subsession's completion carries the child's
+        # whole report; the sheet shows "📬 <child> finished", not the report.
+        self._queued_display = {}  # type: Dict[str, str]
         self._inject_pending = False
         self._interrupt_stream = False
         self._interrupting = False
@@ -1138,6 +1142,7 @@ class Session:
             dropped = self._queued_prompts.pop(idx)
             try:
                 (self._queued_ctx or {}).pop(dropped, None)
+                self._queued_display.pop(dropped, None)
             except Exception:
                 pass
             self._update_queue_phantom()
@@ -1155,6 +1160,7 @@ class Session:
         text = self._queued_prompts.pop(idx)
         try:
             (self._queued_ctx or {}).pop(text, None)
+            self._queued_display.pop(text, None)
         except Exception:
             pass
         self._update_queue_phantom()
@@ -1182,13 +1188,15 @@ class Session:
             pass
         return True
 
-    def queue_prompt(self, prompt):
-        # type: (str) -> None
+    def queue_prompt(self, prompt, display=None):
+        # type: (str, Optional[str]) -> None
         prompt = (prompt or "").strip()
         if not prompt:
             return
         self._bind_context_to_queued(prompt)
         self._queued_prompts[:] = merge_subsession_queue(self._queued_prompts, prompt)
+        if display:
+            self._queued_display[prompt] = str(display)
         self._update_queue_phantom()
         # A turn that is being cancelled must not receive the message: an
         # inject into it either dies with the turn or surfaces one round late.
@@ -1328,7 +1336,10 @@ class Session:
         self._firing_queue = True
         try:
             meta = (getattr(self, "_queued_ctx", None) or {}).pop(prompt, None)
-            if is_synthetic_turn(prompt):
+            display = (getattr(self, "_queued_display", None) or {}).pop(prompt, None)
+            if display:
+                self.query(prompt, display_prompt=display)
+            elif is_synthetic_turn(prompt):
                 first = prompt.lstrip().split("\n", 1)[0][:60]
                 self.query(prompt, display_prompt="⚙ %s" % first, silent=True)
             elif meta:

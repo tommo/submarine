@@ -2250,12 +2250,18 @@ class MCPSocketServer:
             if not inject:
                 session._pending_signal_complete = None
                 return
+            shown = "📬 Subsession complete"
+            label = _try_import("core.registry.subsession_display")
+            if label is not None:
+                try:
+                    shown = label(session)
+                except Exception:
+                    pass
             try:
                 if parent_session.working:
-                    parent_session.queue_prompt(wake_prompt)
+                    parent_session.queue_prompt(wake_prompt, display=shown)
                 else:
-                    parent_session.query(
-                        wake_prompt, display_prompt="📬 Subsession complete")
+                    parent_session.query(wake_prompt, display_prompt=shown)
                 mark = _try_import("core.registry.mark_child_parent_notified")
                 if mark is not None:
                     mark(session)

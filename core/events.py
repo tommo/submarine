@@ -269,7 +269,12 @@ class BridgeEventRouter:
                 self.on_queue(message)
             return
         if self.on_query is not None:
-            self.on_query(message, None)
+            # A bridge-held message is never something the user typed here:
+            # a short row, not the body (a subsession's report ran pages).
+            first = " ".join(message.split("\n", 1)[0].split())
+            display = "📬 Subsession complete" if "Subsession " in first else (
+                "📨 %s" % (first[:60] + ("…" if len(first) > 60 else "")))
+            self.on_query(message, display)
 
     def notification_wake(self, params):
         # type: (dict) -> None
