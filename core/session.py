@@ -680,7 +680,11 @@ class Session:
 
         effort = self._resolve_effort(spec)
         self.effort = effort
-        if self.backend == "grok" or not self.resume_id:
+        # Every start sends it — a resume/wake included. Effort is a process
+        # option, not part of the transcript, and the model default moved
+        # (Opus 5.5: `medium`, one below Opus 5's `high`): a woken session
+        # silently ran at that default instead of the configured level.
+        if self.backend == "grok" or not self.resume_id or _is_claude_bridge(spec):
             init_params["effort"] = effort
         elif self.profile and self.profile.get("effort"):
             init_params["effort"] = effort

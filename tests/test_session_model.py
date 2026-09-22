@@ -254,3 +254,24 @@ class ProviderLineTest(unittest.TestCase):
         s.start()
         s._on_init({"status": "initialized", "session_id": "old"})
         self.assertEqual(s.output.texts, [])
+
+
+class EffortOnResumeTest(unittest.TestCase):
+    """Effort is a process option, not transcript state: a woken Claude
+    session has to send it again. Opus 5.5 defaults to `medium` (Opus 5 to
+    `high`), so a resume that skipped it quietly ran one level lower."""
+
+    def test_a_resumed_claude_session_sends_the_configured_effort(self):
+        from tests.fakes import FakeClient, make_session
+        s = make_session(client=FakeClient(), backend="claude",
+                         resume_id="old", settings={"effort": "high"})
+        s.start()
+        params = [p for m, p, _cb in s.client.sent if m == "initialize"][0]
+        self.assertEqual(params.get("resume"), "old")
+        self.assertEqual(params.get("effort"), "high")
+
+    def test_the_opus_alias_is_labelled_opus_5_5(self):
+        from backend import specs
+        models = dict(specs.BACKENDS["claude"].default_models)
+        self.assertEqual(models["opus"], "Opus 5.5")
+        self.assertIn("claude-opus-5-5", models)

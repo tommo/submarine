@@ -4,7 +4,8 @@
     "python_path": "python3",
 
     // Default model when no profile is selected
-    // Options: "opus", "sonnet", "haiku"
+    // Options: "opus", "sonnet", "haiku" — the CLI's aliases ("opus" is
+    // Opus 5.5 on claude 2.1.280+), or a pinned id such as "claude-opus-5-5"
     "default_model": "opus",
 
     // Default provider (backend) for a bare "New Session". Defaults to "claude"

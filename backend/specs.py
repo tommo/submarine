@@ -88,9 +88,11 @@ BACKENDS = {
         fallback_model="opus",
         default_models=[
             ("claude-fable-5-1", "Fable 5.1"),
-            ("opus", "Opus 5"),
+            # The CLI's alias (claude 2.1.280+ maps it to claude-opus-5-5).
+            ("opus", "Opus 5.5"),
             ("sonnet", "Sonnet 5"),
             ("haiku", "Haiku 4.5"),
+            ("claude-opus-5-5", "Opus 5.5 (pinned)"),
             ("claude-opus-5", "Opus 5 (pinned)"),
             ("claude-sonnet-5", "Sonnet 5 (pinned)"),
             ("claude-fable-5", "Fable 5"),
