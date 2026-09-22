@@ -71,6 +71,15 @@ class PiBridge:
         self._question_id: int = 0
         # Guard: once finalize_query fires, agent_end must not fire a second result
         self._query_finalized: bool = False
+        # pi thinking level (off/minimal/low/medium/high/xhigh); "" = default
+        self.effort: str = ""
+
+    @staticmethod
+    def _pi_level(effort) -> str:
+        """Host effort → a pi thinking level (it has no `max`)."""
+        e = str(effort or "").strip().lower()
+        e = {"max": "xhigh", "none": "off"}.get(e, e)
+        return e if e in ("off", "minimal", "low", "medium", "high", "xhigh") else ""
 
     def log(self, msg: str) -> None:
         sys.stderr.write(f"[pi-bridge] {msg}\n")
@@ -88,6 +97,8 @@ class PiBridge:
         args = [pi_cmd, "--mode", "rpc", "--no-session"]
         if session_file:
             args.extend(["--session", session_file])
+        if self.effort:
+            args.extend(["--thinking", self.effort])
 
         self.log(f"spawning: {' '.join(args)} cwd={cwd or os.getcwd()}")
 
@@ -491,6 +502,15 @@ class PiBridge:
                 send_result(mid, {"services": []})
             elif method == "set_model":
                 send_result(mid, {"ok": True})
+            elif method == "set_effort":
+                self.effort = self._pi_level(params.get("effort"))
+                if self._pi_stdin is None or not self.effort:
+                    send_result(mid, {"ok": False, "live": False,
+                                      "reason": "pi is not running"})
+                else:
+                    self._send_pi({"type": "set_thinking_level", "level": self.effort})
+                    send_result(mid, {"ok": True, "live": True,
+                                      "applied": self.effort})
             elif method == "list_notifications":
                 send_result(mid, {"notifications": []})
             elif method == "poll_bg_tasks":
@@ -505,6 +525,7 @@ class PiBridge:
         """Initialize: spawn pi subprocess."""
         cwd = params.get("cwd") or os.getcwd()
         resume_id = params.get("resume")
+        self.effort = self._pi_level(params.get("effort"))
         await self._spawn_pi(cwd=cwd, session_file=resume_id)
         send_result(rid, {
             "status": "initialized",

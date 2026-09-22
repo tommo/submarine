@@ -235,6 +235,10 @@ class SessionMixin:
         await self.apply_mode()
         if self.model:
             await self.apply_model()
+        try:
+            await self.apply_effort()
+        except Exception as e:
+            self.log(f"effort not applied: {e}")
         self.file_log(
             f"clear: {old} → {self.session_id} model={self.model}")
         send_result(req_id, {
@@ -357,6 +361,10 @@ class SessionMixin:
             await self.apply_mode()
             if self.model:
                 await self.apply_model()
+            try:
+                await self.apply_effort()
+            except Exception as e:
+                self.log(f"effort not applied: {e}")
 
             send_result(req_id, {
                 "status": "initialized",
@@ -556,6 +564,9 @@ class SessionMixin:
             self.agent_mode = want or cur
             # Clamp to advertised list
             self.agent_mode = self._resolve_set_mode_id()
+        opts = result.get("configOptions")
+        if isinstance(opts, list):
+            self._config_options = [o for o in opts if isinstance(o, dict)]
         models = result.get("models") or {}
         if models.get("availableModels"):
             self._available_models = models["availableModels"]
@@ -705,6 +716,81 @@ class SessionMixin:
             })
         except Exception as e:
             send_error(req_id, -32000, f"set_model failed: {e}")
+
+    # Rank of the effort names hosts send, for mapping onto whatever an agent
+    # advertises (Kimi: low / high / max).
+    _EFFORT_RANK = {"none": 0, "off": 0, "minimal": 1, "low": 2, "medium": 3,
+                    "high": 4, "xhigh": 5, "max": 6}
+
+    def _effort_option(self) -> Optional[dict]:
+        """The agent's thought-level config option, if it advertises one."""
+        for opt in self._config_options or []:
+            if opt.get("category") == "thought_level" or opt.get("id") in (
+                    "thinking", "thought_level", "reasoning_effort", "effort"):
+                return opt
+        return None
+
+    def _effort_value(self, opt: dict, effort: str) -> str:
+        """The advertised value closest to `effort` (ties go up)."""
+        values = [str(o.get("value")) for o in (opt.get("options") or [])
+                  if isinstance(o, dict) and o.get("value") is not None]
+        if not values:
+            return ""
+        if effort in values:
+            return effort
+        want = self._EFFORT_RANK.get(effort)
+        if want is None:
+            return ""
+        ranked = [(abs(self._EFFORT_RANK.get(v, 99) - want),
+                   -self._EFFORT_RANK.get(v, 0), v) for v in values]
+        return min(ranked)[2]
+
+    async def apply_effort(self) -> str:
+        """Push self.effort through the agent's thought-level option.
+
+        Returns the value the agent now has ("" when it has no such option —
+        Grok takes effort only as a spawn flag).
+        """
+        opt = self._effort_option()
+        if not opt or not self.session_id or not self.effort:
+            return ""
+        value = self._effort_value(opt, self.effort)
+        if not value:
+            return ""
+        if str(opt.get("currentValue") or "") == value:
+            return value
+        result = await self._send_acp("session/set_config_option", {
+            "sessionId": self.session_id,
+            "configId": opt.get("id"),
+            "value": value,
+        }) or {}
+        # The agent answers with its full option set: that is the truth.
+        opts = result.get("configOptions") if isinstance(result, dict) else None
+        if isinstance(opts, list) and opts:
+            self._config_options = [o for o in opts if isinstance(o, dict)]
+            now = self._effort_option() or {}
+            value = str(now.get("currentValue") or value)
+        else:
+            opt["currentValue"] = value
+        self.file_log(f"effort → {opt.get('id')}={value}")
+        return value
+
+    async def handle_set_effort(self, req_id: Optional[int],
+                                params: dict) -> None:
+        """Live effort change where the agent has a thought-level option."""
+        self.effort = self.normalize_effort(params.get("effort"))
+        if not self._effort_option():
+            send_result(req_id, {"ok": False, "live": False,
+                                 "reason": "%s takes effort only at start"
+                                 % self.BACKEND_NAME})
+            return
+        try:
+            applied = await self.apply_effort()
+        except Exception as e:
+            send_result(req_id, {"ok": False, "live": False, "reason": str(e)})
+            return
+        send_result(req_id, {"ok": bool(applied), "live": bool(applied),
+                             "applied": applied or None})
 
     async def handle_set_permission_mode(self, req_id: Optional[int],
                                           params: dict) -> None:

@@ -870,6 +870,11 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
                     "(official ↔ (CC) …), keeping its history",
                 ])
                 actions.append(("change_provider", active_session))
+            items.append([
+                "◈ Select Effort… (now %s)" % (active_session.effort or "default"),
+                "Change THIS session's effort — live on Claude (low–xhigh)",
+            ])
+            actions.append(("select_effort", active_session))
             items.append(["🍴 Fork Session", "Create new session with copy of history"])
             actions.append(("fork", active_session))
 
@@ -908,6 +913,10 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
                 return
             if action == "set_model":
                 sublime.set_timeout(lambda: self.run(backend=backend, model=data), 0)
+                return
+            if action == "select_effort":
+                sublime.set_timeout(
+                    lambda: self.window.run_command("submarine_select_effort"), 0)
                 return
             if action == "change_provider":
                 sublime.set_timeout(

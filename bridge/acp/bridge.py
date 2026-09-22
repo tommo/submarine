@@ -104,6 +104,10 @@ class AcpBridge(TransportMixin, SessionMixin, UpdatesMixin,
         self._loading_session: bool = False
         self._in_plan_mode: bool = False
         self._available_modes: List[dict] = []
+        # ACP session config options (session/new|load `configOptions`):
+        # Kimi advertises `thinking` (category thought_level) there, which
+        # session/set_config_option changes live.
+        self._config_options: List[dict] = []
         self._available_models: List[dict] = []
         self._resumed: bool = False
         self._resume_fallback: bool = False
@@ -290,6 +294,7 @@ class AcpBridge(TransportMixin, SessionMixin, UpdatesMixin,
     def extra_dispatch(self):
         return {
             "set_model": self.handle_set_model,
+            "set_effort": self.handle_set_effort,
             "set_permission_mode": self.handle_set_permission_mode,
             # plan_response: BaseBridge.handle_plan_response (+ mode switch override)
             "rewind_points": self.handle_rewind_points,

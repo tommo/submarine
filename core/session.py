@@ -260,6 +260,13 @@ class Session:
         # "deepseek-v4-pro[1m]"). `model` becomes whatever the provider
         # reported back, which is meaningless to a different provider.
         self.model_request = ""  # type: str
+        # Effort picked for THIS session (Select Effort…); beats the profile
+        # and settings defaults, and is saved so a wake keeps it.
+        self.effort_override = None  # type: Optional[str]
+        # CLAUDE_CODE_EFFORT_LEVEL in a Claude-bridge session's env (a custom
+        # provider's extra_env): the CLI lets it beat --effort AND live
+        # settings, so effort cannot change while it is set.
+        self.effort_pin = None  # type: Optional[str]
         self.available_models = []  # type: list
         self.model = (str(model).strip() if model else None)  # type: Optional[str]
         self.name = None  # type: Optional[str]
@@ -553,6 +560,8 @@ class Session:
 
         label = getattr(spec, "label", None) or self.backend
         self.provider_label = str(label)
+        self.effort_pin = (str(env.get("CLAUDE_CODE_EFFORT_LEVEL") or "").strip()
+                           or None) if _is_claude_bridge(spec) else None
         stamp_identity(
             self.persist,
             **{
@@ -645,6 +654,8 @@ class Session:
                     self.context_usage = saved_entry.get("context_usage")
                 if saved_entry.get("plan_file"):
                     self.plan_file = saved_entry.get("plan_file")
+                if saved_entry.get("effort") and not self.effort_override:
+                    self.effort_override = str(saved_entry.get("effort"))
                 if saved_entry.get("goal"):
                     self._saved_goal_json = saved_entry.get("goal")
                 if saved_entry.get("last_activity"):
@@ -680,16 +691,13 @@ class Session:
 
         effort = self._resolve_effort(spec)
         self.effort = effort
-        # Every start sends it — a resume/wake included. Effort is a process
-        # option, not part of the transcript, and the model default moved
-        # (Opus 5.5: `medium`, one below Opus 5's `high`): a woken session
-        # silently ran at that default instead of the configured level.
-        if self.backend == "grok" or not self.resume_id or _is_claude_bridge(spec):
-            init_params["effort"] = effort
-        elif self.profile and self.profile.get("effort"):
-            init_params["effort"] = effort
-        elif spec is not None and getattr(spec, "effort", None):
-            init_params["effort"] = effort
+        # Every start sends it — a resume/wake included, every backend. Effort
+        # is a process option, not part of the transcript, and model defaults
+        # move (Opus 5.5: `medium`, one below Opus 5's `high`): a woken
+        # session silently ran at that default instead of the configured one.
+        init_params["effort"] = effort
+        if self.effort_pin:
+            self.effort = self.effort_pin      # what the CLI will really use
         if effort:
             stamp_identity(self.persist, **{STAMP_EFFORT: effort})
 
@@ -1564,6 +1572,116 @@ class Session:
         if not self._send("clear", {}, _on_clear):
             self.restart()
 
+    # How each backend takes an effort change. "live": the bridge applies it
+    # to the running process (bridge `set_effort`); "restart": only at spawn,
+    # so the session restarts with its history.
+    #   claude bridge: CLI flag settings, low–xhigh (`max` is a spawn flag)
+    #   kimi: ACP config option `thinking` (low / high / max)
+    #   codex: app-server turn/start `effort`, from the next turn
+    #   pi: RPC set_thinking_level
+    #   grok: --reasoning-effort at spawn only
+    def effort_levels(self):
+        # type: () -> List[str]
+        """Effort levels this session takes ([] when it takes none)."""
+        backend = self.backend or ""
+        if _is_claude_bridge(self._spec()):
+            return [] if self.effort_pin else ["low", "medium", "high", "xhigh", "max"]
+        if backend == "grok":
+            if grok_backend is not None:
+                try:
+                    if not grok_backend.model_supports_reasoning_effort(self.model or ""):
+                        return []
+                except Exception:
+                    pass
+            return ["low", "medium", "high", "xhigh"]
+        if backend == "kimi":
+            return ["low", "high", "max"]
+        if backend == "codex":
+            return ["low", "medium", "high", "xhigh"]
+        if backend == "pi":
+            return ["off", "low", "medium", "high", "xhigh"]
+        return ["low", "medium", "high"]
+
+    def _effort_is_live(self, level):
+        # type: (str) -> bool
+        if _is_claude_bridge(self._spec()):
+            return level != "max"
+        return (self.backend or "") in ("kimi", "codex", "pi")
+
+    def set_effort(self, level, on_done=None):
+        # type: (str, Optional[Callable[[bool, str], None]]) -> Tuple[bool, str]
+        """Change THIS session's effort — live where the backend allows it,
+        else a restart with its history; asleep, stored for the wake. The
+        pick is saved with the session. `on_done(ok, detail)` reports the
+        live path's outcome, which arrives asynchronously."""
+        level = str(level or "").strip().lower()
+        levels = self.effort_levels()
+        if not levels:
+            if self.effort_pin:
+                return False, (
+                    "effort is pinned to %s by the %s config "
+                    "(CLAUDE_CODE_EFFORT_LEVEL) — edit the provider to change it"
+                    % (self.effort_pin, self.provider_label or self.backend))
+            return False, "%s · %s takes no effort setting" % (
+                self.provider_label or self.backend, self.model or "this model")
+        if level not in levels:
+            return False, "%s takes effort %s, not %s" % (
+                self.provider_label or self.backend, " / ".join(levels),
+                level or "(none)")
+
+        def _commit():
+            self.effort_override = level
+            self.effort = level
+            stamp_identity(self.persist, **{STAMP_EFFORT: level})
+            try:
+                self._save_session()
+            except Exception:
+                pass
+            try:
+                self.chrome.refresh_tab_title()
+            except Exception:
+                pass
+
+        if not (self.client and self.initialized):
+            _commit()
+            return True, "effort %s — applies when the session starts" % level
+
+        def _restart(why):
+            _commit()
+            self.restart()
+            return True, "effort %s — restarting with the session history%s" % (
+                level, (" (%s)" % why) if why else "")
+
+        if self._effort_is_live(level):
+            def _on_result(result):
+                res = (result or {}).get("result") if isinstance(result, dict) else None
+                res = res if isinstance(res, dict) else (result or {})
+                if res.get("ok"):
+                    _commit()
+                    applied = res.get("applied")
+                    detail = "effort %s — live" % level
+                    if applied and applied != level:
+                        detail += " (%s)" % applied   # e.g. Kimi max for xhigh
+                    if on_done is not None:
+                        on_done(True, detail)
+                    return
+                why = res.get("reason") or "not applied"
+                if self.working:
+                    if on_done is not None:
+                        on_done(False, "%s — interrupt, then try again" % why)
+                    return
+                ok, detail = _restart(why)
+                if on_done is not None:
+                    on_done(ok, detail)
+
+            if self._send("set_effort", {"effort": level}, _on_result):
+                return True, "effort %s…" % level
+            return False, "bridge not reachable"
+
+        if self.working:
+            return False, "the session is mid-turn — interrupt it first"
+        return _restart("")
+
     def _shutdown_client(self):
         # type: () -> None
         """Stop the bridge process without touching the sheet."""
@@ -1936,6 +2054,8 @@ class Session:
             entry["agent_id_aliases"] = aliases
         if self.model:
             entry["model"] = self.model
+        if self.effort_override:
+            entry["effort"] = self.effort_override
         if self._pending_resume_at:
             entry["resume_session_at"] = self._pending_resume_at
         # Carry-over fields: a restored-but-not-started session has none of
@@ -2836,6 +2956,8 @@ class Session:
 
     def _resolve_effort(self, spec):
         # type: (Any) -> str
+        if self.effort_override:
+            return str(self.effort_override).strip()
         if self.profile and self.profile.get("effort"):
             return str(self.profile["effort"]).strip()
         pe = getattr(spec, "effort", None) if spec is not None else None

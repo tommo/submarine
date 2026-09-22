@@ -40,6 +40,7 @@ from .provider_cmds import (  # noqa: F401
     SubmarineGenerateProviderModelsCommand,
     SubmarineChangeProviderCommand,
     SubmarineSelectEffortCommand,
+    SubmarineSetDefaultEffortCommand,
     SubmarineSelectModelCommand,
     SubmarineSetDefaultModelCommand,
     SubmarineSetDefaultProviderCommand,

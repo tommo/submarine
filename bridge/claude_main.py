@@ -216,6 +216,8 @@ class Bridge:
                 if max_ctx:
                     os.environ["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(max_ctx)
                 send_result(id, {"ok": True})
+            elif method == "set_effort":
+                await self.set_effort(id, params)
             elif method == "set_permission_mode":
                 mode = params.get("mode")
                 if mode and self.client:
@@ -1357,6 +1359,50 @@ Agent ID: {agent_id_info}
                 "subtype": message.subtype,
                 "data": message.data,
             })
+
+    # Levels the CLI's `effortLevel` setting accepts. `max` is a start flag
+    # only (--effort max): through apply_flag_settings it is silently dropped
+    # and the flag layer's value is cleared, falling back to userSettings.
+    LIVE_EFFORT = ("low", "medium", "high", "xhigh")
+
+    async def set_effort(self, id: int, params: dict) -> None:
+        """Change effort for the running session, no restart.
+
+        Uses the CLI's `apply_flag_settings` control request — the same
+        session-scoped layer `--settings` feeds — and reads the result back
+        from `get_settings` (`applied.effort` is what the next API request
+        uses). `live: false` means the caller has to restart for it.
+        """
+        effort = str(params.get("effort") or "").strip()
+        if effort not in self.LIVE_EFFORT:
+            send_result(id, {"ok": False, "live": False,
+                             "reason": "%s needs a restart" % (effort or "that level")})
+            return
+        query = getattr(self.client, "_query", None) if self.client else None
+        control = getattr(query, "_send_control_request", None)
+        if not callable(control):
+            send_result(id, {"ok": False, "live": False,
+                             "reason": "this SDK cannot change effort live"})
+            return
+        try:
+            await control({"subtype": "apply_flag_settings",
+                           "settings": {"effortLevel": effort}})
+            got = await control({"subtype": "get_settings"})
+            applied = str(((got or {}).get("applied") or {}).get("effort") or "")
+        except Exception as e:
+            send_result(id, {"ok": False, "live": False, "reason": str(e)})
+            return
+        if applied and applied != effort:
+            send_result(id, {"ok": False, "live": False, "applied": applied,
+                             "reason": "the CLI kept %s" % applied})
+            return
+        # A later /clear rebuilds the client from these options.
+        if self.options is not None:
+            try:
+                self.options.effort = effort
+            except Exception:
+                pass
+        send_result(id, {"ok": True, "live": True, "applied": applied or effort})
 
     async def interrupt(self, id: int) -> None:
         """Interrupt the running turn — ours or one the CLI started itself."""

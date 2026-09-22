@@ -641,31 +641,59 @@ class SubmarineChangeProviderCommand(sublime_plugin.WindowCommand):
 
 
 class SubmarineSelectEffortCommand(sublime_plugin.WindowCommand):
-    LEVELS = ["low", "medium", "high", "max"]
+    """Effort for THIS session — live where the backend allows it."""
 
     def run(self):
         s = get_active_session(self.window)
         if not s:
             sublime.status_message("No active session")
             return
+        levels = s.effort_levels()
+        current = str(getattr(s, "effort", "") or "")
+        items = [("● %s" % lv) if lv == current else ("   %s" % lv) for lv in levels]
+        selected = levels.index(current) if current in levels else -1
+
+        def report(ok, detail):
+            sublime.set_timeout(
+                lambda: sublime.status_message("Submarine: %s" % detail), 0)
 
         def on_select(idx):
             if idx < 0:
                 return
-            level = self.LEVELS[idx]
-            settings = sublime.load_settings(SETTINGS_FILE)
-            settings.set("effort", level)
-            sublime.save_settings(SETTINGS_FILE)
-            s.effort = level
-            if s.output and s.output.view:
-                keys.write_setting(s.output.view.settings(), keys.EFFORT, level)
-            sublime.status_message(
-                "Effort set to %s — takes effect on next session restart" % level)
+            ok, detail = s.set_effort(levels[idx], on_done=report)
+            sublime.status_message("Submarine: %s" % detail)
 
-        self.window.show_quick_panel(self.LEVELS, on_select)
+        self.window.show_quick_panel(
+            items, on_select, selected_index=selected,
+            placeholder="Effort for this session")
 
     def is_enabled(self):
         return get_active_session(self.window) is not None
+
+
+class SubmarineSetDefaultEffortCommand(sublime_plugin.WindowCommand):
+    """The `effort` setting — what new sessions start with."""
+
+    LEVELS = ["low", "medium", "high", "xhigh", "max"]
+
+    def run(self):
+        settings = sublime.load_settings(SETTINGS_FILE)
+        current = str(settings.get("effort") or "high")
+        items = [("● %s" % lv) if lv == current else ("   %s" % lv) for lv in self.LEVELS]
+        selected = self.LEVELS.index(current) if current in self.LEVELS else -1
+
+        def on_select(idx):
+            if idx < 0:
+                return
+            settings.set("effort", self.LEVELS[idx])
+            sublime.save_settings(SETTINGS_FILE)
+            sublime.status_message(
+                "Submarine: default effort %s — new sessions start with it"
+                % self.LEVELS[idx])
+
+        self.window.show_quick_panel(
+            items, on_select, selected_index=selected,
+            placeholder="Default effort for new sessions")
 
 
 def _apply_session_model(session, real_model):

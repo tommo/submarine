@@ -228,6 +228,10 @@
         "command": "submarine_select_model"
     },
     {
+        "caption": "Submarine: Set Default Effort…",
+        "command": "submarine_set_default_effort"
+    },
+    {
         "caption": "Submarine: Set Default Model…",
         "command": "submarine_set_default_model"
     },

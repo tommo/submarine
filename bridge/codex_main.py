@@ -280,6 +280,9 @@ class CodexBridge(BaseBridge):
         self.turn_id: Optional[str] = None
         self.session_id: Optional[str] = None
         self.codex_request_counter = 1
+        # Reasoning effort for the next turn/start ("" = the model's default).
+        # app-server takes it per turn, so a change is live from the next turn.
+        self.effort: str = ""
 
         # Map our permission_id → codex server-request id
         # NOTE: pending_approvals stores codex request IDs (int), not Futures —
@@ -372,6 +375,7 @@ class CodexBridge(BaseBridge):
     async def _initialize(self, req_id: int, params: dict) -> None:
         cwd = params.get("cwd", os.getcwd())
         model = params.get("model")
+        self.effort = self._codex_effort(params.get("effort"))
         permission_mode = params.get("permission_mode", "default")
         agent_id = params.get("agent_id", "")
 
@@ -576,10 +580,25 @@ class CodexBridge(BaseBridge):
                 else:
                     user_input.append({"type": "image", "url": img})
 
-        self._turn_start_req_id = await self.codex_request("turn/start", {
-            "threadId": self.thread_id,
-            "input": user_input,
-        })
+        turn = {"threadId": self.thread_id, "input": user_input}
+        if self.effort:
+            turn["effort"] = self.effort
+        self._turn_start_req_id = await self.codex_request("turn/start", turn)
+
+    @staticmethod
+    def _codex_effort(effort) -> str:
+        """Host effort → a Codex ReasoningEffort (it has no `max`)."""
+        e = str(effort or "").strip().lower()
+        return {"max": "xhigh", "off": "minimal", "none": "minimal"}.get(e, e)
+
+    def extra_dispatch(self):
+        return {"set_effort": self.handle_set_effort}
+
+    async def handle_set_effort(self, req_id, params: dict) -> None:
+        """Live: the next turn/start carries it."""
+        self.effort = self._codex_effort(params.get("effort"))
+        send_result(req_id, {"ok": True, "live": True,
+                             "applied": self.effort or None})
 
     async def handle_interrupt(self, req_id, params=None) -> None:
         """Interrupt current turn."""

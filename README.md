@@ -181,7 +181,8 @@ All commands available via Command Palette (`Cmd+Shift+P`): type "Submarine"
 | Clear Output (Keep Last Round) | `Cmd+K` | Clear older rounds, keep last turn |
 | Undo Message | `Cmd+Shift+Z` | Rewind last conversation turn (caret in history) |
 | Search Sessions… | - | Search all sessions by title |
-| Select Effort… | - | Set reasoning effort |
+| Select Effort… | - | Effort for this session. Live on Claude/(CC) (low–xhigh), Kimi (low/high/max), Codex (next turn), Pi; Claude `max` and Grok restart it with its history. A provider pinning `CLAUDE_CODE_EFFORT_LEVEL` can't change it |
+| Set Default Effort… | - | The `effort` setting new sessions start with |
 | Select Model… | - | Set model for the current session |
 | Set Default Model… | - | Default model for a backend |
 | Refresh Models | - | Refresh live model lists |
