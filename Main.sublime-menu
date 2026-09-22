@@ -6,7 +6,7 @@
                 "caption": "Submarine",
                 "children": [
                     {
-                        "caption": "Start Session",
+                        "caption": "New Session",
                         "command": "submarine_start"
                     },
                     {
@@ -26,11 +26,11 @@
                         "command": "submarine_toggle_list"
                     },
                     {
-                        "caption": "Query Submarine",
+                        "caption": "Query",
                         "command": "submarine_query"
                     },
                     {
-                        "caption": "Query Selection",
+                        "caption": "Query Selection…",
                         "command": "submarine_query_selection"
                     },
                     { "caption": "-" },
@@ -57,7 +57,7 @@
                     },
                     { "caption": "-" },
                     {
-                        "caption": "Settings...",
+                        "caption": "Edit Settings…",
                         "command": "edit_settings",
                         "args": {
                             "base_file": "${packages}/Submarine/Submarine.sublime-settings",
@@ -65,7 +65,7 @@
                         }
                     },
                     {
-                        "caption": "Output Settings...",
+                        "caption": "Edit Output Settings…",
                         "command": "edit_settings",
                         "args": {
                             "base_file": "${packages}/Submarine/SubmarineOutput.sublime-settings",

@@ -131,8 +131,8 @@ All commands available via Command Palette (`Cmd+Shift+P`): type "Submarine"
 | Command | Keybinding | Description |
 |---------|------------|-------------|
 | Query | - | Focus / start a session and query |
-| Query Selection | - | Query about selected code |
-| Query File | - | Query about current file |
+| Query Selection… | - | Query about selected code |
+| Query File… | - | Query about current file |
 | Copy Session ID | - | Copy the current session id |
 | Codex: New Session | - | Start a fresh Codex session |
 | Pi: New Session | - | Start a fresh Pi session |
@@ -144,10 +144,10 @@ All commands available via Command Palette (`Cmd+Shift+P`): type "Submarine"
 | Add Open Files | - | Add all open files to context |
 | Add Current Folder | - | Add folder path to context |
 | Clear Context | - | Clear pending context |
-| Goal Status | - | Print host goal status |
-| Goal Pause | - | Pause the host goal |
-| Goal Resume | - | Resume a paused goal |
-| Goal Clear | - | Clear the host goal |
+| Show Goal Status | - | Print host goal status |
+| Pause Goal | - | Pause the host goal |
+| Resume Goal | - | Resume a paused goal |
+| Clear Goal | - | Clear the host goal |
 | Devtools Snapshot | - | Dump host + focus JSON |
 | Devtools Sessions | - | Dump all host sessions |
 | Devtools Composer | - | Dump sticky ◎ geometry |
@@ -168,45 +168,45 @@ All commands available via Command Palette (`Cmd+Shift+P`): type "Submarine"
 | Quick Agent Config… | - | Configure Quick backend / model / effort |
 | Quick Agent Stop | - | Stop all Quick slots |
 | Fork Session | - | Fork current session (branch conversation) |
-| Fork Session... | - | Fork from a live or saved session |
+| Fork Session… | - | Fork from a live or saved session |
 | Restart Session | - | Restart current session with a profile |
-| Restart New | - | Fresh session in this view, same provider/model |
-| Change Provider for Current Session… | `Cmd+Ctrl+Alt+P` | Swap provider mid-session (Claude-bridge family) |
+| Restart Session (new conversation) | - | Fresh conversation in this sheet, same provider/model |
+| Select Provider… | `Cmd+Ctrl+Alt+P` | Move this session to another Claude-bridge provider (restarts with its history) |
 | Toggle Tasks Fold | `Cmd+Alt+T` | Expand/collapse the Tasks list in-view |
-| Resume Session... | - | Resume a previous session |
-| Rename Session... | - | Name the current session |
+| Resume Session… | - | Resume a previous session |
+| Rename Session… | - | Name the current session |
 | Stop Session | - | Disconnect and stop |
 | Toggle Output | - | Show/hide output view |
 | Clear Output | `Cmd+Ctrl+Alt+C` | Clear output view (`Cmd+Shift+K` in the sheet) |
 | Clear Output (Keep Last Round) | `Cmd+K` | Clear older rounds, keep last turn |
 | Undo Message | `Cmd+Shift+Z` | Rewind last conversation turn (caret in history) |
-| Search Sessions | - | Search all sessions by title |
-| Select Effort | - | Set reasoning effort |
-| Select Model | - | Set model for the current session |
-| Set Default Model | - | Default model for a backend |
+| Search Sessions… | - | Search all sessions by title |
+| Select Effort… | - | Set reasoning effort |
+| Select Model… | - | Set model for the current session |
+| Set Default Model… | - | Default model for a backend |
 | Refresh Models | - | Refresh live model lists |
-| Manage Anthropic Providers | - | Add/edit/pin/test providers (wizard) |
-| Start Custom Provider Session | - | Start on a pinned Anthropic-compatible provider |
-| Generate Provider Model Config | - | Fetch a provider’s live models → alias mapping |
-| Set Default Provider | - | Default backend for a plain New Session |
+| Manage Anthropic Providers… | - | Add/edit/pin/test providers (wizard) |
+| New Session with Provider… | - | Start on a pinned Anthropic-compatible provider |
+| Generate Provider Model Config… | - | Fetch a provider’s live models → alias mapping |
+| Set Default Provider… | - | Default backend for a plain New Session |
 | Copy Conversation | - | Copy the conversation |
 | Interrupt | `Alt+Escape` | Stop current query (`Cmd+Shift+Escape`; `Ctrl+C` with empty selection in the sheet) |
-| Permission Mode... | - | Change permission settings |
+| Select Permission Mode… | - | Change permission settings |
 | Add MCP Tools to Project | - | Write `.claude/settings.json` MCP server config |
-| Manage Auto-Allowed Tools... | - | Configure tools that skip permission prompts |
+| Manage Auto-Allowed Tools… | - | Configure tools that skip permission prompts |
 | Reset Input Mode | - | Re-enter the sticky ◎ composer |
-| Queue Prompt | - | Queue a prompt while a turn is running |
+| Queue Prompt… | - | Queue a prompt while a turn is running |
 | Send Now (cancel turn) | `Cmd+Enter` | Cancel the in-flight turn and send now (`Ctrl+Enter` too) |
-| View Session History... | - | Browse saved history |
+| Show Session History… | - | Browse saved history |
 | Show Usage | - | Show usage / cost |
-| View / Edit / Clear Retain Content | - | Session retain file |
-| Edit Project Retain | - | Open `{project}/.claude/RETAIN.md` |
+| Show / Edit / Clear Retain Content | - | Session retain file |
+| Edit Project Retain Content | - | Open `{project}/.claude/RETAIN.md` |
 | Open Link at Cursor | `Cmd+click` | Open a link in the output view |
 | Toggle Auto-Sleep for This Session | - | Disable/enable auto-sleep on this sheet |
 | Toggle Submit Key (Enter / Cmd+Enter) | - | Flip `submit_with_modifier` |
 | Sleep Session | - | Put session to sleep (free resources) |
 | Wake Session | - | Wake a sleeping session |
-| Output Settings | - | Edit `SubmarineOutput.sublime-settings` |
+| Edit Output Settings | - | Edit `SubmarineOutput.sublime-settings` |
 
 Session list (when that scratch view is focused): `Enter` open, `r` rename,
 `v` reveal, `s` star, `j` / `Shift+J` JSONL, `Delete` / `Backspace` close.
@@ -294,7 +294,7 @@ Tools > Submarine
 
 ### Context Menu
 
-Right-click selected text and choose "Ask Submarine" to query about the selection.
+Right-click selected text and choose "Query Selection…" to ask about it.
 
 ## Settings
 
@@ -386,7 +386,7 @@ A legacy `"checkpoints"` key is ignored.
 
 ### Auto-Allowed Tools
 
-**Command:** `Submarine: Manage Auto-Allowed Tools...`
+**Command:** `Submarine: Manage Auto-Allowed Tools…`
 
 **Settings:** project `.claude/settings.json` or user `~/.claude.json`
 (`autoAllowedMcpTools`, plus `permissions.allow` patterns are merged in):
@@ -446,7 +446,7 @@ Qwen, OpenRouter, …). Each entry lives under `custom_providers` in settings:
 | `auth_via_api_key` | `true` → `ANTHROPIC_API_KEY` instead of `AUTH_TOKEN` |
 | `opus_model` / `sonnet_model` / `haiku_model` / `subagent_model` | Alias mappings |
 | `label` / `abbrev` | Display + tab abbreviation |
-| `pinned` | Show in Start Custom Provider / Set Default pickers (default `false`) |
+| `pinned` | Show in New Session with Provider / Set Default pickers (default `false`) |
 | `effort` | Per-provider override (`low`/`medium`/`high`/`max`); blank → global `effort` |
 | `extra_env` | Extra env defaults |
 
@@ -518,7 +518,7 @@ cumulative cost.
 **Multiple sessions per window** — each New Session creates a separate output
 view. Switch with `Cmd+\` or **Session List**.
 
-Use **Submarine: Resume Session...** to pick and continue a previous conversation.
+Use **Submarine: Resume Session…** to pick and continue a previous conversation.
 
 After Sublime restarts, orphaned output views are registered as sleeping
 sessions. Press Enter or use **Wake Session** to reconnect (`resume_id` is

@@ -32,11 +32,11 @@
         "command": "step_fun_start"
     },
     {
-        "caption": "Submarine: Query Selection",
+        "caption": "Submarine: Query Selection…",
         "command": "submarine_query_selection"
     },
     {
-        "caption": "Submarine: Query File",
+        "caption": "Submarine: Query File…",
         "command": "submarine_query_file"
     },
     {
@@ -60,19 +60,19 @@
         "command": "submarine_clear_context"
     },
     {
-        "caption": "Submarine: Goal Status",
+        "caption": "Submarine: Show Goal Status",
         "command": "submarine_goal_status"
     },
     {
-        "caption": "Submarine: Goal Pause",
+        "caption": "Submarine: Pause Goal",
         "command": "submarine_goal_pause"
     },
     {
-        "caption": "Submarine: Goal Resume",
+        "caption": "Submarine: Resume Goal",
         "command": "submarine_goal_resume"
     },
     {
-        "caption": "Submarine: Goal Clear",
+        "caption": "Submarine: Clear Goal",
         "command": "submarine_goal_clear"
     },
     {
@@ -113,7 +113,7 @@
         "command": "submarine_session_list"
     },
     {
-        "caption": "Submarine: Artifacts…",
+        "caption": "Submarine: Show Artifacts…",
         "command": "submarine_artifacts"
     },
     {
@@ -121,7 +121,7 @@
         "command": "submarine_terminal_open"
     },
     {
-        "caption": "Submarine: Session List Reveal (keep focus)",
+        "caption": "Submarine: Reveal Session from List (keep focus)",
         "command": "submarine_session_list_reveal"
     },
     {
@@ -168,7 +168,7 @@
         "command": "submarine_fork"
     },
     {
-        "caption": "Submarine: Fork Session...",
+        "caption": "Submarine: Fork Session…",
         "command": "submarine_fork_from"
     },
     {
@@ -176,11 +176,11 @@
         "command": "submarine_restart"
     },
     {
-        "caption": "Submarine: Restart New",
+        "caption": "Submarine: Restart Session (new conversation)",
         "command": "submarine_restart_new"
     },
     {
-        "caption": "Submarine: Change Provider for Current Session…",
+        "caption": "Submarine: Select Provider…",
         "command": "submarine_change_provider"
     },
     {
@@ -188,11 +188,11 @@
         "command": "submarine_toggle_tasks_fold"
     },
     {
-        "caption": "Submarine: Resume Session...",
+        "caption": "Submarine: Resume Session…",
         "command": "submarine_resume"
     },
     {
-        "caption": "Submarine: Rename Session...",
+        "caption": "Submarine: Rename Session…",
         "command": "submarine_rename"
     },
     {
@@ -216,19 +216,19 @@
         "command": "submarine_undo_message"
     },
     {
-        "caption": "Submarine: Search Sessions",
+        "caption": "Submarine: Search Sessions…",
         "command": "submarine_search_sessions"
     },
     {
-        "caption": "Submarine: Select Effort",
+        "caption": "Submarine: Select Effort…",
         "command": "submarine_select_effort"
     },
     {
-        "caption": "Submarine: Select Model",
+        "caption": "Submarine: Select Model…",
         "command": "submarine_select_model"
     },
     {
-        "caption": "Submarine: Set Default Model",
+        "caption": "Submarine: Set Default Model…",
         "command": "submarine_set_default_model"
     },
     {
@@ -236,19 +236,19 @@
         "command": "submarine_refresh_models"
     },
     {
-        "caption": "Submarine: Manage Anthropic Providers",
+        "caption": "Submarine: Manage Anthropic Providers…",
         "command": "submarine_manage_providers"
     },
     {
-        "caption": "Submarine: Start Custom Provider Session",
+        "caption": "Submarine: New Session with Provider…",
         "command": "submarine_start_custom_provider"
     },
     {
-        "caption": "Submarine: Generate Provider Model Config",
+        "caption": "Submarine: Generate Provider Model Config…",
         "command": "submarine_generate_provider_models"
     },
     {
-        "caption": "Submarine: Set Default Provider",
+        "caption": "Submarine: Set Default Provider…",
         "command": "submarine_set_default_provider"
     },
     { "caption": "-" },
@@ -261,7 +261,7 @@
         "command": "submarine_interrupt"
     },
     {
-        "caption": "Submarine: Permission Mode...",
+        "caption": "Submarine: Select Permission Mode…",
         "command": "submarine_toggle_permission_mode"
     },
     {
@@ -269,7 +269,7 @@
         "command": "submarine_add_mcp"
     },
     {
-        "caption": "Submarine: Manage Auto-Allowed Tools...",
+        "caption": "Submarine: Manage Auto-Allowed Tools…",
         "command": "submarine_manage_auto_allowed_tools"
     },
     {
@@ -277,7 +277,7 @@
         "command": "submarine_reset_input"
     },
     {
-        "caption": "Submarine: Queue Prompt",
+        "caption": "Submarine: Queue Prompt…",
         "command": "submarine_queue_prompt"
     },
     {
@@ -285,7 +285,7 @@
         "command": "submarine_send_now"
     },
     {
-        "caption": "Submarine: View Session History...",
+        "caption": "Submarine: Show Session History…",
         "command": "submarine_view_history"
     },
     {
@@ -293,7 +293,7 @@
         "command": "submarine_usage"
     },
     {
-        "caption": "Submarine: View Retain Content",
+        "caption": "Submarine: Show Retain Content",
         "command": "submarine_retain",
         "args": {"action": "view"}
     },
@@ -308,7 +308,7 @@
         "args": {"action": "clear"}
     },
     {
-        "caption": "Submarine: Edit Project Retain",
+        "caption": "Submarine: Edit Project Retain Content",
         "command": "submarine_project_retain"
     },
     {
@@ -332,7 +332,7 @@
         "command": "submarine_wake_session"
     },
     {
-        "caption": "Submarine: Output Settings",
+        "caption": "Submarine: Edit Output Settings",
         "command": "edit_settings",
         "args": {
             "base_file": "${packages}/Submarine/SubmarineOutput.sublime-settings",
