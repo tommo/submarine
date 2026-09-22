@@ -79,3 +79,79 @@ class TestQuestionSurvivesSwitch(_SingleViewCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _LockingView(object):
+    """RecordingView ignores set_read_only; these tests are about the lock."""
+
+    @staticmethod
+    def install():
+        from tests.test_single_view import RecordingView
+        saved = (RecordingView.set_read_only, RecordingView.is_read_only)
+        RecordingView.set_read_only = lambda self, v: setattr(self, "_ro", bool(v))
+        RecordingView.is_read_only = lambda self: bool(getattr(self, "_ro", False))
+        return saved
+
+    @staticmethod
+    def remove(saved):
+        from tests.test_single_view import RecordingView
+        RecordingView.set_read_only, RecordingView.is_read_only = saved
+
+
+class TestModalSheetStaysLockedAcrossASwitch(_SingleViewCase):
+    """A sheet whose tail is a question / plan approval, switched away from
+    and back to. Its previous snapshot (taken with the composer open) was
+    carried forward: the re-attach turned input mode back on at that
+    snapshot's offsets (`input_start` near the top), so the edit guard took
+    the whole sheet for the draft and the view was editable end to end —
+    and handle_plan_key ignores keys while the composer claims input mode,
+    so the plan could not be answered either."""
+
+    def setUp(self):
+        super().setUp()
+        install_sublime()
+        self._saved = _LockingView.install()
+        self.win = RecordingWindow()
+        self.hv = HostView.for_window(self.win)
+
+    def tearDown(self):
+        _LockingView.remove(self._saved)
+        super().tearDown()
+
+    def _modal_then_switch(self, open_modal):
+        a, ao, _ac = _live(self.win, "front")
+        b, bo, _bc = _live(self.win, "asker")
+        self.hv.attach(self.win, b)
+        b._enter_input_with_draft()
+        self.hv.attach(self.win, a)                  # b snapshotted WITH composer
+        a._enter_input_with_draft()
+        self.hv.attach(self.win, b)
+        b.query("ask")
+        open_modal(bo)
+        self.hv.attach(self.win, a)                  # away …
+        a.scheduler.fire_all()
+        self.hv.attach(self.win, b)                  # … and back
+        b.scheduler.fire_all()
+        return b, bo
+
+    def _assert_locked(self, bo):
+        view = bo.view
+        self.assertFalse(bo.composer._input_mode, "composer flag resurrected under the modal")
+        self.assertFalse(keys.read_setting(view.settings(), keys.INPUT_MODE, False))
+        self.assertTrue(view.is_read_only(), "the sheet is editable under the modal")
+
+    def test_a_question_sheet_comes_back_locked_and_answerable(self):
+        answered = []
+        b, bo = self._modal_then_switch(
+            lambda o: o.question_request(3, Q, lambda ans: answered.append(ans)))
+        self._assert_locked(bo)
+        self.assertTrue(bo.handle_question_key("1"))
+        self.assertEqual(answered, [{"pick": "x"}])
+
+    def test_a_plan_approval_comes_back_locked_and_answerable(self):
+        responses = []
+        b, bo = self._modal_then_switch(
+            lambda o: o.plan_approval_request(5, "/tmp/plan.md", [], responses.append))
+        self._assert_locked(bo)
+        self.assertTrue(bo.handle_plan_key("y"), "plan keys ignored after the switch")
+        self.assertEqual(len(responses), 1)

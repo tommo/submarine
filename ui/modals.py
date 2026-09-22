@@ -83,6 +83,17 @@ class ModalUI:
         st = view.settings()
         keys.write_setting(st, keys.HAS_QUESTION, has_q)
         keys.write_setting(st, keys.HAS_MODAL, has_m)
+        if has_m and not q_input and c is not None:
+            # The host view is shared: its read-only flag and INPUT_MODE stamp
+            # may still be the previous session's, and a stale snapshot may
+            # have re-opened the composer flag. The modal owns the tail.
+            if getattr(c, "_input_mode", False):
+                c._input_mode = False
+            keys.write_setting(st, keys.INPUT_MODE, False)
+            try:
+                view.set_read_only(True)
+            except Exception:
+                pass
         if has_q:
             keys.write_setting(st, keys.INPUT_MODE, False)
             try:

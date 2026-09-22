@@ -300,8 +300,21 @@ class SubmarineOutputView(FormatHelpers):
         }
         prev = self._surface or {}
         # If the composer was already peeled (HostView/QuickHost exit input
-        # before unbinding), keep the last snapshot's draft/caret/input_mode.
-        if not surface["input_mode"] and prev.get("input_mode"):
+        # before unbinding), keep the last snapshot's draft/caret/input_mode —
+        # unless a question / permission / plan owns the tail now. That older
+        # snapshot's offsets point into a buffer that no longer exists; carried
+        # forward, the re-attach turned input mode on at them and the whole
+        # sheet became "draft" (editable end to end under the modal).
+        modal = False
+        try:
+            modal = bool(c.has_turn_modal_ui())
+        except Exception:
+            modal = False
+        if modal:
+            surface["input_mode"] = False
+            surface["input_start"] = 0
+            surface["input_area_start"] = 0
+        elif not surface["input_mode"] and prev.get("input_mode"):
             surface["input_mode"] = True
             surface["draft"] = prev.get("draft") or surface["draft"]
             surface["caret"] = prev.get("caret", surface["caret"])
@@ -469,6 +482,11 @@ class SubmarineOutputView(FormatHelpers):
             print("[Submarine] rehydrate question input: %s" % e)
         want_input = bool(surface.get("input_mode"))
         draft = surface.get("draft") or ""
+        try:
+            if want_input and self.composer.has_turn_modal_ui():
+                want_input = False      # a modal owns the tail: no composer
+        except Exception:
+            pass
         if want_input:
             c = self.composer
             c._detached_draft = draft
