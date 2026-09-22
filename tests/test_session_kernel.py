@@ -341,7 +341,7 @@ class TestInitializeParams(unittest.TestCase):
         s = make_session(
             client=client,
             persist=persist,
-            settings={"default_model": "grok-4.6"},
+            settings={"default_models": {"grok": "grok-4.6"}},
             backend="grok",
             cwd="/tmp/proj",
         )

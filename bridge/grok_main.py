@@ -55,7 +55,7 @@ def remap_cwd_grok_bundled_path(path: str, cwd: str,
 
 class GrokBridge(AcpBridge):
     BACKEND_NAME = "grok"
-    DEFAULT_MODEL = "grok-4.6"
+    DEFAULT_MODEL = "grok-4.7"
     LOG_PATH = os.path.join(
         os.environ.get("TMPDIR")
         or os.environ.get("TEMP")
@@ -89,9 +89,12 @@ class GrokBridge(AcpBridge):
         MODEL_ALIASES = dict(_GB_ALIASES)
     except Exception:
         MODEL_ALIASES = {
+            "grok-4.7": "grok-4.7",
+            "grok-4.7-build-fast": "grok-4.7-build-fast",
+            "grok-4.7-fast": "grok-4.7-build-fast",
             "grok-4.6": "grok-4.6",
-            "grok-4.5": "grok-4.6",
-            "grok-4-fast": "grok-4-fast",
+            "grok-4.5": "grok-4.7",
+            "grok-4-fast": "grok-4.7-build-fast",
             "grok-composer-2.5-fast": "grok-composer-2.5-fast",
             "composer": "grok-composer-2.5-fast",
             "composer-2.5": "grok-composer-2.5-fast",

@@ -12,8 +12,9 @@ from typing import Any, Iterable, List, Optional, Tuple
 # Curated picker only (current defaults). Older grok-4.x stay in ALIASES
 # for set_model if already saved, but are not listed.
 GROK_MODELS = [  # type: List[Tuple[str, str]]
+    ("grok-4.7", "Grok 4.7"),
+    ("grok-4.7-build-fast", "Grok 4.7 Fast"),
     ("grok-4.6", "Grok 4.6"),
-    ("grok-composer-2.5-fast", "Composer 2.5"),
     ("deepseek-v4-pro", "DeepSeek V4 Pro"),
     ("deepseek-v4-flash", "DeepSeek V4 Flash"),
     ("deepseek-v4-flash-vision-exp", "DeepSeek V4 Flash Vision"),
@@ -29,9 +30,13 @@ _GROK_PICKER_HIDDEN = frozenset({
 
 # Short aliases → wire modelId for spawn / set_model
 GROK_MODEL_ALIASES = {
+    "grok-4.7": "grok-4.7",
+    "grok-4.7-build-fast": "grok-4.7-build-fast",
+    "grok-4.7-fast": "grok-4.7-build-fast",
+    "fast": "grok-4.7-build-fast",
     "grok-4.6": "grok-4.6",
-    "grok-4.5": "grok-4.6",  # legacy saved sessions → current default
-    "grok-4-fast": "grok-composer-2.5-fast",  # legacy → current fast
+    "grok-4.5": "grok-4.7",  # legacy saved sessions → current default
+    "grok-4-fast": "grok-4.7-build-fast",  # legacy → current fast
     "grok-composer-2.5-fast": "grok-composer-2.5-fast",
     "composer": "grok-composer-2.5-fast",
     "composer-2.5": "grok-composer-2.5-fast",
@@ -346,7 +351,7 @@ def apply_deepseek_shared_window_config(path=None) -> bool:
     return True
 
 
-def normalize_grok_model(model_id: Optional[str], default: str = "grok-4.6") -> str:
+def normalize_grok_model(model_id: Optional[str], default: str = "grok-4.7") -> str:
     if not model_id:
         return default
     key = model_id.strip()
@@ -425,7 +430,7 @@ def _picker_hide(mid):
     if low.startswith("grok-") and m not in curated:
         if any(low.startswith(p) for p in (
             "grok-2", "grok-3", "grok-4", "grok-beta", "grok-vision",
-        )) and not low.startswith("grok-4.6"):
+        )) and not low.startswith(("grok-4.6", "grok-4.7")):
             return True
     return False
 
