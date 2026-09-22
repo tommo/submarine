@@ -113,7 +113,7 @@ if (cm) {
   const mono = 'ui-monospace, SFMono-Regular, Menlo, "JetBrains Mono", monospace';
 
   const sheetTheme = EditorView.theme({
-    '&': { backgroundColor: '#1f2430', color: '#cbccc6', height: '100%', fontSize: '12.5px' },
+    '&': { backgroundColor: '#1f2430', color: '#cbccc6', height: '100%', fontSize: 'calc(12.5px * var(--fs, 1))' },
     '.cm-scroller': { fontFamily: mono, lineHeight: '1.55', overflow: 'auto' },
     '.cm-content': { padding: '8px 0 24px', caretColor: '#ffcc66' },
     '.cm-line': { padding: '0 12px 0 6px' },
@@ -135,7 +135,7 @@ if (cm) {
   }, { dark: true });
 
   const composerTheme = EditorView.theme({
-    '&': { backgroundColor: '#1f2430', color: '#cbccc6', fontSize: '13px', borderRadius: '5px', border: '1px solid #2f333d' },
+    '&': { backgroundColor: '#1f2430', color: '#cbccc6', fontSize: 'calc(13px * var(--fs, 1))', borderRadius: '5px', border: '1px solid #2f333d' },
     '&.cm-focused': { outline: 'none', borderColor: '#4a5568' },
     '.cm-scroller': { fontFamily: mono, lineHeight: '1.5', maxHeight: '40vh', overflow: 'auto' },
     '.cm-content': { padding: '6px 0', caretColor: '#ffcc66', minHeight: '3.2em' },

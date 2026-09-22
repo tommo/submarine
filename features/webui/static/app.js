@@ -143,6 +143,31 @@ function note(text) {
   noteTimer = setTimeout(() => { el.hidden = true; }, 4000);
 }
 
+// Text size: every font-size in style.css is Npx × --fs (the editors read the
+// same variable). Per browser, like the history toggle.
+const FS_KEY = 'submarine_web_fs';
+const FS_MIN = 0.8, FS_MAX = 1.6, FS_STEP = 0.1;
+function readScale() {
+  try {
+    const v = parseFloat(localStorage.getItem(FS_KEY) || '');
+    if (Number.isFinite(v) && v >= FS_MIN && v <= FS_MAX) return v;
+  } catch (e) { /* private mode */ }
+  return 1;
+}
+function applyScale(v, announce) {
+  v = Math.round(Math.min(FS_MAX, Math.max(FS_MIN, v)) * 10) / 10;
+  document.documentElement.style.setProperty('--fs', String(v));
+  try { localStorage.setItem(FS_KEY, String(v)); } catch (e) { /* private mode */ }
+  // CodeMirror measures line heights once; a size change is a resize to it.
+  window.dispatchEvent(new Event('resize'));
+  if (announce) note('Text ' + Math.round(v * 100) + '%');
+  return v;
+}
+function stepScale(dir) {
+  applyScale(readScale() + dir * FS_STEP, true);
+}
+applyScale(readScale(), false);
+
 function clearError() {
   const el = $('error');
   el.hidden = true;
@@ -1484,6 +1509,8 @@ function wire() {
     // the sheet is already down to one round.
     clearSheet(!!e.shiftKey);
   });
+  $('fs-down').addEventListener('click', (e) => { e.stopPropagation(); stepScale(-1); });
+  $('fs-up').addEventListener('click', (e) => { e.stopPropagation(); stepScale(+1); });
   $('rename').addEventListener('click', () => { $('head-actions').classList.remove('open'); renameSession(); });
   $('close').addEventListener('click', () => { $('head-actions').classList.remove('open'); closeSession(); });
   $('more-actions').addEventListener('click', (e) => { e.stopPropagation(); $('head-actions').classList.toggle('open'); });
