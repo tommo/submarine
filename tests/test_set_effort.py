@@ -140,7 +140,7 @@ class OtherBackendsTest(unittest.TestCase):
 
     def test_levels_follow_the_backend(self):
         self.assertEqual(self._session("kimi").effort_levels(), ["low", "high", "max"])
-        self.assertNotIn("max", self._session("codex").effort_levels())
+        self.assertIn("max", self._session("codex").effort_levels())
         self.assertIn("off", self._session("pi").effort_levels())
         ok, why = self._session("kimi").set_effort("medium")
         self.assertFalse(ok)

@@ -1601,7 +1601,9 @@ class Session:
         if backend == "kimi":
             return ["low", "high", "max"]
         if backend == "codex":
-            return ["low", "medium", "high", "xhigh"]
+            # The bridge clamps to what the model advertises (gpt-5.5 has
+            # no `max`) and reports the level it applied.
+            return ["low", "medium", "high", "xhigh", "max"]
         if backend == "pi":
             return ["off", "low", "medium", "high", "xhigh"]
         return ["low", "medium", "high"]

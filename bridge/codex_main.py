@@ -283,6 +283,7 @@ class CodexBridge(BaseBridge):
         # Reasoning effort for the next turn/start ("" = the model's default).
         # app-server takes it per turn, so a change is live from the next turn.
         self.effort: str = ""
+        self.model: str = ""
 
         # Map our permission_id → codex server-request id
         # NOTE: pending_approvals stores codex request IDs (int), not Futures —
@@ -386,6 +387,8 @@ class CodexBridge(BaseBridge):
         if not model or any(m in model.lower() for m in claude_models):
             model = "gpt-6-astra"
         config.append(f'model="{model}"')
+        self.model = model
+        self.effort = self._clamp_effort(self.effort)
 
         # Map permission modes to codex approval_policy
         # Valid: untrusted, on-failure, on-request, granular, never
@@ -585,18 +588,49 @@ class CodexBridge(BaseBridge):
             turn["effort"] = self.effort
         self._turn_start_req_id = await self.codex_request("turn/start", turn)
 
+    _EFFORT_ORDER = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+
     @staticmethod
     def _codex_effort(effort) -> str:
-        """Host effort → a Codex ReasoningEffort (it has no `max`)."""
+        """Host effort → a Codex ReasoningEffort name."""
         e = str(effort or "").strip().lower()
-        return {"max": "xhigh", "off": "minimal", "none": "minimal"}.get(e, e)
+        return {"off": "minimal", "none": "minimal"}.get(e, e)
+
+    def _supported_efforts(self) -> list:
+        """Efforts the current model advertises (~/.codex/models_cache.json).
+        Codex's own catalog: gpt-6-astra goes to `ultra`, gpt-5.5 stops at
+        `xhigh`. [] when unknown — then the request passes through as is."""
+        try:
+            home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+            with open(os.path.join(home, "models_cache.json"), encoding="utf-8") as f:
+                models = (json.load(f) or {}).get("models") or []
+        except Exception:
+            return []
+        want = str(getattr(self, "model", "") or "")
+        for m in models:
+            if isinstance(m, dict) and m.get("slug") == want:
+                return [str(e.get("effort")) for e in (m.get("supported_reasoning_levels") or [])
+                        if isinstance(e, dict) and e.get("effort")]
+        return []
+
+    def _clamp_effort(self, effort: str) -> str:
+        """The highest supported effort not above `effort`."""
+        if not effort:
+            return effort
+        supported = self._supported_efforts()
+        if not supported or effort in supported:
+            return effort
+        order = self._EFFORT_ORDER
+        rank = order.index(effort) if effort in order else len(order)
+        below = [e for e in supported if e in order and order.index(e) <= rank]
+        return below[-1] if below else supported[0]
 
     def extra_dispatch(self):
         return {"set_effort": self.handle_set_effort}
 
     async def handle_set_effort(self, req_id, params: dict) -> None:
         """Live: the next turn/start carries it."""
-        self.effort = self._codex_effort(params.get("effort"))
+        self.effort = self._clamp_effort(self._codex_effort(params.get("effort")))
         send_result(req_id, {"ok": True, "live": True,
                              "applied": self.effort or None})
 

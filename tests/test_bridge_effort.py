@@ -61,9 +61,34 @@ class AcpEffortTest(unittest.TestCase):
 class CodexEffortTest(unittest.TestCase):
     def test_host_levels_become_codex_reasoning_efforts(self):
         from codex_main import CodexBridge
-        self.assertEqual(CodexBridge._codex_effort("max"), "xhigh")
+        self.assertEqual(CodexBridge._codex_effort("max"), "max")
         self.assertEqual(CodexBridge._codex_effort("medium"), "medium")
         self.assertEqual(CodexBridge._codex_effort(None), "")
+
+    def test_effort_clamps_to_what_the_model_advertises(self):
+        import json
+        import os
+        import tempfile
+        from codex_main import CodexBridge
+        home = tempfile.mkdtemp()
+        with open(os.path.join(home, "models_cache.json"), "w") as f:
+            json.dump({"models": [
+                {"slug": "gpt-5.5", "supported_reasoning_levels": [
+                    {"effort": e} for e in ("low", "medium", "high", "xhigh")]},
+                {"slug": "gpt-6-astra", "supported_reasoning_levels": [
+                    {"effort": e} for e in ("low", "medium", "high", "xhigh", "max", "ultra")]},
+            ]}, f)
+        b = CodexBridge.__new__(CodexBridge)
+        os.environ["CODEX_HOME"] = home
+        try:
+            b.model = "gpt-5.5"
+            self.assertEqual(b._clamp_effort("max"), "xhigh")
+            b.model = "gpt-6-astra"
+            self.assertEqual(b._clamp_effort("max"), "max")
+            b.model = "unknown-model"
+            self.assertEqual(b._clamp_effort("max"), "max", "unknown passes through")
+        finally:
+            os.environ.pop("CODEX_HOME", None)
 
 
 class PiEffortTest(unittest.TestCase):
