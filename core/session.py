@@ -172,6 +172,12 @@ def auto_sleep_due(session, now, timeout_min):
     return True, effective_idle
 
 
+# Every Claude-bridge provider (official and each `(CC) …` one) maps these
+# three names to a real model of its own, so they are the only model ids that
+# survive a move between providers.
+CC_MODEL_ALIASES = ("opus", "sonnet", "haiku")
+
+
 def _is_claude_bridge(spec):
     # type: (Any) -> bool
     script = os.path.basename(getattr(spec, "bridge_script", "") or "")
@@ -246,6 +252,14 @@ class Session:
         self.profile = profile
         self.initial_context = initial_context
         self.effort = None  # type: Optional[str]
+        # The provider label this session started under ("Claude",
+        # "(CC) StepFun", …). Each finished turn keeps it, so the @done line
+        # never borrows the host view's current stamps.
+        self.provider_label = ""  # type: str
+        # The model id this session ASKED for ("opus", "claude-opus-5",
+        # "deepseek-v4-pro[1m]"). `model` becomes whatever the provider
+        # reported back, which is meaningless to a different provider.
+        self.model_request = ""  # type: str
         self.available_models = []  # type: list
         self.model = (str(model).strip() if model else None)  # type: Optional[str]
         self.name = None  # type: Optional[str]
@@ -538,6 +552,7 @@ class Session:
                     env.setdefault(k, v)
 
         label = getattr(spec, "label", None) or self.backend
+        self.provider_label = str(label)
         stamp_identity(
             self.persist,
             **{
@@ -688,6 +703,7 @@ class Session:
         if chosen_raw:
             real_model, _ = resolve_model_id(chosen_raw)
             init_params["model"] = real_model
+            self.model_request = str(chosen_raw)
             self.model = real_model
             stamp_identity(self.persist, **{STAMP_MODEL: real_model})
         if self.backend == "grok" and init_params.get("model") and grok_backend is not None:
@@ -769,6 +785,15 @@ class Session:
                     "\n*Session reopened without agent transcript "
                     "(UI history kept; model starts fresh).*\n"
                 )
+            except Exception:
+                pass
+        if not self.resume_id or self.fork:
+            # A fresh sheet says what it is talking to before the first
+            # prompt: the provider and model the session actually started
+            # with (profile → session → default), so a wrong default or a
+            # leftover pick is visible at once, not after the first reply.
+            try:
+                self.output.text("\n*%s*\n" % self.provider_line())
             except Exception:
                 pass
         self.chrome.set_status("ready")
@@ -1535,10 +1560,61 @@ class Session:
         if not self._send("clear", {}, _on_clear):
             self.restart()
 
+    def _shutdown_client(self):
+        # type: () -> None
+        """Stop the bridge process without touching the sheet."""
+        client = self.client
+        if client is None:
+            return
+        self.client = None
+        self.bg.abort()
+        try:
+            if not client.send("shutdown", {}, lambda _: client.stop()):
+                client.stop()
+        except Exception:
+            try:
+                client.stop()
+            except Exception:
+                pass
+
+    def model_for_backend(self, backend, spec=None):
+        # type: (str, Any) -> str
+        """The model to run `backend` with when this session moves to it.
+
+        An alias (opus/sonnet/haiku) is the one id every Claude-bridge
+        provider understands, so it moves as-is. A concrete id belongs to the
+        provider that named it — `deepseek-v4-pro[1m]` means nothing to
+        Anthropic, and `claude-opus-5` nothing to DeepSeek — so the new
+        backend's own default is used instead.
+        """
+        if spec is None and backend_specs is not None:
+            try:
+                spec = backend_specs.get(backend, self.settings)
+            except Exception:
+                spec = None
+        for candidate in (self.model_request, self.model):
+            if str(candidate or "").strip() in CC_MODEL_ALIASES:
+                return str(candidate).strip()
+        defaults = self.settings.get("default_models") or {}
+        return str(
+            defaults.get(backend)
+            or getattr(spec, "fallback_model", None)
+            or self.settings.get("default_model")
+            or "opus"
+        )
+
     def change_backend(self, new_backend):
-        # type: (str) -> bool
+        # type: (str) -> Tuple[bool, str]
+        """Move this session to another Claude-bridge provider.
+
+        Official ↔ any `(CC) …` provider: same bridge, same transcript, so
+        the session restarts on the new provider with its history. Returns
+        (ok, reason) — the caller says why nothing happened.
+        """
+        if not new_backend:
+            return False, "no provider given"
         if new_backend == self.backend:
-            return False
+            return False, "already on this provider"
         cur_spec = self._spec()
         new_spec = None
         if backend_specs is not None:
@@ -1546,24 +1622,52 @@ class Session:
                 new_spec = backend_specs.get(new_backend, self.settings)
             except Exception:
                 new_spec = None
+        known = {}
+        if backend_specs is not None:
+            try:
+                known = backend_specs.all_backends(self.settings) or {}
+            except Exception:
+                known = {}
+        # `get()` answers with the Claude spec for a name it does not know,
+        # so the registry is what says whether the provider exists.
+        if new_spec is None or (known and new_backend not in known):
+            return False, "unknown provider %s" % new_backend
         if not _is_claude_bridge(cur_spec) or not _is_claude_bridge(new_spec):
-            return False
+            return False, (
+                "only Claude-bridge providers (official and (CC) …) share a "
+                "transcript; start a new session for %s" % new_backend)
         if self.working:
-            return False
-        if not self.session_id:
-            return False
+            return False, "the session is mid-turn — interrupt it first"
+        label = str(getattr(new_spec, "label", None) or new_backend)
+        model = self.model_for_backend(new_backend, new_spec)
         self.backend = new_backend
+        self.provider_label = label
+        self.model_request = model
+        self.model = model
         self.bg.backend = new_backend
         self.events.backend = new_backend
         stamp_identity(
             self.persist,
             **{
                 STAMP_BACKEND: new_backend,
-                STAMP_PROVIDER_LABEL: getattr(new_spec, "label", None) or new_backend,
+                STAMP_PROVIDER_LABEL: label,
+                STAMP_MODEL: model,
             }
         )
-        self.restart()
-        return True
+        if not self.session_id:
+            # Nothing to resume (no turn yet): drop the bridge and start a
+            # fresh one on the new provider. `restart()` sleeps first, and
+            # `sleep()` refuses without a session_id.
+            self._shutdown_client()
+            self.initialized = False
+            self.start()
+        else:
+            self.restart()
+        try:
+            self._save_session()
+        except Exception:
+            pass
+        return True, "%s · %s" % (label, model)
 
     def touch_access(self):
         # type: () -> None
@@ -2693,6 +2797,29 @@ class Session:
         if self._query_start is None:
             return 0.0
         return max(0.0, time.time() - self._query_start)
+
+    def provider_line(self):
+        # type: () -> str
+        """`Claude · claude-opus-5 · effort high` — what this session runs on."""
+        spec = self._spec()
+        label = (self.provider_label
+                 or getattr(spec, "label", None) or self.backend or "claude")
+        parts = [str(label)]
+        if self.model:
+            model = str(self.model)
+            name = ""
+            for entry in (getattr(spec, "default_models", None) or []):
+                if isinstance(entry, (list, tuple)) and len(entry) >= 2 \
+                        and entry[0] == model:
+                    name = str(entry[1])
+                    break
+            parts.append("%s (%s)" % (name, model) if name and name != model
+                         else model)
+        if getattr(self, "effort", None):
+            parts.append("effort %s" % self.effort)
+        if self.profile and self.profile.get("name"):
+            parts.append("profile %s" % self.profile.get("name"))
+        return " · ".join(parts)
 
     def _spec(self):
         # type: () -> Any

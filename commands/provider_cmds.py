@@ -627,7 +627,11 @@ class SubmarineChangeProviderCommand(sublime_plugin.WindowCommand):
         def on_select(idx):
             if idx < 0:
                 return
-            s.change_backend(names[idx])
+            ok, detail = s.change_backend(names[idx])
+            sublime.status_message(
+                "Submarine: %s" % (
+                    ("switched to %s — restarting with the session history"
+                     % detail) if ok else detail))
 
         self.window.show_quick_panel(
             items, on_select, placeholder="Change provider for current session…")

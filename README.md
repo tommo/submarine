@@ -463,9 +463,17 @@ providers field-by-field with a review/confirm step, plus per-provider
 
 ### Change provider on the fly
 
-**Submarine: Change Provider for Current Session** (`Cmd+Ctrl+Alt+P`) swaps a
-running session’s provider mid-conversation. Restricted to the Claude-bridge
-family (claude + custom providers). History is preserved via `--resume`.
+**Submarine: Select Provider…** (`Cmd+Ctrl+Alt+P`, or
+**⇄ Change Provider…** in `Cmd+\`) swaps a running session’s provider
+mid-conversation — official Claude ↔ any `(CC) …` provider (DeepSeek, GLM,
+StepFun, …). Same bridge, same transcript: the session restarts with
+`--resume`.
+
+The model moves only when it can: `opus` / `sonnet` / `haiku` are mapped by
+every provider, so they carry over; a concrete id (`deepseek-v4-pro[1m]`,
+`claude-opus-5`) means nothing to the other side, so the new provider's
+default is used. A refusal says why (mid-turn, unknown provider, or a backend
+outside the family — those need a new session).
 
 ## Context
 

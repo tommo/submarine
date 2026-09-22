@@ -235,3 +235,22 @@ class TestGrokVisionCatalog(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProviderLineTest(unittest.TestCase):
+    """A fresh sheet says what it runs on before the first prompt."""
+
+    def test_new_session_prints_provider_model_and_effort(self):
+        from tests.fakes import FakeClient, make_session
+        s = make_session(client=FakeClient(), backend="grok",
+                         settings={"effort": "high"})
+        s.start()
+        s._on_init({"status": "initialized", "session_id": "y", "model": "grok-4.7"})
+        self.assertEqual(s.output.texts, ["\n*Grok · Grok 4.7 (grok-4.7) · effort high*\n"])
+
+    def test_a_resumed_session_does_not(self):
+        from tests.fakes import FakeClient, make_session
+        s = make_session(client=FakeClient(), backend="claude", resume_id="old")
+        s.start()
+        s._on_init({"status": "initialized", "session_id": "old"})
+        self.assertEqual(s.output.texts, [])
