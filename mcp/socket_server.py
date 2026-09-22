@@ -80,6 +80,23 @@ def stop() -> None:
         _server = None
 
 
+def _parent_in_focus(window, parent_session):
+    """True when the window's focused view is the parent session's sheet."""
+    if window is None or parent_session is None:
+        return False
+    out = getattr(parent_session, "output", None)
+    view = getattr(out, "view", None) if out is not None else None
+    if view is None:
+        return False              # the parent itself is swapped out
+    try:
+        if not view.is_valid():
+            return False
+        active = window.active_view()
+        return active is not None and active.id() == view.id()
+    except Exception:
+        return False
+
+
 def _try_import(dotted: str) -> Any:
     mod_name, _, attr = dotted.rpartition(".")
     try:
@@ -1165,10 +1182,16 @@ class MCPSocketServer:
                 spawn_model = grok_backend.normalize_grok_model(spawn_model)
             except Exception:
                 pass
+        # A tool-created session takes the screen only when the user is
+        # looking at the session that asked for it. Otherwise it starts
+        # viewless (it shows in the Sessions list; reveal it from there) —
+        # attaching it would swap the shared host sheet out from under
+        # whatever the user is reading or typing in.
+        show = _parent_in_focus(window, parent_session)
         session = create_session(
             window, resume_id=resume_id, fork=fork, profile=profile_config,
             initial_context=initial_context, backend=backend, focus=False,
-            model=spawn_model,
+            model=spawn_model, show=show,
         )
         if name:
             session.name = name
