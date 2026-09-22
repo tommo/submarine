@@ -262,3 +262,33 @@ class SpinnerInsertGuardTest(unittest.TestCase):
         r.current.region = (0, 8)
         self.assertTrue(r._patch_spinner_glyph("◆"))
 
+
+
+class SpinnerStaleRegionTest(SpinnerInsertGuardTest):
+    """A tracked region whose end fell behind the transcript (a swap restored
+    an older tuple) must not make the patch "miss" the live glyph line and
+    insert a second one at the stale end — that put `  ◆` in the middle of a
+    line ("…reset to /ho ◆ me/me/proj"). The glyph line sits right before
+    the composer: that boundary is the search end, not the region's."""
+
+    def test_the_glyph_is_found_past_a_stale_region_end(self):
+        from tests.test_single_view import _Region
+        from ui import keys
+        from ui.models import Conversation
+        from ui.renderer import TurnRenderer
+
+        owner, events = self._owner()
+        body = "◎ hi ▶\nShell cwd was reset to /home/me/proj\n  ◇\n"
+        owner.view._content = body + "◎ draft"
+        stale_end = body.index("/ho") + 3          # mid-line, like the report
+        owner.view._regions = {keys.CONV_REGION: [_Region(0, stale_end)]}
+        owner.composer._input_start = len(body) + 2
+        owner.composer.peel_start = lambda: len(body)
+        r = TurnRenderer(owner)
+        r.current = Conversation(prompt="hi", working=True)
+        r.current.region = (0, stale_end)
+        self.assertTrue(r._patch_spinner_glyph("◆"))
+        self.assertEqual(
+            owner.view._content,
+            "◎ hi ▶\nShell cwd was reset to /home/me/proj\n  ◆\n◎ draft")
+        self.assertEqual([e[0] for e in events], ["replace"], "no insert, no shift")

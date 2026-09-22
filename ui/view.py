@@ -336,6 +336,10 @@ class SubmarineOutputView(FormatHelpers):
             self.modals.rerender_pending()
         except Exception as e:
             print("[Submarine] surface_restore modals: %s" % e)
+        try:
+            self.modals.restore_question_input()
+        except Exception as e:
+            print("[Submarine] surface_restore question input: %s" % e)
         want_input = bool(surface.get("input_mode"))
         draft = surface.get("draft") or ""
         idle = not self.composer.has_turn_modal_ui()
@@ -459,6 +463,10 @@ class SubmarineOutputView(FormatHelpers):
             keys.write_setting(view.settings(), keys.TASKS_EXPANDED, tasks_expanded)
         except Exception:
             pass
+        try:
+            self.modals.restore_question_input()
+        except Exception as e:
+            print("[Submarine] rehydrate question input: %s" % e)
         want_input = bool(surface.get("input_mode"))
         draft = surface.get("draft") or ""
         if want_input:

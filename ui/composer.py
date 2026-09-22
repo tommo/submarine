@@ -40,6 +40,9 @@ class Composer:
         self._pad_phantom_set = None
         self._context_phantom_set = None
         self._detached_draft = ""
+        # An "Other…" answer being typed when the sheet went viewless; the
+        # question re-render puts the input line back with it.
+        self._detached_question_draft = None  # type: Optional[str]
 
     def _has_view(self) -> bool:
         view = self.owner.view
@@ -61,6 +64,13 @@ class Composer:
         elif self._detached_draft:
             draft = self._detached_draft
         self._detached_draft = draft or ""
+        if self._has_view() and self._question_input_mode:
+            # Keep what was typed into the question's "▸ " line: the sheet
+            # comes back mid-answer, not with a dead prompt line.
+            try:
+                self._detached_question_draft = self.owner.modals.question_input_text()
+            except Exception:
+                self._detached_question_draft = ""
         self._input_mode = False
         self._input_start = 0
         self._input_area_start = 0

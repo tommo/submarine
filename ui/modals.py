@@ -987,12 +987,17 @@ class ModalUI:
                     self.owner._replace(erase_from, view.size(), "")
         if free_text is None:
             tail = view.substr(_R(write_at, view.size()))
+            orphan = -1
             if "❓" in tail:
                 orphan = tail.find("\n  ❓ ")
                 if orphan < 0:
                     orphan = tail.find("  ❓ ")
-                if orphan >= 0:
-                    self.owner._replace(write_at + orphan, view.size(), "")
+            if orphan < 0:
+                # A "▸ " input line whose marker region is gone (the sheet
+                # was restored from a snapshot): dead text, not an input.
+                orphan = tail.find("\n    ▸ ")
+            if orphan >= 0:
+                self.owner._replace(write_at + orphan, view.size(), "")
         end = self.owner._write(text, pos=write_at)
         q_req.region = (write_at, end)
         self.owner.sheet.set_hidden_region(keys.QUESTION_BLOCK, write_at, end)
@@ -1012,6 +1017,8 @@ class ModalUI:
                 view.sel().clear()
                 view.sel().add(sublime.Region(caret, caret))
             view.set_read_only(False)
+        else:
+            self.restore_question_input()
         import re
         key_regions = []
         for m in re.finditer(r'\[\d+\]|\[O\]|\[⏎\]', text):
@@ -1292,6 +1299,58 @@ class ModalUI:
             callback(response)
         self._restore_composer_after_modal()
         return True
+
+    def restore_question_input(self) -> bool:
+        """Back from viewless mid-answer: put the `▸ ` line back with what was
+        typed (composer.detach kept it). The snapshot may still show the old
+        line as dead text after the block; that goes first."""
+        c = self.owner.composer
+        draft = c._detached_question_draft
+        if draft is None:
+            return False
+        q = self.pending_question
+        if not self._has_view() or not q or getattr(q, "callback", None) is None:
+            return False
+        if c._question_input_mode:
+            c._detached_question_draft = None
+            return False
+        c._detached_question_draft = None
+        view = self.owner.view
+        start = None
+        regs = view.get_regions(keys.QUESTION_BLOCK)
+        if regs and regs[0].size() > 0:
+            start = regs[0].end()
+        elif getattr(q, "region", None) and q.region[1] > q.region[0]:
+            start = q.region[1]
+        if start is not None and start <= view.size():
+            tail = view.substr(_R(start, view.size()))
+            dead = tail.find("\n    ▸ ")
+            if dead >= 0:
+                view.set_read_only(False)
+                self.owner._replace(start + dead, view.size(), "")
+        self._question_enter_input_mode()
+        if draft and c._question_input_mode:
+            view.set_read_only(False)
+            view.run_command("append", {"characters": draft})
+            end = view.size()
+            if sublime is not None:
+                view.sel().clear()
+                view.sel().add(sublime.Region(end, end))
+        return True
+    def question_input_text(self) -> str:
+        """What is typed on the question's `▸ ` line ("" when not typing)."""
+        c = self.owner.composer
+        view = self.owner.view
+        if not self._has_view() or not c._question_input_mode:
+            return ""
+        regions = view.get_regions(keys.QUESTION_INPUT_MARKER)
+        start = regions[0].end() if regions else c._question_input_start
+        if start is None:
+            return ""
+        try:
+            return view.substr(_R(int(start), view.size()))
+        except Exception:
+            return ""
 
     def _question_abandon_input(self):
         """Remove the inline `▸ ` input line without submitting it."""

@@ -765,15 +765,20 @@ class TurnRenderer:
                 return False
         except Exception:
             return False
-        start, end = 0, 0
+        # The glyph line is the last line of the live turn, right before the
+        # composer / a modal block: search up to THAT boundary, not to the
+        # tracked region's end. A region end that fell behind (a swap
+        # restored an older tuple; an insert Sublime did not extend it for)
+        # once made this "miss" the glyph and insert a second one at the
+        # stale end — in the middle of a line of the transcript.
+        start = 0
         try:
             tracked = view.get_regions(keys.CONV_REGION)
             if tracked and tracked[0].size() > 0:
-                start, end = tracked[0].begin(), tracked[0].end()
+                start = tracked[0].begin()
             elif self.current and self.current.region:
-                start, end = self.current.region
-            else:
-                end = view.size()
+                start = self.current.region[0]
+            end = view.size()
         except Exception:
             return False
         try:
