@@ -8,7 +8,9 @@ working/busy is true only when a known closer exists:
   interrupting  — Esc in flight; closer is cancel ACK / settle
 
 Inbound leftovers (text, thinking, synth Bash, task_notification) never
-enter a busy kind. That was ◎ ⚙ task completed: working=True, no RPC, no end.
+enter a busy kind by themselves. A turn the runtime starts on its own (Claude
+Code's follow-up for a finished background task) is adopted explicitly by the
+host through resume_stream(), with the tagged `result` as its closer.
 """
 from __future__ import annotations
 
@@ -20,14 +22,12 @@ if TYPE_CHECKING:
 
 Kind = Literal["idle", "live", "compacting", "interrupting", "rewinding"]
 Inbound = Literal["drop", "paint", "paint_bg"]
-Notify = Literal["hold", "surface", "query"]
 
-# Agents that inject/auto-continue on bg complete AND emit session/update
-# without a new host query(). Host query() would double the turn.
-# Kimi: check_recovery.py — no session/update without a live prompt.
-# Grok: after wait_for_exit the agent keeps sending tool_call.
-# Own that with resume_stream; closer is `_x.ai/session/prompt_complete`
-# / turn_completed for synthetic prompt ids.
+# Agents whose self-wake after a bg completion streams session/update with no
+# host query() — Grok keeps sending tool_call after wait_for_exit. The host
+# owns that stream with resume_stream; the closer is
+# `_x.ai/session/prompt_complete` / turn_completed for synthetic prompt ids.
+# (Kimi self-wakes too, but its internal turn is silent: perm + fs only.)
 _SELF_WAKE_BACKENDS = frozenset({"grok"})
 
 COMPACT_TIMEOUT_MS = 180000
@@ -115,13 +115,6 @@ class TurnState:
         if event in ("synth_bash", "tool_use_bg"):
             return "paint_bg"
         return "paint"
-
-    def notify_action(self, backend: str) -> Notify:
-        if self.busy or self.kind == "interrupting":
-            return "hold"
-        if (backend or "") in _SELF_WAKE_BACKENDS:
-            return "surface"
-        return "query"
 
     def should_queue_prompt(self) -> bool:
         return self.busy or self.kind == "interrupting"
@@ -231,9 +224,6 @@ class TurnController:
 
     def inbound_action(self, event: str) -> Inbound:
         return self.state.inbound_action(event)
-
-    def notify_action(self, backend: str) -> Notify:
-        return self.state.notify_action(backend)
 
     def should_queue_prompt(self) -> bool:
         return self.state.should_queue_prompt()

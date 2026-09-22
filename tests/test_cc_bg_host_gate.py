@@ -5,18 +5,19 @@ real bridge with a model that backgrounds a `sleep`). Two shapes, both replayed
 here through the shipped `BridgeEventRouter` + `BackgroundTaskGate`:
 
   cc_bg_wire.jsonl   — the turn ends while the job runs; the completion arrives
-                       as `task_updated {status: completed}` with no
-                       `task_notification` at all.
+                       as `task_updated` + `task_notification`, and then the
+                       CLI runs its own follow-up turn, which the bridge
+                       forwards as `injected_turn` … `result{origin}`.
   cc_bg_during.jsonl — a foreground command keeps the turn live; the CLI then
-                       sends `task_updated` AND `task_notification` for the
-                       background job, plus a `task_notification` for the
+                       sends the completion mid-turn (absorbed by the model as
+                       an attachment) plus a `task_notification` for the
                        FOREGROUND command.
 
-Three things used to be wrong, all of them visible to the user: the launch ack
-("Command running in background with ID: …") closed the ⚙ row the instant the
-job started; the turn's own result closed it again; and a completed job said
-nothing — no notification turn, so the output was never shown and the agent was
-never woken. A foreground command's completion could also start a spurious turn.
+The host's part is the row: the launch ack must not close it, the turn's own
+result must not close it, the completion flips it with the job's output, and
+the CLI's follow-up turn is adopted as a turn of the sheet. The host never
+queries the model about a completion — Claude Code already does that itself,
+so every host `<task-notification>` turn was a duplicate.
 """
 from __future__ import annotations
 
@@ -39,13 +40,20 @@ class _Gate(unittest.TestCase):
 
         sched = FakeScheduler()
         out = FakeOutput()
-        queries = []
+        surfaced = []
         gate = BackgroundTaskGate(
             TurnController(sched), sched, out, backend="claude",
             read_output_file=hg.read_sandbox_output,
-            on_query=lambda body, display=None: queries.append(body),
+            on_surface=lambda: surfaced.append(1),
         )
-        return gate, sched, queries
+        gate.out = out
+        return gate, sched, surfaced
+
+    def row(self, gate, tool_id, name="Bash"):
+        gate.out.tool(name, {"command": "sleep"}, tool_id=tool_id, background=True)
+        tool = gate.out._tools_by_id[tool_id]
+        gate.register_tool(tool_id, tool=tool)
+        return tool
 
 
 class LaunchAckTest(_Gate):
@@ -79,11 +87,11 @@ class LaunchAckTest(_Gate):
 
 
 class ForegroundTaskTest(_Gate):
-    def test_a_foreground_command_completion_starts_no_turn(self):
+    def test_a_foreground_command_completion_shows_nothing(self):
         """Claude Code opens task_started for foreground commands too
         (`is_backgrounded: false`); their output was already answered inside
         the turn."""
-        gate, sched, queries = self.gate()
+        gate, sched, surfaced = self.gate()
         gate.on_task_started({
             "task_id": "fg-1", "tool_use_id": "tool-fg",
             "description": "foreground sleep", "is_backgrounded": False,
@@ -93,26 +101,27 @@ class ForegroundTaskTest(_Gate):
             "status": "completed", "summary": "foreground sleep",
         })
         gate.on_task_updated({"task_id": "fg-1", "patch": {"status": "completed"}})
-        sched.fire_due()
-        self.assertEqual(queries, [])
-        self.assertEqual(gate.pending_notifications, [])
+        self.assertEqual(surfaced, [])
+        self.assertEqual(gate.out.done, [])
 
     def test_a_backend_without_the_flag_is_untouched(self):
         """kimi/acp task_started has no `is_backgrounded` — must not be read as
         foreground, or every kimi completion goes silent."""
-        gate, sched, queries = self.gate()
+        gate, sched, surfaced = self.gate()
+        self.row(gate, "tool-1")
         gate.on_task_started({"task_id": "bash-1", "tool_use_id": "tool-1"})
         gate.on_task_notification({
             "task_id": "bash-1", "tool_use_id": "tool-1",
             "status": "completed", "summary": "sleep 9",
         })
-        sched.fire_due()
-        self.assertEqual(len(queries), 1)
+        self.assertEqual(len(surfaced), 1)
+        self.assertEqual(gate.out._tools_by_id["tool-1"].status, "done")
 
 
-class TerminalUpdateSurfacesTest(_Gate):
-    def test_a_terminal_update_notifies_with_the_jobs_output(self):
-        gate, sched, queries = self.gate()
+class TerminalUpdateFlipsTheRowTest(_Gate):
+    def test_a_terminal_update_flips_the_row_with_the_jobs_output(self):
+        gate, sched, surfaced = self.gate()
+        tool = self.row(gate, "tool-1")
         gate.on_task_started({
             "task_id": "t1", "tool_use_id": "tool-1",
             "description": "sandbox bg sleep", "is_backgrounded": True,
@@ -120,17 +129,17 @@ class TerminalUpdateSurfacesTest(_Gate):
         gate.note_launch_ack(
             "tool-1", "running in background with ID: t1. Output is being written to: /tmp/t1.output.")
         gate.on_task_updated({"task_id": "t1", "patch": {"status": "completed"}})
-        sched.fire_due()
-        self.assertEqual(len(queries), 1, "the completion must wake the session")
-        self.assertTrue(queries[0].startswith("<task-notification>"))
-        self.assertIn("CC_BG_DONE", queries[0])
-        self.assertIn("sandbox bg sleep", queries[0])
+        self.assertEqual(tool.status, "done")
+        self.assertIn("CC_BG_DONE", tool.result)
+        self.assertIn("sandbox bg sleep", tool.result)
+        self.assertEqual(len(surfaced), 1)
 
-    def test_a_richer_notification_replaces_the_pending_block(self):
-        """task_updated has no summary/output_file; the CLI's own notification
-        for the same job follows immediately and must upgrade it, not add a
-        second turn."""
-        gate, sched, queries = self.gate()
+    def test_the_richer_notification_after_the_update_is_a_no_op(self):
+        """task_updated flips the row (the ack named the log); the CLI's own
+        notification for the same job follows within a tick and must not
+        flip or surface it again."""
+        gate, sched, surfaced = self.gate()
+        tool = self.row(gate, "tool-1")
         gate.on_task_started({"task_id": "t1", "tool_use_id": "tool-1",
                               "description": "sandbox bg sleep"})
         gate.on_task_updated({"task_id": "t1", "patch": {"status": "completed"}})
@@ -139,27 +148,37 @@ class TerminalUpdateSurfacesTest(_Gate):
             "summary": "Background command completed (exit code 0)",
             "output_file": "/tmp/gone.output",
         })
-        sched.fire_due()
-        self.assertEqual(len(queries), 1)
-        self.assertIn("exit code 0", queries[0])
+        self.assertEqual(len(surfaced), 1)
+        self.assertEqual(len(gate.out.done), 1)
 
-    def test_a_second_terminal_event_is_not_a_second_turn(self):
-        gate, sched, queries = self.gate()
+    def test_a_failed_job_is_an_error_row_with_its_output(self):
+        gate, sched, surfaced = self.gate()
+        tool = self.row(gate, "tool-1")
+        gate.on_task_started({"task_id": "t1", "tool_use_id": "tool-1",
+                              "description": "flaky build"})
+        gate.on_task_notification({
+            "task_id": "t1", "tool_use_id": "tool-1", "status": "failed",
+            "summary": "flaky build (exit code 2)", "output_file": "/tmp/x",
+        })
+        self.assertEqual(tool.status, "error")
+        self.assertIn("[failed]", tool.result)
+        self.assertIn("CC_BG_DONE", tool.result)
+
+    def test_a_killed_task_is_terminal(self):
+        gate, sched, surfaced = self.gate()
+        tool = self.row(gate, "tool-1")
         gate.on_task_started({"task_id": "t1", "tool_use_id": "tool-1"})
-        gate.on_task_updated({"task_id": "t1", "patch": {"status": "completed"}})
-        sched.fire_due()
-        gate.on_task_updated({"task_id": "t1", "patch": {"status": "completed"}})
-        gate.on_task_notification({"task_id": "t1", "tool_use_id": "tool-1",
-                                   "status": "completed", "summary": "again"})
-        sched.fire_due()
-        self.assertEqual(len(queries), 1)
+        gate.on_task_updated({"task_id": "t1", "patch": {"status": "killed"}})
+        self.assertEqual(tool.status, "error")
+        self.assertNotIn("t1", gate.task_tool_map)
 
-    def test_reconcile_still_clears_a_stale_row_without_waking(self):
-        gate, sched, queries = self.gate()
+    def test_reconcile_still_clears_a_stale_row_without_surfacing(self):
+        gate, sched, surfaced = self.gate()
+        tool = self.row(gate, "tool-1")
         gate.on_task_started({"task_id": "t1", "tool_use_id": "tool-1"})
         gate.reconcile(running=[])
-        sched.fire_due()
-        self.assertEqual(queries, [])
+        self.assertEqual(tool.status, "done")
+        self.assertEqual(surfaced, [])
 
 
 class CapturedWireTest(unittest.TestCase):
@@ -176,7 +195,7 @@ class CapturedWireTest(unittest.TestCase):
         fails = hg.check(fixture, read_output=hg.read_sandbox_output)
         self.assertEqual(fails, [])
 
-    def test_the_turn_ended_while_the_job_ran(self):
+    def test_the_turn_ended_while_the_job_ran_and_the_cli_followed_up(self):
         self._replay("after")
 
     def test_a_foreground_command_kept_the_turn_live(self):

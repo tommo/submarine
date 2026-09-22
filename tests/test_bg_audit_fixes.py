@@ -9,7 +9,6 @@ import unittest
 from core.background import (
     SHELL_BG,
     SUBAGENT_BG,
-    _POLL_TOOLS,
     BackgroundTaskGate,
     is_child_session_id,
     is_shell_background_tool,
@@ -31,51 +30,51 @@ def _gate(backend="claude", busy=False):
         turn.begin_query()
     sched = FakeScheduler()
     out = FakeOutput()
-    queries = []
     surfaces = []
-
-    def on_query(prompt, display):
-        queries.append((prompt, display))
 
     def on_surface():
         surfaces.append(True)
 
-    g = BackgroundTaskGate(
-        turn, sched, out, backend=backend,
-        on_query=on_query, on_surface=on_surface)
-    return g, turn, sched, queries, surfaces
+    g = BackgroundTaskGate(turn, sched, out, backend=backend, on_surface=on_surface)
+    return g, turn, sched, out, surfaces
 
 
-class TestF1NotifyBufferAndHold(unittest.TestCase):
-    def test_busy_notify_is_buffered_not_marked(self):
-        g, turn, sched, queries, surfaces = _gate("claude", busy=True)
+class TestF1CompletionIsRowOnly(unittest.TestCase):
+    """A completion flips the row and surfaces once. It never starts a turn:
+    the runtime tells the model itself (Claude Code injects a follow-up turn,
+    Grok/Kimi self-wake), so a host query was always a duplicate."""
+
+    def test_completion_flips_and_marks_at_once(self):
+        g, turn, sched, out, surfaces = _gate("claude", busy=True)
         g.on_task_notification({
             "task_id": "acp-child-sid",
             "tool_use_id": "spawn-1",
             "status": "completed",
             "summary": "done",
         }, working=True)
-        self.assertTrue(g.pending_notifications)
-        self.assertNotIn("acp-child-sid", g.notified_task_ids)
-        self.assertNotIn("spawn-1", g.notified_tool_ids)
-        self.assertEqual(queries, [])
-        self.assertEqual(surfaces, [])
-
-    def test_flush_hold_keeps_buffer(self):
-        g, turn, sched, queries, surfaces = _gate("claude", busy=True)
+        self.assertIn("acp-child-sid", g.notified_task_ids)
+        self.assertIn("spawn-1", g.notified_tool_ids)
+        self.assertEqual(surfaces, [True])
+        # A repeat (alias, re-send, poll) is a no-op.
         g.on_task_notification({
-            "task_id": "t1",
-            "tool_use_id": "tool-1",
-            "status": "completed",
-            "summary": "done",
-        }, working=True)
-        g.flush()
-        self.assertTrue(g.pending_notifications)
-        self.assertEqual(g.pending_hold_gen, turn.gen)
-        self.assertNotIn("t1", g.notified_task_ids)
-        self.assertEqual(queries, [])
+            "task_id": "acp-child-sid", "tool_use_id": "spawn-1",
+            "status": "completed", "summary": "again",
+        })
+        self.assertEqual(surfaces, [True])
 
-    def test_claude_surfaces_via_query_after_end_live(self):
+    def test_busy_does_not_hold_the_row(self):
+        """The row is UI: it flips while the parent is still streaming."""
+        g, turn, sched, out, surfaces = _gate("claude", busy=True)
+        out.tool("Bash", {"command": "sleep 9"}, tool_id="tool-1", background=True)
+        g.register_tool("tool-1", tool=out._tools_by_id["tool-1"], task_id="t1")
+        g.on_task_notification({
+            "task_id": "t1", "tool_use_id": "tool-1",
+            "status": "completed", "summary": "sleep 9",
+        }, working=True)
+        self.assertEqual(out._tools_by_id["tool-1"].status, "done")
+        self.assertEqual(surfaces, [True])
+
+    def test_claude_completion_after_end_live_never_queries(self):
         client = FakeClient()
         s = make_session(initialized=True, client=client, backend="claude")
         s.query("hello")
@@ -87,22 +86,19 @@ class TestF1NotifyBufferAndHold(unittest.TestCase):
         })
         s.bg.on_task_started({
             "task_id": "acp-child-sid", "tool_use_id": "spawn-1"})
+        cb = [t[2] for t in client.sent if t[0] == "query"][-1]
+        cb({"status": "complete"})
         s.bg.on_task_notification({
             "task_id": "acp-child-sid",
             "tool_use_id": "spawn-1",
             "status": "completed",
             "summary": "done",
-        }, working=True)
-        self.assertTrue(s.bg.pending_notifications)
-        self.assertNotIn("spawn-1", s.bg.notified_tool_ids)
-        cb = [t[2] for t in client.sent if t[0] == "query"][-1]
-        cb({"status": "complete"})
+        })
         queries = [t for t in client.sent if t[0] == "query"]
-        self.assertGreaterEqual(len(queries), 2)
-        prompt = (queries[-1][1] or {}).get("prompt") or ""
-        self.assertIn("task-notification", prompt)
+        self.assertEqual(len(queries), 1)
         self.assertIn("spawn-1", s.bg.notified_tool_ids)
-        self.assertFalse(s.bg.pending_notifications)
+        self.assertIn(True, s.chrome.unread)
+        self.assertFalse(s.working)
 
     def test_grok_surfaces_after_end_live(self):
         client = FakeClient()
@@ -122,6 +118,7 @@ class TestF1NotifyBufferAndHold(unittest.TestCase):
         }, working=True)
         cb = [t[2] for t in client.sent if t[0] == "query"][-1]
         cb({"status": "complete"})
+        s.scheduler.fire_due()
         self.assertIn(True, s.chrome.unread)
         self.assertGreater(s.output.hint_refreshes, 0)
         self.assertIn("spawn-1", s.bg.notified_tool_ids)
@@ -287,7 +284,7 @@ class TestF5InterruptCancelsChildren(unittest.TestCase):
 
 class TestF6AbortClearsHostMarks(unittest.TestCase):
     def test_abort_clears_notified_sets(self):
-        g, turn, sched, queries, surfaces = _gate("claude")
+        g, turn, sched, out, surfaces = _gate("claude")
         g.notified_task_ids.add("bash-old")
         g.notified_tool_ids.add("tool-old")
         g.abort()
@@ -336,11 +333,6 @@ class TestF8F9AllowlistsAndIds(unittest.TestCase):
 
         out = _task(None, T())
         self.assertNotIn("01a00fc4", out)
-
-    def test_poll_tools_exclude_task(self):
-        self.assertNotIn("Task", _POLL_TOOLS)
-        self.assertNotIn("Subagent", _POLL_TOOLS)
-        self.assertIn("TaskGet", _POLL_TOOLS)
 
     def test_ui_imports_canonical_allowlist(self):
         from ui.tools import SHELL_BG as UI_SHELL

@@ -353,14 +353,11 @@ class Session:
             output,
             backend=self.backend,
             send_poll=self._send_bg_poll,
-            on_query=self._bg_query,
             on_surface=self._bg_surface,
-            on_compact_done=self._finish_compact,
-            policy=lambda: str(self.settings.get("background_notify") or "defer"),
         )
-        # Turn gen of the notification turn in flight, if any: when it ends
-        # without a tool call, the gate acknowledges the running batch.
-        self._notify_turn_gen = None  # type: Optional[int]
+        # True while the host owns a turn the runtime started on its own
+        # (Claude Code's follow-up for a finished background task).
+        self._injected_turn = False
         self.events = BridgeEventRouter(
             output,
             chrome,
@@ -393,6 +390,7 @@ class Session:
             on_artifact_write=self._on_artifact_write,
             user_cancelled=lambda: bool(self._user_cancelled_turn),
             on_leftover_pending=self._mark_leftover_pending,
+            on_injected_turn=self._adopt_injected_turn,
         )
         self.rewind = RewindService(
             send=self._send,
@@ -853,7 +851,7 @@ class Session:
         self._user_cancelled_turn = False
         self.touch_access()
         query_gen = self.turn.begin_query()
-        self._turn_tool_calls = 0
+        self._injected_turn = False
         self.query_count += 1
         self._clear_error_halt()
         self._pending_resume_at = None
@@ -917,12 +915,6 @@ class Session:
         self._set_turn_phase("waiting")
         self.chrome.refresh_tab_title()
         self._query_start = time.time()
-        # Completions the wake budget held back ride along with the next
-        # real prompt, so the agent still learns what its jobs printed.
-        if not silent and not is_synthetic_turn(raw):
-            held = self.bg.take_deferred()
-            if held:
-                prompt = "%s\n\n%s" % (held, prompt)
         query_params = {"prompt": prompt}  # type: Dict[str, Any]
         if images:
             query_params["images"] = images
@@ -1022,17 +1014,8 @@ class Session:
             # turn then looked idle since it *started*, and auto-sleep fired.
             self._note_activity(idle=True)
             self._fire_turn_end("interrupted")
-            # The user's queued message goes first; background completions
-            # (the cancel just killed those jobs) ride along with it.
-            if self._fire_queued_first():
+            if self._fire_next_queued():
                 return
-            if self.bg.pending_notifications:
-                try:
-                    self.bg.flush()
-                except Exception:
-                    pass
-                if self.working:
-                    return
             self._enter_input_if_idle()
             return
 
@@ -1069,19 +1052,12 @@ class Session:
             else:
                 self._clear_deferred_state(clear_queue=True)
             self._fire_turn_end(completion)
-            if completion == "interrupted" and self._fire_queued_first():
+            if completion == "interrupted" and self._fire_next_queued():
                 return
-            if self.bg.pending_notifications:
-                try:
-                    self.bg.flush()
-                except Exception:
-                    pass
-                if self.working:
-                    return
             self._enter_input_if_idle()
             return
 
-        if self._fire_queued_first():
+        if self._fire_next_queued():
             return
 
         if self._compacting and completion == "success":
@@ -1107,32 +1083,14 @@ class Session:
         self._stamp_idle_clock()
         self.touch_access()
         self._fire_turn_end("success")
-        self._judge_notification_turn(_expected_gen)
-        if self.bg.pending_notifications:
-            try:
-                self.bg.flush()
-            except Exception:
-                pass
-            if self.working:
-                return
         self.scheduler.call_later(100, self._enter_input_if_idle)
-
-    def _fire_queued_first(self):
-        # type: () -> bool
-        """Start the user's next queued message ahead of any background
-        notification turn, folding the buffered completions into it."""
-        if not self._queued_prompts:
-            return False
-        try:
-            self.bg.defer_pending()
-        except Exception:
-            pass
-        return self._fire_next_queued()
 
     def _update_queue_phantom(self):
         # type: () -> None
         try:
-            self.chrome.queue_chips(list(self._queued_prompts or []))
+            shown = getattr(self, "_queued_display", None) or {}
+            self.chrome.queue_chips(
+                [shown.get(p, p) for p in list(self._queued_prompts or [])])
         except Exception:
             pass
 
@@ -1956,10 +1914,6 @@ class Session:
         """
         return
 
-    def _flush_bg_notifications(self):
-        # type: () -> None
-        self.bg.flush()
-
     def _on_compact_timeout(self):
         # type: () -> None
         log_plugin("compact timeout — forcing idle")
@@ -2095,8 +2049,8 @@ class Session:
             "is_error": False,
         })
 
-    def _result_idle(self):
-        # type: () -> None
+    def _result_idle(self, completion="success"):
+        # type: (str) -> None
         self._interrupt_stream = False
         self._interrupting = False
         self._pending_leftover_end = False
@@ -2105,11 +2059,18 @@ class Session:
         self._set_turn_phase("idle")
         self._stamp_idle_clock()
         self.touch_access()
-        if self.bg.pending_notifications:
+        injected = bool(self._injected_turn)
+        self._injected_turn = False
+        if injected:
             try:
-                self.bg.flush()
+                self.output.clear_all_permissions()
             except Exception:
                 pass
+            self._fire_turn_end(completion)
+            # The user typed while the runtime's turn ran: it was queued
+            # behind it, and it goes now.
+            if self._fire_next_queued():
+                return
         # Kimi end_turn while wait_for_exit is pending is fine; a closer
         # that skip-dropped left ⚙ under @done. Poll now.
         if self.bg.bg_tools or self.bg.bg_task_ids or self.bg.task_tool_map:
@@ -2119,6 +2080,64 @@ class Session:
                 pass
         if not self.working:
             self.scheduler.call_later(100, self._enter_input_if_idle)
+
+    def _adopt_injected_turn(self, origin, display):
+        # type: (str, str) -> None
+        """Own a turn the runtime started by itself (see
+        BridgeEventRouter.injected_turn). Same shape as a query minus the
+        RPC: busy without awaiting_rpc, a prompt row, the sticky composer;
+        `result` (same origin) closes it through _result_idle."""
+        if self.working or self.turn.awaiting_rpc:
+            # A host query is in flight: the bridge could not tell the
+            # runtime's turn from ours yet. It paints into this turn; its
+            # closer is ignored by the router. Nothing to adopt.
+            return
+        self._resume_drop_asking = False
+        self._interrupt_stream = False
+        self._interrupting = False
+        self._user_cancelled_turn = False
+        self._pending_leftover_end = False
+        self._injected_turn = True
+        self.touch_access()
+        self.turn.resume_stream()
+        self._clear_error_halt()
+        # Whatever the user was typing comes back in the sticky composer.
+        if self.output and self.output.is_input_mode():
+            try:
+                self.draft_prompt = self.output.get_input_text()
+            except Exception:
+                pass
+        self._input_mode_entered = False
+        try:
+            self.output.show(focus=False)
+        except Exception:
+            pass
+        try:
+            self.registry.register_session(self)
+        except Exception:
+            pass
+        try:
+            self.output.prompt(display)
+        except Exception:
+            pass
+        self._set_turn_phase("waiting")
+        self.chrome.refresh_tab_title()
+        self._query_start = time.time()
+        try:
+            current = getattr(self.output, "current", None)
+            if current is not None:
+                current.working = True
+        except Exception:
+            pass
+        self._set_unread(True)
+
+        def _sticky():
+            if not self.output:
+                return
+            self._input_mode_entered = False
+            self._enter_input_with_draft()
+
+        self.scheduler.call_later(40, _sticky)
 
     def _park_undo_caret(self):
         # type: () -> None
@@ -2597,32 +2616,6 @@ class Session:
         # type: (Callable) -> bool
         return self._send("poll_bg_tasks", {}, callback)
 
-    def _bg_query(self, prompt, display):
-        # type: (str, str) -> None
-        if self.working or self.turn.awaiting_rpc:
-            return
-        self.query(prompt, display_prompt=display, silent=False)
-        if self.working:
-            self._notify_turn_gen = self.turn.gen
-
-    def _judge_notification_turn(self, gen):
-        # type: (Optional[int]) -> None
-        """A turn that ended with no tool call is the agent talking to the
-        user — answering, asking — not working. Nothing still running in the
-        background is something it is waiting on, so those completions are
-        deferred to the next real prompt instead of waking it (a wake would
-        interrupt the conversation with "nothing to act on"). Turns that used
-        tools keep the default: the next completion wakes."""
-        if gen is None:
-            return
-        self._notify_turn_gen = None
-        if getattr(self, "_turn_tool_calls", 0):
-            return
-        try:
-            self.bg.acknowledge_running()
-        except Exception:
-            pass
-
     def _bg_surface(self):
         # type: () -> None
         try:
@@ -2683,8 +2676,6 @@ class Session:
     def _accept_tool_name(self, name):
         # type: (Optional[str]) -> None
         self.current_tool = name
-        if name:
-            self._turn_tool_calls = getattr(self, "_turn_tool_calls", 0) + 1
 
     def _elapsed(self):
         # type: () -> float

@@ -19,7 +19,6 @@ import unittest
 from core.background import (
     SHELL_BG,
     SUBAGENT_BG,
-    _POLL_TOOLS,
     BackgroundTaskGate,
     is_child_session_id,
     is_shell_background_tool,
@@ -190,18 +189,14 @@ def _gate(backend="claude", busy=False):
         turn.begin_query()
     sched = FakeScheduler()
     out = FakeOutput()
-    queries = []
+    queries = []  # nothing ever appends: completions never start a turn
     surfaces = []
-
-    def on_query(prompt, display):
-        queries.append((prompt, display))
 
     def on_surface():
         surfaces.append(True)
 
     g = BackgroundTaskGate(
-        turn, sched, out, backend=backend,
-        on_query=on_query, on_surface=on_surface)
+        turn, sched, out, backend=backend, on_surface=on_surface)
     return g, turn, sched, queries, surfaces
 
 
@@ -299,14 +294,15 @@ class TestA1ShellBgSpawnToDone(unittest.TestCase):
             tool = s.output.find_tool_by_id("tool-bash")
             self.assertIsNotNone(tool)
             self.assertEqual(tool.status, "done")
-            self.assertTrue(s.bg.pending_notifications)
-            _complete_last_query(s)
+            self.assertIn("slept", str(getattr(tool, "result", "") or ""))
             self.assertIn("tool-bash", s.bg.notified_tool_ids)
-            self.assertFalse(s.bg.pending_notifications)
+            _complete_last_query(s)
+            # The exit is the row's business only: no host turn about it.
             prompts = [
                 (t[1] or {}).get("prompt") or ""
                 for t in s.client.sent if t[0] == "query"]
-            self.assertTrue(any("task-notification" in p for p in prompts))
+            self.assertEqual(len(prompts), 1)
+            self.assertFalse(any("task-notification" in p for p in prompts))
 
 
 class TestA1bDetachKeepsStdout(unittest.TestCase):
@@ -600,23 +596,22 @@ class TestB6AliasNotifyOnceBothDirections(unittest.TestCase):
             "status": "completed",
             "summary": "sleep 9",
         })
-        self.assertEqual(len(g.pending_notifications), 1)
+        self.assertEqual(len(surfaces), 1)
         g.on_task_notification({
             "task_id": "bash-xyz",
             "tool_use_id": "tool-1",
             "status": "completed",
             "summary": "sleep 9 again",
         })
-        self.assertEqual(len(g.pending_notifications), 1)
-        sched.fire_due(1200)
-        self.assertEqual(len(queries), 1)
+        self.assertEqual(len(surfaces), 1)
         g.on_task_notification({
             "task_id": "bash-xyz",
             "tool_use_id": "tool-1",
             "status": "completed",
             "summary": "late",
         })
-        self.assertFalse(g.pending_notifications)
+        self.assertEqual(len(surfaces), 1)
+        self.assertEqual(queries, [])
 
     def test_notify_bash_then_acp_term_alias_is_one_notify(self):
         g, turn, sched, queries, surfaces = _gate("claude")
@@ -634,111 +629,63 @@ class TestB6AliasNotifyOnceBothDirections(unittest.TestCase):
             "status": "completed",
             "summary": "sleep 9",
         })
-        self.assertEqual(len(g.pending_notifications), 1)
-        sched.fire_due(1200)
-        self.assertEqual(len(queries), 1)
+        self.assertEqual(len(surfaces), 1)
+        self.assertEqual(queries, [])
 
 
-class TestB7NotifyBufferedDuringBusySurfacesOnEndLive(unittest.TestCase):
-    def test_notify_buffered_during_busy_parent_surfaces_on_end_live_claude(self):
+class TestB7CompletionDuringBusyParentIsRowOnly(unittest.TestCase):
+    """A completion while the parent turn is live flips the row at once and
+    never becomes a host turn — for any backend. The runtime tells the model
+    itself (Claude Code injects a turn, Grok/Kimi self-wake)."""
+
+    def _drive(self, backend, tool_use, notification):
         client = FakeClient()
-        s = make_session(initialized=True, client=client, backend="claude")
+        s = make_session(initialized=True, client=client, backend=backend)
         s.query("hello")
-        s.events.tool_use({
-            "name": "Subagent", "id": "spawn-1", "background": True,
-            "input": {"description": "check"},
-        })
-        s.events.system({
-            "subtype": "task_notification",
-            "data": {
-                "task_id": "acp-child-%s" % SID_A,
-                "tool_use_id": "spawn-1",
-                "status": "completed",
-                "summary": "done",
-            },
-        })
-        self.assertTrue(s.bg.pending_notifications)
-        self.assertNotIn("spawn-1", s.bg.notified_tool_ids)
+        s.events.tool_use(tool_use)
+        s.events.system({"subtype": "task_notification", "data": notification})
+        tool = s.output.find_tool_by_id(tool_use["id"])
+        self.assertEqual(tool.status, "done")
+        self.assertIn(tool_use["id"], s.bg.notified_tool_ids)
         _complete_last_query(s)
-        self.assertIn("spawn-1", s.bg.notified_tool_ids)
-        self.assertFalse(s.bg.pending_notifications)
+        self.assertFalse(s.working)
+        self.assertIn(True, s.chrome.unread)
         prompts = [
             (t[1] or {}).get("prompt") or ""
             for t in client.sent if t[0] == "query"]
-        self.assertTrue(any("task-notification" in p for p in prompts))
+        self.assertEqual(len(prompts), 1)
+        self.assertFalse(any("task-notification" in p for p in prompts))
 
-    def test_notify_buffered_during_busy_parent_surfaces_on_end_live_grok(self):
-        client = FakeClient()
-        s = make_session(initialized=True, client=client, backend="grok")
-        s.query("hello")
-        s.events.tool_use({
+    def test_claude(self):
+        self._drive("claude", {
             "name": "Subagent", "id": "spawn-1", "background": True,
             "input": {"description": "check"},
+        }, {
+            "task_id": "acp-child-%s" % SID_A, "tool_use_id": "spawn-1",
+            "status": "completed", "summary": "done",
         })
-        s.events.system({
-            "subtype": "task_notification",
-            "data": {
-                "task_id": "acp-child-%s" % SID_A,
-                "tool_use_id": "spawn-1",
-                "status": "completed",
-                "summary": "done",
-            },
-        })
-        self.assertTrue(s.bg.pending_notifications)
-        _complete_last_query(s)
-        self.assertIn(True, s.chrome.unread)
-        self.assertIn("spawn-1", s.bg.notified_tool_ids)
-        self.assertFalse(s.working)
-        self.assertEqual(sum(1 for t in client.sent if t[0] == "query"), 1)
 
-    def test_notify_buffered_during_busy_parent_surfaces_on_end_live_kimi(self):
-        client = FakeClient()
-        s = make_session(initialized=True, client=client, backend="kimi")
-        s.query("hello")
-        s.events.tool_use({
+    def test_grok(self):
+        self._drive("grok", {
+            "name": "Subagent", "id": "spawn-1", "background": True,
+            "input": {"description": "check"},
+        }, {
+            "task_id": "acp-child-%s" % SID_A, "tool_use_id": "spawn-1",
+            "status": "completed", "summary": "done",
+        })
+
+    def test_kimi(self):
+        self._drive("kimi", {
             "name": "Bash", "id": "tool-1", "background": True,
             "input": {"command": "sleep 1"},
+        }, {
+            "task_id": "bash-xyz", "tool_use_id": "tool-1",
+            "status": "completed", "summary": "sleep 1",
         })
-        s.events.system({
-            "subtype": "task_notification",
-            "data": {
-                "task_id": "bash-xyz",
-                "tool_use_id": "tool-1",
-                "status": "completed",
-                "summary": "sleep 1",
-            },
-        })
-        self.assertTrue(s.bg.pending_notifications)
-        _complete_last_query(s)
-        self.assertIn("tool-1", s.bg.notified_tool_ids)
-        self.assertFalse(s.bg.pending_notifications)
-        prompts = [
-            (t[1] or {}).get("prompt") or ""
-            for t in client.sent if t[0] == "query"]
-        self.assertTrue(any("task-notification" in p for p in prompts))
 
 
-class TestB8FlushHoldKeepsBufferSecondFlushDelivers(unittest.TestCase):
-    def test_flush_hold_keeps_buffer_second_flush_after_idle_delivers(self):
-        g, turn, sched, queries, surfaces = _gate("claude", busy=True)
-        g.on_task_notification({
-            "task_id": "t1", "tool_use_id": "tool-1",
-            "status": "completed", "summary": "done",
-        }, working=True)
-        sched.fire_due(1200)
-        self.assertTrue(g.pending_notifications)
-        self.assertEqual(g.pending_hold_gen, turn.gen)
-        self.assertEqual(queries, [])
-        turn.end_live()
-        g.flush()
-        self.assertEqual(len(queries), 1)
-        self.assertIn("task-notification", queries[0][0])
-        self.assertIn("t1", g.notified_task_ids)
-        self.assertFalse(g.pending_notifications)
-
-
-class TestB9TaskGetPollMarksShown(unittest.TestCase):
-    def test_taskget_poll_delivery_marks_shown_later_bridge_notify_does_not_double(self):
+class TestB9TaskGetPollThenCompletion(unittest.TestCase):
+    def test_taskget_poll_then_bridge_notify_flips_the_row_once(self):
         client = FakeClient()
         s = make_session(initialized=True, client=client, backend="claude")
         s.query("poll the job")
@@ -762,7 +709,9 @@ class TestB9TaskGetPollMarksShown(unittest.TestCase):
                 "exit_code: 0\n"
             ),
         })
-        self.assertIn("bash-xyz", s.bg.notified_task_ids)
+        # The agent polled its own job; the ⚙ row still waits for the
+        # completion event.
+        self.assertEqual(s.output.find_tool_by_id("tool-1").status, "background")
         s.events.system({
             "subtype": "task_notification",
             "data": {
@@ -772,12 +721,12 @@ class TestB9TaskGetPollMarksShown(unittest.TestCase):
                 "summary": "sleep 9",
             },
         })
-        self.assertFalse(s.bg.pending_notifications)
+        self.assertEqual(s.output.find_tool_by_id("tool-1").status, "done")
         _complete_last_query(s)
         extra = [
             (t[1] or {}).get("prompt") or ""
             for t in client.sent if t[0] == "query"]
-        self.assertFalse(any("task-notification" in p for p in extra[1:]))
+        self.assertEqual(len(extra), 1)
 
 
 class TestB10AbortClearsMarksReusedIdNotifiesAgain(unittest.TestCase):
@@ -787,9 +736,8 @@ class TestB10AbortClearsMarksReusedIdNotifiesAgain(unittest.TestCase):
             "task_id": "bash-old", "tool_use_id": "tool-old",
             "status": "completed", "summary": "first",
         })
-        sched.fire_due(1200)
         self.assertIn("bash-old", g.notified_task_ids)
-        self.assertEqual(len(queries), 1)
+        self.assertEqual(len(surfaces), 1)
         g.abort()
         self.assertEqual(g.notified_task_ids, set())
         self.assertEqual(g.notified_tool_ids, set())
@@ -797,10 +745,8 @@ class TestB10AbortClearsMarksReusedIdNotifiesAgain(unittest.TestCase):
             "task_id": "bash-old", "tool_use_id": "tool-old",
             "status": "completed", "summary": "reused",
         })
-        self.assertTrue(g.pending_notifications)
-        sched.fire_due(1200)
-        self.assertEqual(len(queries), 2)
-        self.assertIn("reused", queries[-1][0])
+        self.assertIn("bash-old", g.notified_task_ids)
+        self.assertEqual(len(surfaces), 2)
 
 
 # ── C. Busy-bit invariants ────────────────────────────────────────────
@@ -878,13 +824,16 @@ class TestC11LeftoverAfterDoneStaysIdleFullStack(unittest.TestCase):
                     },
                 })
                 s.scheduler.fire_due(1200)
-        # Kimi idle notify is query so the continuation has a closer.
-        self.assertEqual(s.turn.kind, "live")
-        self.assertTrue(s.working)
+        # Kimi ran its own completion turn (perm + fs, silent); the host
+        # flips the row and stays idle — a query here doubled that turn.
+        self.assertEqual(s.turn.kind, "idle")
+        self.assertFalse(s.working)
+        self.assertIn("bg-leftover", s.bg.notified_tool_ids)
         prompts = [
             (t[1] or {}).get("prompt") or ""
             for t in client.sent if t[0] == "query"]
-        self.assertTrue(any("task-notification" in p for p in prompts))
+        self.assertEqual(len(prompts), 1)
+        self.assertFalse(any("task-notification" in p for p in prompts))
 
 
 class TestC12EscLiveSubagentNoResume(unittest.TestCase):
@@ -1124,7 +1073,6 @@ class TestD18ForceSleepAbortsAndKillsStalePolls(unittest.TestCase):
         self.assertEqual(g.poll_epoch, old_epoch + 1)
         stale({"running": []})
         self.assertEqual(g.bg_tools, {})
-        self.assertFalse(g.pending_notifications)
 
         client = FakeClient()
         s = make_session(initialized=True, client=client, backend="grok")
@@ -1333,14 +1281,17 @@ class TestF24NoRawSessionUlidOnSurfaces(unittest.TestCase):
         self.assertNotIn("#01a00", get_label)
 
         g, turn, sched, queries, surfaces = _gate("claude")
+        g.output.tool("Subagent", {"description": "check"}, tool_id="spawn-1",
+                      background=True)
+        g.register_tool("spawn-1", tool=g.output._tools_by_id["spawn-1"])
         g.on_task_notification({
             "task_id": "acp-child-%s" % SID_ULID,
             "tool_use_id": "spawn-1",
             "status": "completed",
             "summary": SID_ULID,
         })
-        self.assertTrue(g.pending_notifications)
-        block = g.pending_notifications[0]
+        self.assertEqual(len(g.output.done), 1)
+        block = str(g.output.done[0][1] or "")
         self.assertNotIn(SID_ULID, block)
         self.assertNotIn("01a00fc4", block)
 
@@ -1401,14 +1352,6 @@ class TestG26UiShellBgMatchesCore(unittest.TestCase):
         self.assertTrue(is_shell_background_tool("Subagent"))
         self.assertTrue(is_shell_background_tool("Bash"))
         self.assertFalse(is_shell_background_tool("Read"))
-
-
-class TestG27PollToolsExcludeTask(unittest.TestCase):
-    def test_poll_tools_does_not_contain_task(self):
-        self.assertNotIn("Task", _POLL_TOOLS)
-        self.assertNotIn("Subagent", _POLL_TOOLS)
-        self.assertIn("TaskGet", _POLL_TOOLS)
-        self.assertIn("TaskOutput", _POLL_TOOLS)
 
 
 class TestG28BridgeNameTruthTable(unittest.TestCase):

@@ -85,18 +85,26 @@ class BackgroundMixin:
     def _emit_bg_finished(
             self, task_id: str, tool_use_id: str, status: str,
             summary: str, output_file: str) -> None:
+        """One job ended: the host flips its ⚙ row with what it printed.
+
+        Display only. The agent learns of the exit through its own runtime
+        (Grok self-wakes, Kimi runs an internal turn); ACP has no
+        client→agent exit notification and the host never prompts for one.
+        The rich `task_notification` goes first so the row gets the
+        output_file; the `task_updated` behind it is a no-op for the host.
+        """
         self._mark_bg_notified(task_id, tool_use_id)
-        self._emit_system("task_updated", {
-            "task_id": task_id,
-            "tool_use_id": tool_use_id,
-            "patch": {"status": status},
-        })
         self._emit_system("task_notification", {
             "task_id": task_id,
             "tool_use_id": tool_use_id,
             "status": status,
             "summary": summary,
             "output_file": output_file,
+        })
+        self._emit_system("task_updated", {
+            "task_id": task_id,
+            "tool_use_id": tool_use_id,
+            "patch": {"status": status},
         })
         if tool_use_id:
             call = self._call(tool_use_id)
@@ -434,7 +442,7 @@ class BackgroundMixin:
         return "failed"
 
     def _ui_close_bg(self, task_id: str, tool_use_id: str, status: str) -> None:
-        """Flip ⚙ even when the agent-wake notify is deduped."""
+        """Flip ⚙ when the rich notification was already sent for this job."""
         self._emit_system("task_updated", {
             "task_id": task_id,
             "tool_use_id": tool_use_id,
@@ -442,7 +450,7 @@ class BackgroundMixin:
         })
 
     def _emit_bg_terminal_complete(self, terminal_id: str) -> None:
-        """ACP process exit → one Claude task_notification."""
+        """ACP process exit → one task_notification (row + output)."""
         info = self._terminal_bg.pop(terminal_id, None)
         slot = (
             self._terminals.get(terminal_id)

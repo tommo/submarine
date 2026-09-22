@@ -28,7 +28,9 @@ Live (kimi 0.37.2):
 - After wait replies, Kimi self-wakes (`fs`, `Write`) with **no**
   `session/update` unless the host opens a new `session/prompt`
 - `wake` strategy: second prompt after wait → `SANDBOX_WOKE` streams
-- Host: `notify_action("kimi")` is `query`, not `surface`
+- Host: the completion only flips the ⚙ row. Kimi's internal turn ran
+  first (perm + `fs/write_text_file`, no `session/update`); a host prompt on
+  top of it was a duplicate, not the way to make that turn visible
 
 ```bash
 python3 sandbox/kimi_bg/check_recovery.py

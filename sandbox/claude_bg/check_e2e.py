@@ -107,7 +107,9 @@ class Bridge(object):
                 self._note("garbage", {"line": line[:200]})
                 continue
             if msg.get("method"):
-                params = msg.get("params") or {}
+                params = dict(msg.get("params") or {})
+                if msg.get("method") != "message":
+                    params["_method"] = msg.get("method")
                 self._note("notify", params)
             elif msg.get("id") is not None:
                 with self._lock:
@@ -193,6 +195,7 @@ def classify(events):
         "task_updated": [],
         "task_notification": [],
         "turn_results": [],       # message/result (turn end)
+        "injected": [],           # injected_turn (a turn the CLI started itself)
         "text": [],
         "order": [],
     }
@@ -201,6 +204,10 @@ def classify(events):
         if kind != "notify":
             continue
         typ = payload.get("type")
+        if payload.get("_method") == "injected_turn":
+            out["injected"].append(payload)
+            out["order"].append((t, "injected_turn", payload.get("origin")))
+            continue
         if typ == "tool_use":
             out["order"].append((t, "tool_use", payload.get("name")))
             if payload.get("background"):
@@ -233,7 +240,8 @@ def classify(events):
                     (t, "task_notification", data.get("status")))
         elif typ == "result":
             out["turn_results"].append(payload)
-            out["order"].append((t, "result", payload.get("status")))
+            out["order"].append((t, "result", "%s origin=%s" % (
+                payload.get("status"), payload.get("origin") or "-")))
         elif typ == "text_delta":
             out["text"].append(payload.get("text") or "")
     return out
@@ -298,6 +306,24 @@ def report(r, bridge, sleep_s, model, mode="after"):
                      "task_notification nor a terminal task_updated)")
     if not r["turn_results"]:
         fails.append("no turn result: the model did not end its turn")
+    # The CLI answers a finished background task with a turn of its own. The
+    # bridge must forward it as one: an `injected_turn` announcement, its
+    # stream, and a result tagged with the CLI's origin — never swallow it
+    # (which left the host to query the model about the same job again).
+    print("--- injected turns: %d" % len(r["injected"]))
+    own = [p for p in r["turn_results"] if not p.get("origin")]
+    injected_results = [p for p in r["turn_results"]
+                        if p.get("origin") == "task-notification"]
+    if mode == "after":
+        if not r["injected"]:
+            fails.append("the CLI's follow-up turn for the finished job was "
+                         "not announced (no injected_turn)")
+        if not injected_results:
+            fails.append("no result with origin=task-notification: the "
+                         "injected turn was not closed")
+        if len(own) != 1:
+            fails.append("expected exactly one untagged (host) result, got %d"
+                         % len(own))
     t_note = None
     for t, k, d in r["order"]:
         if k == "task_notification":
@@ -388,6 +414,14 @@ def main(argv=None):
         note = bridge.wait_for(_completed, timeout=args.timeout)
         if note is None:
             print("!! no completion event within %.0fs" % args.timeout)
+        if args.mode == "after":
+            # …and the CLI's own follow-up turn for it.
+            closer = bridge.wait_for(
+                lambda p: p.get("type") == "result"
+                and p.get("origin") == "task-notification",
+                timeout=90)
+            if closer is None:
+                print("!! no injected-turn result within 90s")
         time.sleep(1.5)
 
         poll = bridge.request("poll_bg_tasks", {}, timeout=30)
@@ -399,11 +433,19 @@ def main(argv=None):
         fixture = FIXTURES[args.mode]
         if not args.no_fixture:
             os.makedirs(os.path.dirname(fixture), exist_ok=True)
+            home = os.path.expanduser("~")
             with open(fixture, "w", encoding="utf-8") as f:
                 for t, kind, payload in bridge.events:
-                    f.write(json.dumps(
+                    if payload.get("type") == "system" and \
+                            payload.get("subtype") == "init":
+                        # The CLI's init dump lists plugins, memory paths and
+                        # the account: none of it is the host's business and
+                        # the fixture is committed.
+                        payload = dict(payload, data={})
+                    line = json.dumps(
                         {"t": t, "kind": kind, "payload": payload},
-                        ensure_ascii=False) + "\n")
+                        ensure_ascii=False)
+                    f.write(line.replace(home, "~") + "\n")
             print("\ncapture -> %s" % fixture)
 
         if not args.no_host:

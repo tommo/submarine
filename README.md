@@ -321,12 +321,6 @@ Right-click selected text and choose "Ask Submarine" to query about the selectio
     // when a turn *ends*. Default if omitted: 60.
     // "auto_sleep_minutes": 60,
 
-    // Background job completions: "defer" (default) never wakes the agent —
-    // the result shows on the sheet and rides along with your next prompt;
-    // "auto" wakes unless the agent's last turn used no tool; "always" wakes
-    // per job.
-    "background_notify": "defer",
-
     // Service Manager base URL for subscription usage on "with XXX…"
     // switch-panel rows (Grok / Kimi). Empty → http://127.0.0.1:3001
     // "quota_service_url": "http://127.0.0.1:3001",
@@ -556,9 +550,12 @@ The output view shows:
 - `☐ Tool` — Tool pending
 - `✔ Tool` — Tool completed
 - `✘ Tool` — Tool error
-- `⚙` — Background tool
+- `⚙` — Background tool; flips to `✔`/`✘` with the job's output when it ends.
+  The agent runtime reports the completion to the model itself (Claude Code
+  runs a follow-up turn, shown as `⚙ …`); the plugin never re-sends it
 - Response text with syntax highlighting
-- `@done(Xs)` — Completion time
+- `@done(Xs, ctx, provider/model, effort)` — how the turn ended, and what
+  it ran on (recorded per turn, so old turns keep their own provider)
 - **Tasks block** — folded by default; `Cmd+Alt+T` or **super+click** the
   banner / "+N more" line to expand
 - **Goal strip** — `◆ goal · {phase} · {objective}`

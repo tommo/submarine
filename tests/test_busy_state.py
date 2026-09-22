@@ -40,7 +40,8 @@ def _play(events, backend="kimi"):
         elif kind == "thinking":
             log.append(t.inbound_action("thinking"))
         elif kind == "bg_notify":
-            log.append(t.notify_action(ev.get("backend") or backend))
+            # A completion is row-only: it never touches the busy bit.
+            log.append("row")
         elif kind in ("terminal_output_poll", "terminal_kill", "wait_for_exit"):
             pass
         log.append(t.kind)
@@ -63,14 +64,13 @@ class TestGitappAfterDone(unittest.TestCase):
         self.assertEqual(t.inbound_action("synth_bash"), "paint_bg")
         self.assertEqual(t.kind, "idle")
 
-    def test_kimi_notify_after_end_is_query(self):
+    def test_no_notify_policy_on_the_turn(self):
+        """Completions never start a turn from the host: there is no
+        per-backend notify policy left to consult."""
         t = TurnState()
         t.begin_query()
         t.end_live()
-        # Kimi self-wake does not paint without a live prompt (check_recovery).
-        self.assertEqual(t.notify_action("kimi"), "query")
-        self.assertEqual(t.notify_action("grok"), "surface")
-        self.assertEqual(t.notify_action("claude"), "query")
+        self.assertFalse(hasattr(t, "notify_action"))
         self.assertFalse(t.working)
 
 
@@ -187,7 +187,6 @@ class TestParentNotify(unittest.TestCase):
         parent = TurnState()
         parent.begin_query()
         self.assertTrue(parent.should_queue_prompt())
-        self.assertEqual(parent.notify_action("kimi"), "hold")
 
 
 class TestInboundNeverAdopts(unittest.TestCase):

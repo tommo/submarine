@@ -178,10 +178,11 @@ class TestQueueAfterInterrupt(unittest.TestCase):
         s.queue_prompt("meanwhile")
         self.assertEqual([m for m, _p, _cb in client.sent if m == "inject_message"], ["inject_message"])
 
-    def test_queued_message_goes_before_a_background_notification_turn(self):
+    def test_queued_message_is_the_only_turn_after_a_cancel(self):
         """Esc kills background jobs; their completions used to start a
         notification turn first and push the user's message one round back.
-        (Grok: every open terminal reports on cancel.)"""
+        A completion is row-only now: the queued message is the next turn,
+        unchanged. (Grok: every open terminal reports on cancel.)"""
         s, client = self._session()
         s.backend = "grok"
         s.query("first")
@@ -194,9 +195,8 @@ class TestQueueAfterInterrupt(unittest.TestCase):
         s.scheduler.fire_all()
         queries = [p.get("prompt") for m, p, _cb in client.sent if m == "query"]
         self.assertEqual(len(queries), 2, "expected exactly one new turn after the cancel")
-        self.assertTrue(queries[-1].endswith("what I actually want"), queries[-1])
-        self.assertIn("<task-notification>", queries[-1])       # the completion rides along
-        self.assertEqual(s.bg.pending_notifications, [])
+        self.assertEqual(queries[-1], "what I actually want")
+        self.assertIn("t1", s.bg.notified_task_ids)
 
     def test_after_the_ack_messages_inject_again(self):
         """Regression: gating on flags that outlive the ACK blocked every

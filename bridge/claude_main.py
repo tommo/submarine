@@ -40,7 +40,8 @@ os.environ.pop("COLORTERM", None)
 # task_updated.patch.status values that mean the task ended. (The SDK dropped
 # the old `is_backgrounded` patch flag for a {status, end_time} patch.)
 _TASK_TERMINAL = ("completed", "failed", "cancelled", "canceled",
-                  "error", "errored", "aborted", "timeout", "crashed")
+                  "error", "errored", "aborted", "timeout", "crashed",
+                  "killed", "stopped")
 
 
 # ── cron: the agent's built-in CronCreate is inert under the SDK (no REPL idle
@@ -133,22 +134,44 @@ class Bridge:
         self.client: ClaudeSDKClient | None = None
         self.options: ClaudeAgentOptions | None = None
         self.running = True
-        self.current_task: asyncio.Task | None = None
         self.pending_permissions: dict[int, asyncio.Future] = {}
         self.pending_questions: dict[int, asyncio.Future] = {}  # For AskUserQuestion
         self.pending_plan_approvals: dict[int, asyncio.Future] = {}  # For plan mode
         self.permission_id = 0
         self.question_id = 0
         self.plan_id = 0
-        self.interrupted = False  # Set by interrupt(), checked by query()
+        self.interrupted = False  # Set by interrupt(); the reader skips turn content until the closer
         self.query_id: int | None = None  # Track active query for inject_message
         self.cwd: str | None = None  # Current working directory (set by initialize)
 
-        # Queue for injected prompts that arrive when query completes
-        self.pending_injects: list[str] = []
-
-        # Track active background tasks
-        self._pending_bg_tasks: set[str] = set()
+        # One persistent reader owns the SDK stream (see _read_stream). In
+        # streaming-input mode the CLI interleaves the turns we send with turns
+        # it starts on its own — the follow-up for a finished background task
+        # (`origin.kind == "task-notification"`), scheduled prompts, peer
+        # messages. Every message is attributed to one of:
+        #   _host_query  — the host's query RPC: {"id", "done", "owned",
+        #                  "absorbed"}; `owned` flips when the CLI echoes our
+        #                  prompt back (--replay-user-messages, origin human)
+        #                  as a turn of its own, `absorbed` when that echo
+        #                  lands inside a running CLI turn — the CLI attaches
+        #                  a prompt sent mid-turn to that turn, and that
+        #                  turn's result is then the only closer ours gets;
+        #   _injected    — a turn the CLI started by itself, announced to the
+        #                  host with `injected_turn` and closed by its own
+        #                  ResultMessage (same origin).
+        self._reader_task: asyncio.Task | None = None
+        self._host_query: dict | None = None
+        self._injected = False
+        self._echo_seen = False
+        # A query was closed without its ResultMessage (interrupt drain
+        # timeout): the late result must not close the next query.
+        self._stray_result_pending = False
+        # task_notification summaries since the last turn start: the label of
+        # the injected turn's prompt row.
+        self._bg_summaries: list[str] = []
+        # Live background task ids (`background_tasks_changed`), for the
+        # host's reconcile poll.
+        self._running_tasks: set[str] = set()
         self._bg_tool_use_ids: set[str] = set()
 
         # Cron jobs the agent scheduled via CronCreate (inert under the SDK), which
@@ -384,7 +407,10 @@ Agent ID: {agent_id_info}
         if additional_dirs:
             options_dict["add_dirs"] = list(additional_dirs)
 
-        extra_args: dict = {}
+        # The CLI echoes each user turn it starts (origin `human` for ours,
+        # `task-notification` for its own): that echo is how the reader tells
+        # our turn from one the CLI injected. See _read_stream.
+        extra_args: dict = {"replay-user-messages": None}
         if not resume_id:
             # Fresh session: specify session_id upfront via CLI arg so we don't
             # have to wait for the first ResultMessage to learn it.
@@ -422,8 +448,6 @@ Agent ID: {agent_id_info}
                     with open(os.path.join(os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp", "submarine_bridge.log"), "a") as f:
                         f.write(f"resume-session-at failed, retrying plain resume: {error_msg}\n")
                     del options_dict["extra_args"]["resume-session-at"]
-                    if not options_dict["extra_args"]:
-                        del options_dict["extra_args"]
                     self.options = ClaudeAgentOptions(**options_dict)
                     self.client = ClaudeSDKClient(options=self.options)
                     await self.client.connect()
@@ -431,6 +455,7 @@ Agent ID: {agent_id_info}
                     raise
             else:
                 raise
+        self._start_reader()
 
         send_result(id, {
             "status": "initialized",
@@ -957,6 +982,189 @@ Agent ID: {agent_id_info}
         content.append({"type": "text", "text": prompt})
         return content
 
+    # ── stream ownership ───────────────────────────────────────────────────
+    def _start_reader(self) -> None:
+        """One reader per connection. It never stops between queries: the
+        CLI's own turns (background-task follow-ups) arrive while we are idle,
+        and a reader that only ran during query() dropped them on the floor
+        — then the host re-told the model about the same job."""
+        self._stop_reader()
+        self._host_query = None
+        self._injected = False
+        self._echo_seen = False
+        self._stray_result_pending = False
+        self._bg_summaries = []
+        self._running_tasks = set()
+        self._reader_task = asyncio.create_task(self._read_stream())
+
+    def _stop_reader(self) -> None:
+        task = self._reader_task
+        self._reader_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _read_stream(self) -> None:
+        ended = None  # type: Exception | None
+        try:
+            async for message in self.client.receive_messages():
+                try:
+                    await self._route(message)
+                except Exception as e:
+                    _logger.error(f"route {type(message).__name__}: {e}")
+            ended = RuntimeError("Command failed: the SDK stream ended")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            _logger.error(f"stream reader ended: {type(e).__name__}: {e}")
+            ended = e
+        # A query waiting on this stream must not hang forever.
+        hq = self._host_query
+        if hq is not None and not hq["done"].done():
+            hq["done"].set_exception(ended)
+
+    @staticmethod
+    def _origin_kind(message: Any) -> str | None:
+        origin = getattr(message, "origin", None)
+        if isinstance(origin, dict):
+            kind = origin.get("kind")
+            return str(kind) if kind else None
+        return None
+
+    @staticmethod
+    def _is_prompt_echo(message: Any) -> bool:
+        content = message.content
+        if isinstance(content, str):
+            return True
+        if isinstance(content, list):
+            return not any(isinstance(b, ToolResultBlock) for b in content)
+        return False
+
+    def _begin_injected(self, kind: str) -> None:
+        self._injected = True
+        self.interrupted = False
+        summaries = [x for x in self._bg_summaries if x][-5:]
+        self._bg_summaries = []
+        send_notification("injected_turn", {
+            "origin": kind,
+            "summaries": summaries,
+        })
+
+    def _finish_host_query(self, status: str) -> None:
+        hq = self._host_query
+        if hq is None:
+            return
+        self._host_query = None
+        send_result(hq["id"], {"status": status})
+        if not hq["done"].done():
+            hq["done"].set_result(status)
+
+    async def _route(self, message: Any) -> None:
+        """Attribute one stream message to the host's query or to a turn the
+        CLI started by itself, and forward it accordingly."""
+        if isinstance(message, SystemMessage):
+            data = message.data or {}
+            if message.subtype == "task_notification":
+                summary = data.get("summary")
+                if summary:
+                    self._bg_summaries.append(str(summary))
+                self._running_tasks.discard(data.get("task_id", ""))
+            elif message.subtype == "task_started":
+                if data.get("is_backgrounded") is not False:
+                    self._running_tasks.add(data.get("task_id", ""))
+            elif message.subtype == "task_updated":
+                if (data.get("patch") or {}).get("status", "") in _TASK_TERMINAL:
+                    self._running_tasks.discard(data.get("task_id", ""))
+            elif message.subtype == "background_tasks_changed":
+                tasks = data.get("tasks")
+                if isinstance(tasks, list):
+                    self._running_tasks = set(
+                        str(t.get("task_id")) for t in tasks
+                        if isinstance(t, dict) and t.get("task_id"))
+            await self.emit_message(message)
+            return
+
+        kind = self._origin_kind(message)
+        hq = self._host_query
+
+        if isinstance(message, UserMessage) and self._is_prompt_echo(message):
+            # A user-turn echo (--replay-user-messages), not a tool result.
+            if kind in (None, "human"):
+                self._echo_seen = True
+                self._bg_summaries = []
+                if hq is not None:
+                    if self._injected:
+                        # Delivered into the CLI's own running turn
+                        # (queue-operation "absorbed_mid_turn"): no result of
+                        # its own will ever come. That turn's closes ours.
+                        hq["absorbed"] = True
+                    else:
+                        hq["owned"] = True
+                    # Our prompt reached the model: whatever the old turn
+                    # still owed has come and gone.
+                    self._stray_result_pending = False
+                return
+            if self._injected or (hq is not None and hq["owned"]):
+                # A completion absorbed into the running turn: the CLI
+                # attaches the notification as a user message mid-turn
+                # (queued_command, "absorbed_mid_turn"). Same turn, not a
+                # new one — the model already has it, the row is flipped by
+                # the task_notification that preceded it.
+                return
+            if hq is not None and not self._echo_seen:
+                return
+            self._begin_injected(kind)
+            return
+
+        if isinstance(message, ResultMessage):
+            if self._injected and kind != "human":
+                self._injected = False
+                if hq is not None and hq.get("absorbed"):
+                    # The host's prompt rode inside this turn; to the host
+                    # the whole thing was its query. Close it as such.
+                    await self.emit_message(message)
+                    self._finish_host_query(
+                        "interrupted" if self.interrupted else "complete")
+                    return
+                await self.emit_message(message, origin=kind or "task-notification")
+                self.interrupted = False
+                return
+            if hq is not None:
+                if self._stray_result_pending and not hq["owned"]:
+                    self._stray_result_pending = False
+                    _logger.info("late result of a closed query dropped")
+                    return
+                if kind not in (None, "human") and self._echo_seen and not hq["owned"]:
+                    # The CLI ran a turn of its own ahead of ours before our
+                    # echo arrived; its content already went out as ours.
+                    # Close it as what it was; our result is still to come.
+                    await self.emit_message(message, origin=kind)
+                    return
+                await self.emit_message(message)
+                # Our closer while an "injected" turn was still open: the
+                # attribution was wrong (content before our echo). Ours ends
+                # here either way; nothing else is owed a closer.
+                self._injected = False
+                self._finish_host_query(
+                    "interrupted" if self.interrupted else "complete")
+                return
+            self._stray_result_pending = False
+            _logger.info(f"stray result dropped (origin={kind})")
+            return
+
+        # Turn content: StreamEvent, AssistantMessage, UserMessage(tool results).
+        if self._injected:
+            if self.interrupted:
+                return
+            await self.emit_message(message)
+            return
+        if hq is not None and (hq["owned"] or not self._echo_seen):
+            if self.interrupted:
+                return
+            await self.emit_message(message)
+            return
+        self._begin_injected("task-notification")
+        await self.emit_message(message)
+
     async def query(self, id: int, params: dict) -> None:
         """Send a query and stream responses."""
         if not self.client:
@@ -966,94 +1174,39 @@ Agent ID: {agent_id_info}
         prompt = params.get("prompt", "")
         images = params.get("images", [])
 
-        # Cancel any still-running previous query (e.g. after interrupt)
-        if self.current_task and not self.current_task.done():
-            self.current_task.cancel()
-            try:
-                await self.current_task
-            except (asyncio.CancelledError, Exception):
-                pass
+        # A query still open (its closer never came) must not block this one.
+        if self._host_query is not None:
+            self._finish_host_query("interrupted")
 
         self.interrupted = False  # Reset at start of query
         self._got_first_delta = False
         self.query_id = id  # Store for inject_message to know query is active
+        self._bg_summaries = []
+        done = asyncio.get_event_loop().create_future()
+        self._host_query = {"id": id, "done": done, "owned": False,
+                            "absorbed": False}
 
-        async def _drain_stale():
-            """Drain stale buffered messages from previous query's background work (e.g. auto-compaction).
-            Call after client.query() but before receive_response().
-            At this point, anything already in the buffer predates our query."""
-            stale_iter = self.client.receive_messages().__aiter__()
-            count = 0
-            while True:
-                try:
-                    # Very short timeout — only catches already-buffered messages
-                    msg = await asyncio.wait_for(stale_iter.__anext__(), timeout=0.05)
-                    count += 1
-                    with open(os.path.join(os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp", "submarine_bridge.log"), "a") as f:
-                        f.write(f"pre-drain stale: {type(msg).__name__}\n")
-                    # Don't emit stale messages — they'd confuse the current conversation
-                except (asyncio.TimeoutError, StopAsyncIteration):
-                    break
-            if count:
-                with open(os.path.join(os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp", "submarine_bridge.log"), "a") as f:
-                    f.write(f"pre-drain: consumed {count} stale messages\n")
+        if images:
+            content = self._build_content_with_images(prompt, images)
+        else:
+            content = prompt
 
-        async def run_query():
-            if images:
-                # Build multimodal content
-                content = self._build_content_with_images(prompt, images)
-                # Yield as user message stream
-                async def message_stream():
-                    yield {
-                        "type": "user",
-                        "message": {"role": "user", "content": content},
-                        "parent_tool_use_id": None,
-                    }
-                await self.client.query(message_stream())
-            else:
-                await self.client.query(prompt)
-            # Drain stale messages before reading response
-            await _drain_stale()
-            turn_done = False
-            async for message in self.client.receive_messages():
-                # Track background tasks
-                if isinstance(message, SystemMessage):
-                    data = message.data or {}
-                    if message.subtype == "task_started":
-                        tool_use_id = data.get("tool_use_id", "")
-                        task_id = data.get("task_id", "")
-                        if tool_use_id in self._bg_tool_use_ids:
-                            self._pending_bg_tasks.add(task_id)
-                    elif message.subtype == "task_updated":
-                        # Schema drift: patch is {status, end_time} now (no
-                        # is_backgrounded). A terminal status means the task
-                        # ended — drop it so _pending_bg_tasks tracks RUNNING.
-                        if (data.get("patch") or {}).get("status", "") in _TASK_TERMINAL:
-                            self._pending_bg_tasks.discard(data.get("task_id", ""))
-                    elif message.subtype == "task_notification":
-                        self._pending_bg_tasks.discard(data.get("task_id", ""))
-                if not turn_done:
-                    if self.interrupted and not isinstance(message, ResultMessage):
-                        continue
-                    await self.emit_message(message)
-                    if isinstance(message, ResultMessage):
-                        status = "interrupted" if self.interrupted else "complete"
-                        send_result(id, {"status": status})
-                        turn_done = True
-                        if not self._pending_bg_tasks:
-                            break
-                else:
-                    # Post-turn: forward system messages for background task updates
-                    if isinstance(message, SystemMessage):
-                        await self.emit_message(message)
-                    if not self._pending_bg_tasks:
-                        break
+        async def message_stream():
+            # `origin: human` marks the turn as ours on its echo and on its
+            # ResultMessage (the CLI's own turns say `task-notification`).
+            yield {
+                "type": "user",
+                "message": {"role": "user", "content": content},
+                "parent_tool_use_id": None,
+                "origin": {"kind": "human"},
+            }
 
-        self.current_task = asyncio.create_task(run_query())
         try:
-            await self.current_task
+            await self.client.query(message_stream())
+            await done
         except asyncio.CancelledError:
-            send_result(id, {"status": "interrupted"})
+            if self._host_query is not None and self._host_query["id"] == id:
+                self._finish_host_query("interrupted")
         except Exception as e:
             error_msg = str(e)
             # Enrich with exception type + HTTP status code (APIStatusError carries
@@ -1076,6 +1229,8 @@ Agent ID: {agent_id_info}
                 import traceback as _tb
                 f.write(_tb.format_exc() + "\n")
             error_msg = diag
+            if self._host_query is not None and self._host_query["id"] == id:
+                self._host_query = None
             # Check for session-related errors
             is_session_error = (
                 "No conversation found" in error_msg or
@@ -1088,17 +1243,10 @@ Agent ID: {agent_id_info}
                 send_error(id, -32000, f"Query failed: {error_msg}")
         finally:
             self.query_id = None
-            # Process any pending injects that arrived during query
-            if self.pending_injects:
-                with open(os.path.join(os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp", "submarine_bridge.log"), "a") as f:
-                    f.write(f"query ended with {len(self.pending_injects)} pending injects\n")
-                # Send notification to Sublime to submit the queued prompts
-                for inject in self.pending_injects:
-                    send_notification("queued_inject", {"message": inject})
-                self.pending_injects.clear()
 
-    async def emit_message(self, message: Any) -> None:
-        """Emit a message notification."""
+    async def emit_message(self, message: Any, origin: str | None = None) -> None:
+        """Emit a message notification. `origin` tags a ResultMessage that
+        closes a turn the CLI started by itself."""
         if isinstance(message, StreamEvent):
             event = message.event
             etype = event.get("type")
@@ -1193,6 +1341,8 @@ Agent ID: {agent_id_info}
                 # hint for a user-initiated interrupt.
                 "status": "interrupted" if self.interrupted else "complete",
             }
+            if origin:
+                result_params["origin"] = origin
             if message.usage:
                 result_params["usage"] = message.usage
             if message.stop_reason:
@@ -1209,11 +1359,13 @@ Agent ID: {agent_id_info}
             })
 
     async def interrupt(self, id: int) -> None:
-        """Interrupt current query and drain pending messages."""
+        """Interrupt the running turn — ours or one the CLI started itself."""
+        hq = self._host_query
+        active = hq is not None or self._injected
         with open(os.path.join(os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp", "submarine_bridge.log"), "a") as f:
-            f.write(f"interrupt: called, has_task={self.current_task is not None and not self.current_task.done()}\n")
-        if self.current_task and not self.current_task.done():
-            self.interrupted = True  # Signal to query() that we were interrupted
+            f.write(f"interrupt: called, host_query={hq is not None} injected={self._injected}\n")
+        if active:
+            self.interrupted = True  # The reader skips turn content until the closer
             with open(os.path.join(os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp", "submarine_bridge.log"), "a") as f:
                 f.write(f"interrupt: sending to SDK\n")
             await self.client.interrupt()
@@ -1235,39 +1387,35 @@ Agent ID: {agent_id_info}
                 if not future.done():
                     future.set_result(False)
             self.pending_plan_approvals.clear()
-            # Don't cancel task - let it drain naturally after interrupt
-            # Wait for the task to complete (it should finish quickly after interrupt)
-            with open(os.path.join(os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp", "submarine_bridge.log"), "a") as f:
-                f.write(f"interrupt: waiting for task to drain\n")
-            try:
-                await asyncio.wait_for(self.current_task, timeout=5.0)
-            except asyncio.TimeoutError:
+            # Let the turn drain to its ResultMessage (it should be quick).
+            if hq is not None:
                 with open(os.path.join(os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp", "submarine_bridge.log"), "a") as f:
-                    f.write(f"interrupt: drain timeout, cancelling\n")
-                self.current_task.cancel()
+                    f.write(f"interrupt: waiting for the turn to drain\n")
                 try:
-                    await self.current_task
-                except asyncio.CancelledError:
-                    pass
-            except Exception as e:
-                with open(os.path.join(os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp", "submarine_bridge.log"), "a") as f:
-                    f.write(f"interrupt: drain error: {e}\n")
+                    await asyncio.wait_for(asyncio.shield(hq["done"]), timeout=5.0)
+                except asyncio.TimeoutError:
+                    with open(os.path.join(os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp", "submarine_bridge.log"), "a") as f:
+                        f.write(f"interrupt: drain timeout, closing the query\n")
+                    if self._host_query is hq:
+                        self._stray_result_pending = True
+                        self._finish_host_query("interrupted")
+                except Exception as e:
+                    with open(os.path.join(os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp", "submarine_bridge.log"), "a") as f:
+                        f.write(f"interrupt: drain error: {e}\n")
         send_result(id, {"status": "interrupted"})
 
     async def clear(self, id: int, params: dict) -> None:
         """Harness /clear: new SDK session, same process and options."""
-        if self.current_task and not self.current_task.done():
+        if self._host_query is not None or self._injected:
             self.interrupted = True
             try:
                 if self.client:
                     await self.client.interrupt()
             except Exception as e:
                 _logger.info(f"clear: interrupt before new session: {e}")
-            try:
-                self.current_task.cancel()
-                await asyncio.wait_for(self.current_task, timeout=2.0)
-            except Exception:
-                pass
+            self._finish_host_query("interrupted")
+            self._injected = False
+        self._stop_reader()
         old = getattr(self, "_session_id", None)
         if self.client:
             try:
@@ -1293,6 +1441,7 @@ Agent ID: {agent_id_info}
         self.options = ClaudeAgentOptions(**opts)
         self.client = ClaudeSDKClient(options=self.options)
         await self.client.connect()
+        self._start_reader()
         _logger.info(f"clear: {old} → {session_id}")
         send_result(id, {
             "ok": True,
@@ -1320,7 +1469,10 @@ Agent ID: {agent_id_info}
         send_result(id, {"status": "ok", "cancelled": count})
 
     async def inject_message(self, id: int, params: dict) -> None:
-        """Inject a user message into the current conversation mid-query."""
+        """Deliver a user message into the running turn — the host's query or
+        a turn the CLI started itself (the CLI attaches it mid-turn). With no
+        turn running there is nothing to inject into: the host keeps the
+        message queued and sends it as a query when its turn closes."""
         message = params.get("message", "")
         if not message:
             send_error(id, -32602, "Missing message parameter")
@@ -1329,24 +1481,19 @@ Agent ID: {agent_id_info}
         with open(os.path.join(os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp", "submarine_bridge.log"), "a") as f:
             f.write(f"inject_message: {message[:60]}...\n")
 
-        # If no active query, queue the message to be sent when query ends
-        if not self.query_id:
+        if self._host_query is None and not self._injected:
             with open(os.path.join(os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp", "submarine_bridge.log"), "a") as f:
-                f.write(f"  no active query, queuing inject\n")
-            self.pending_injects.append(message)
-            send_result(id, {"status": "queued"})
+                f.write(f"  no turn running, not injected\n")
+            send_result(id, {"status": "idle"})
             return
 
-        # Try to inject immediately via client.query()
         try:
             await self.client.query(message)
             send_result(id, {"status": "ok"})
         except Exception as e:
-            # If injection fails (e.g., query completed), queue it
             with open(os.path.join(os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp", "submarine_bridge.log"), "a") as f:
-                f.write(f"  inject failed: {e}, queuing\n")
-            self.pending_injects.append(message)
-            send_result(id, {"status": "queued"})
+                f.write(f"  inject failed: {e}\n")
+            send_result(id, {"status": "idle", "error": str(e)})
 
     # ── cron (bridge-owned; agent's CronCreate is inert under the SDK) ───────
     def _handle_cron_tooluse(self, block) -> None:
@@ -1557,39 +1704,12 @@ Agent ID: {agent_id_info}
             f.write(f"[loop] restored {len(self._crons)} cron(s), wake={bool(self._pending_wake)}\n")
 
     async def poll_bg_tasks(self, rpc_id: int) -> None:
-        """Drain buffered SDK messages to pick up pending task_notification system messages.
-
-        Called periodically by the plugin when background tasks are in-flight and the
-        session is idle (no active query). The Claude Code CLI buffers task_notification
-        messages between queries; this drains that buffer and emits them normally.
-        """
-        if not self._pending_bg_tasks or not self.client:
-            send_result(rpc_id, {"pending": 0, "checked": 0})
-            return
-        checked = 0
-        try:
-            stale_iter = self.client.receive_messages().__aiter__()
-            while True:
-                try:
-                    msg = await asyncio.wait_for(stale_iter.__anext__(), timeout=0.15)
-                    checked += 1
-                    if isinstance(msg, SystemMessage):
-                        data = msg.data or {}
-                        if msg.subtype == "task_notification":
-                            self._pending_bg_tasks.discard(data.get("task_id", ""))
-                        elif msg.subtype == "task_updated" and \
-                                (data.get("patch") or {}).get("status", "") in _TASK_TERMINAL:
-                            self._pending_bg_tasks.discard(data.get("task_id", ""))
-                        await self.emit_message(msg)
-                except (asyncio.TimeoutError, StopAsyncIteration):
-                    break
-        except Exception as e:
-            with open(os.path.join(os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp", "submarine_bridge.log"), "a") as f:
-                f.write(f"poll_bg_tasks error: {e}\n")
-        # `running` lets the plugin reconcile bg tools whose completion event it
-        # missed: any tracked task_id no longer here has ended.
-        send_result(rpc_id, {"pending": len(self._pending_bg_tasks), "checked": checked,
-                             "running": list(self._pending_bg_tasks)})
+        """Host reconcile poll: which background tasks the CLI still reports
+        running (`background_tasks_changed`). The stream itself is read
+        continuously by _read_stream, so there is nothing to drain here."""
+        running = sorted(t for t in self._running_tasks if t)
+        send_result(rpc_id, {"pending": len(running), "checked": 0,
+                             "running": running})
 
     async def get_history(self, id: int) -> None:
         """Get conversation history from the SDK."""
@@ -1623,6 +1743,7 @@ Agent ID: {agent_id_info}
 
     async def shutdown(self, id: int) -> None:
         """Shutdown the bridge."""
+        self._stop_reader()
         if self.client:
             await self.client.disconnect()
 

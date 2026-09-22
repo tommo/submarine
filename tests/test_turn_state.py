@@ -32,11 +32,13 @@ class TestHostDoesNotAdoptWorking(unittest.TestCase):
         self.assertNotIn("self.working = True", body)
         self.assertIn("return", body)
 
-    def test_flush_does_not_soft_adopt(self):
+    def test_completion_never_starts_a_turn(self):
         body = self._live(
-            os.path.join(_ROOT, "core", "background.py"), "flush")
+            os.path.join(_ROOT, "core", "background.py"), "_complete")
         self.assertNotIn("self._adopt_agent_turn(", body)
         self.assertNotIn("_bg_soft_fallback_query", body)
+        self.assertNotIn("on_query", body)
+        self.assertNotIn("begin_query", body)
 
     def test_query_queues_while_busy(self):
         body = self._live(

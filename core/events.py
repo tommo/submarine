@@ -64,6 +64,7 @@ class BridgeEventRouter:
         on_artifact_write=None,  # type: Optional[Callable[[str], None]]
         user_cancelled=None,  # type: Optional[Callable[[], bool]]
         on_leftover_pending=None,  # type: Optional[Callable[[], None]]
+        on_injected_turn=None,  # type: Optional[Callable[[str, str], None]]
     ):
         self.output = output
         self.chrome = chrome
@@ -96,6 +97,7 @@ class BridgeEventRouter:
         self.on_artifact_write = on_artifact_write
         self.user_cancelled = user_cancelled
         self.on_leftover_pending = on_leftover_pending
+        self.on_injected_turn = on_injected_turn
         self.current_tool = None  # type: Optional[str]
         self._api_retry_hint = None  # type: Optional[str]
 
@@ -122,6 +124,7 @@ class BridgeEventRouter:
             "plan_response": lambda _p: None,
             "queued_inject": self.queued_inject,
             "notification_wake": self.notification_wake,
+            "injected_turn": self.injected_turn,
             "loop_scheduled": self.loop_scheduled,
             "artifact_write": self.artifact_write,
         }
@@ -302,6 +305,36 @@ class BridgeEventRouter:
         if self.on_query is not None:
             self.on_query(wake_prompt, user_message)
 
+    def injected_turn(self, params):
+        # type: (dict) -> None
+        """The runtime started a turn of its own (Claude Code's follow-up for
+        a finished background task, a scheduled prompt, a peer message).
+
+        Nothing was queried: the bridge saw turn content while no host query
+        was open and tagged it with the CLI's `origin`. The host adopts the
+        turn — busy, a prompt row, the normal stream and its `result` closer
+        (which carries the same origin) — instead of leaving it to paint over
+        @done or, worse, querying the agent again about the same job.
+        """
+        origin = str(params.get("origin") or "task-notification")
+        display = params.get("display") or ""
+        if not display:
+            summaries = [str(x) for x in (params.get("summaries") or []) if x]
+            if summaries:
+                display = "⚙ " + "; ".join(summaries)
+            elif origin == "task-notification":
+                display = "⚙ background task"
+            else:
+                display = "⚙ %s" % origin
+        if self.on_injected_turn is not None:
+            self.on_injected_turn(origin, display)
+            return
+        self.turn.resume_stream()
+        try:
+            self.output.prompt(display)
+        except Exception:
+            pass
+
     def loop_scheduled(self, params):
         # type: (dict) -> None
         fire_at = params.get("fire_at")
@@ -479,8 +512,7 @@ class BridgeEventRouter:
                     self.bg.drop_tool(tool_id)
             else:
                 self.output.tool(name, tool_input, tool_id=tool_id, background=True)
-                # A background launch is a tool call of this turn too: the
-                # wake budget must see the turn as "working", not "talking".
+                # A background launch is a tool call of this turn too.
                 if self.on_tool_name is not None:
                     try:
                         self.on_tool_name(name)
@@ -582,8 +614,6 @@ class BridgeEventRouter:
             self.output.tool_error(tool_name, content, tool_id=tool_use_id)
         else:
             self.output.tool_done(tool_name, content, tool_id=tool_use_id)
-        if not is_error:
-            self.bg.note_task_poll_delivery(tool_name, content or "")
         if tool_name == self.current_tool:
             self.current_tool = None
             if self.on_tool_name is not None:
@@ -617,6 +647,12 @@ class BridgeEventRouter:
             self.on_usage(usage)
         stop = params.get("stop_reason") or params.get("stopReason") or ""
         leftover_end = bool(params.get("leftover_end"))
+        origin = str(params.get("origin") or "")
+        # An injected turn's closer while a host query is open: the runtime
+        # ran its own turn ahead of ours and the bridge attributed it to us
+        # anyway (no echo yet). Our query's result is still to come.
+        if origin and origin != "human" and self.turn.awaiting_rpc:
+            return
         # Duplicate closer: Grok prompt_complete after the RPC already idled.
         # Host query owns the turn via session/prompt — leftover_end must
         # not @done that sheet (self-wake closer can arrive late).
@@ -632,6 +668,10 @@ class BridgeEventRouter:
                 except Exception:
                     pass
             return
+        # An adopted injected turn has no RPC callback: this message is its
+        # only closer, whatever its status.
+        injected = bool(origin and origin != "human"
+                        and self.turn.busy and not self.turn.awaiting_rpc)
         if (
             not leftover_end
             and (
@@ -643,6 +683,8 @@ class BridgeEventRouter:
                 self.output.reset_active_states(soft=True)
             except Exception:
                 pass
+            if injected:
+                self._close_adopted("interrupted")
             return
         compacting = self.is_compacting() if self.is_compacting else (
             self.turn.kind == "compacting")
@@ -659,6 +701,8 @@ class BridgeEventRouter:
                 pass
             if self.on_error is not None:
                 self.on_error(msg)
+            if injected:
+                self._close_adopted("error")
             return
         if not compacting:
             try:
@@ -674,8 +718,18 @@ class BridgeEventRouter:
             and params.get("status") != "interrupted"
             and not params.get("is_error")
         ):
+            self._close_adopted()
+
+    def _close_adopted(self, completion="success"):
+        # type: (str) -> None
+        if self.turn.kind == "interrupting":
+            self.turn.settle_interrupt()
+        else:
             self.turn.end_live()
-            if self.on_result_idle is not None:
+        if self.on_result_idle is not None:
+            try:
+                self.on_result_idle(completion)
+            except TypeError:
                 self.on_result_idle()
 
     def system(self, params):

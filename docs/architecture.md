@@ -128,8 +128,11 @@ The old 6800-line `Session` god-object splits into (inside `core/`):
 - `events.py` — `BridgeEventRouter`: notification dispatch table → UI calls +
   side effects. Kimi compact-closer rule (stay busy till "Compaction completed"
   or 180s), leftover-stream policy (`inbound_action`: drop/paint/paint_bg).
-- `background.py` — bg task registry, poll epochs, notify dedupe,
-  `notify_action` (claude=query, kimi/grok=surface).
+- `background.py` — bg task registry (⚙ rows), poll epochs, reconcile.
+  A completion only flips its row (with the job's output) and marks the
+  session unread; the runtime tells the model itself (Claude Code injects a
+  follow-up turn, forwarded as `injected_turn` and adopted via
+  `resume_stream`; Grok/Kimi self-wake).
 - `registry.py` — view_id↔Session, agent_id↔view_id, background map,
   parent/child relink, subsession waiters (XOR delivery), sender stamps.
 - `placement.py` — pane-group memory (old session_split; renamed — it is NOT
@@ -213,12 +216,15 @@ turn: idle/live/compacting/interrupting. Sleep is DERIVED:
 - **The claude background-task wire is not the ACP one** (see
   `sandbox/claude_bg/README.md`): background bash acks with "Command running in
   background with ID: …", opens `task_started` (with `is_backgrounded`) even for
-  foreground commands, and finishes with `task_updated {status}` — a
-  `task_notification` only when the turn is still live. The host keeps ⚙ on that
-  ack, ignores foreground tasks, and treats a terminal `task_updated` as the
-  completion (one notification turn, upgraded in place if the CLI's own
-  notification follows). Captures in `sandbox/claude_bg/fixtures/` replay through
-  the real gate in `tests/test_cc_bg_host_gate.py`.
+  foreground commands, and finishes with `task_updated {status}` +
+  `task_notification`. Then **Claude Code runs a follow-up turn of its own**
+  (`origin: task-notification`) — or, mid-turn, attaches the completion to the
+  running turn. The host keeps ⚙ on the ack, ignores foreground tasks, flips the
+  row with the output on the completion, and adopts the CLI's turn
+  (`injected_turn` from the bridge's persistent stream reader). It never queries
+  about a completion itself: that was a duplicate of the CLI's turn. Captures in
+  `sandbox/claude_bg/fixtures/` replay through the real gate in
+  `tests/test_cc_bg_host_gate.py`.
 - **50 production invariants** in the report §9 are acceptance criteria
   (cancel-as-notification, agent_busy retry, q0 AskUser mapping, plan outcome
   shape, foreign-session filter, load-replay no-paint, bundled remap, busy-state

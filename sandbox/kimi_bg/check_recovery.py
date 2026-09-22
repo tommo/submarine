@@ -508,11 +508,9 @@ def _host_sim(prompt_t, timeline):
             action = turn.inbound_action(
                 "tool_use_bg" if st == "tool_call" else "text")
             dropped_busy.append((round(t, 2), st, action, turn.busy))
-    notify = turn.notify_action("kimi")
     return {
         "would_at_done": True,
         "busy_after": turn.busy,
-        "notify_action": notify,
         "leftover_events": len(dropped_busy),
         "sample": dropped_busy[:8],
     }

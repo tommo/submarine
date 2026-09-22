@@ -3,17 +3,20 @@
 
 Fixture: `fixtures/cc_bg_wire.jsonl` (written by `check_e2e.py`). It is the
 notification stream of one real session — Bash(run_in_background) → launch ack →
-task_started → turn result → the task's completion — and it is fed, in order,
-into the shipped `BridgeEventRouter` + `BackgroundTaskGate` + `SubmarineOutputView`
-(headless) so the assertions are about host behaviour, not about a model.
+task_started → turn result → the task's completion → the CLI's own follow-up
+turn — and it is fed, in order, into the shipped `BridgeEventRouter` +
+`BackgroundTaskGate` + `SubmarineOutputView` (headless) so the assertions are
+about host behaviour, not about a model.
 
 What a user sees, and what this checks:
 
   1. the ⚙ row must still be there after the launch ack (the job is running);
   2. it must still be there after the turn's own `result` (the job outlives it);
-  3. the task's completion must flip ⚙ → ✓ AND tell the user: one
-     `<task-notification>` turn carrying what the job printed;
-  4. a repeated completion event must not produce a second notification turn.
+  3. the task's completion must flip ⚙ → ✓ with what the job printed, and
+     must NOT start a turn: the CLI already tells the model itself;
+  4. the CLI's follow-up turn (`injected_turn` … `result{origin}`) is adopted
+     as one turn of the sheet and closed by its tagged result;
+  5. a repeated completion event must not flip anything twice.
 
     python3 sandbox/claude_bg/check_host_gate.py
     python3 sandbox/claude_bg/check_host_gate.py --fixture path.jsonl
@@ -126,11 +129,20 @@ def build(read_output):
     queries = []
     sends = []
 
+    surfaced = []
+    holder = {}
+
+    def send_poll(cb):
+        # The bridge answers with what the CLI still reports running; a job
+        # the host tracks is running until its completion event arrives.
+        sends.append("poll")
+        cb({"running": sorted(holder["bg"].task_tool_map)})
+        return True
+
     bg = BackgroundTaskGate(
         turn, sched, out, backend="claude",
-        send_poll=lambda cb: (sends.append("poll"), cb({"running": []}), True)[-1],
-        on_query=lambda body, display: queries.append((body, display)),
-        on_surface=lambda: queries.append(("SURFACE", "")),
+        send_poll=send_poll,
+        on_surface=lambda: surfaced.append(1),
         read_output_file=read_output,
     )
     router = BridgeEventRouter(
@@ -139,8 +151,10 @@ def build(read_output):
         on_query=lambda body, display=None: queries.append((body, display)),
         on_phase=None,
     )
+    holder["bg"] = bg
     return {"out": out, "turn": turn, "sched": sched, "bg": bg,
-            "router": router, "queries": queries, "sends": sends}
+            "router": router, "queries": queries, "sends": sends,
+            "surfaced": surfaced}
 
 
 def statuses(h):
@@ -156,9 +170,7 @@ def replay(fixture, read_output):
         payload = rec["payload"]
         typ = payload.get("type")
         sub = payload.get("subtype")
-        if typ == "result":
-            pass
-        h["router"].dispatch("message", payload)
+        dispatch(h, payload)
         h["sched"].fire_due()
         label = "%s/%s" % (typ, sub) if sub else str(typ)
         steps.append((sec(rec), label, {
@@ -174,13 +186,18 @@ def sec(rec):
 
 
 def settle(h):
-    """The host's `_on_done`: the query RPC returned, the turn idles, and a
-    buffer held while busy is flushed."""
+    """The host's `_on_done`: the query RPC returned, the turn idles."""
     h["turn"].end_live()
     h["sched"].fire_due()
-    if h["bg"].pending_notifications:
-        h["bg"].flush()
-    h["sched"].fire_due()
+
+
+def dispatch(h, payload):
+    method = payload.get("_method")
+    if method:
+        h["router"].dispatch(method, {k: v for k, v in payload.items()
+                                      if k != "_method"})
+    else:
+        h["router"].dispatch("message", payload)
 
 
 def find(fixture, typ, sub=None):
@@ -198,24 +215,27 @@ def check(fixture, read_output=__import__("builtins").str):
     # The host sends the query RPC before any of these notifications arrive.
     h["turn"].begin_query()
 
-    def feed(rec, label):
-        h["router"].dispatch("message", rec["payload"])
-        h["sched"].fire_due()
-        print("   %8.2fs  %-26s bg_rows=%s queries=%d busy=%s"
-              % (sec(rec), label, statuses(h), len(h["queries"]),
+    def feed(rec, label, burst_end=True):
+        dispatch(h, rec["payload"])
+        if burst_end:
+            # Timers (the completion debounce, the poll) run between bursts
+            # of the capture, not inside one: task_updated and
+            # task_notification land in the same tick.
+            h["sched"].fire_due()
+        print("   %8.2fs  %-26s bg_rows=%s surfaced=%d busy=%s"
+              % (sec(rec), label, statuses(h), len(h["surfaced"]),
                  h["turn"].busy))
 
     use = find(fixture, "tool_use")
     ack = find(fixture, "tool_result")
     started = find(fixture, "system", "task_started")
     result = find(fixture, "result")
-    done = find(fixture, "system", "task_updated")
-    notif = find(fixture, "system", "task_notification")
 
     if not use or not ack or not started or not result:
         return ["fixture is missing a step: tool_use=%s ack=%s task_started=%s "
                 "result=%s" % (bool(use), bool(ack), bool(started), bool(result))]
 
+    bg_tool = use["payload"].get("id")
     bg_task = started["payload"]["data"].get("task_id")
     fg_ids = set()
     for rec in fixture:
@@ -227,93 +247,107 @@ def check(fixture, read_output=__import__("builtins").str):
     print("--- replay (bg task %s, foreground tasks %s)" % (bg_task, sorted(fg_ids)))
     # Feed the whole stream in capture order — the order is part of what is
     # being tested (task_updated and task_notification race; the completion can
-    # land before or after the turn's own result).
+    # land before or after the turn's own result; the CLI's follow-up turn
+    # comes after both).
     completed = False
-    n_before = len(h["queries"])
+    injected_open = False
+    records = []
     for rec in fixture:
         payload = rec["payload"]
         typ, sub = payload.get("type"), payload.get("subtype")
-        if typ not in ("tool_use", "tool_result", "result", "system"):
+        method = payload.get("_method")
+        if method and method != "injected_turn":
+            continue
+        if not method and typ not in ("tool_use", "tool_result", "result", "system"):
             continue
         if typ == "system" and sub not in (
                 "task_started", "task_updated", "task_notification"):
             continue
-        if typ == "tool_use" and not payload.get("background"):
-            # foreground rows are noise for this test; the gate still sees them
-            pass
-        feed(rec, "%s/%s" % (typ, sub) if sub else str(typ))
-        if typ == "tool_use" and payload.get("background"):
+        records.append(rec)
+    for i, rec in enumerate(records):
+        payload = rec["payload"]
+        typ, sub = payload.get("type"), payload.get("subtype")
+        method = payload.get("_method")
+        nxt = records[i + 1] if i + 1 < len(records) else None
+        burst_end = nxt is None or (sec(nxt) - sec(rec)) > 0.25
+        label = method or ("%s/%s" % (typ, sub) if sub else str(typ))
+        feed(rec, label, burst_end)
+        if method == "injected_turn":
+            injected_open = True
+            if not h["turn"].busy:
+                fails.append("injected_turn did not make the session busy")
+            cur = h["out"].current
+            text = getattr(cur, "prompt", None) or getattr(cur, "text", "") or ""
+            if not str(text).startswith("⚙"):
+                fails.append("injected turn has no ⚙ prompt row: %r" % (text,))
+        elif typ == "tool_use" and payload.get("background"):
             if len(statuses(h)) != 1:
                 fails.append("the Bash row did not open as a background (⚙) row: "
                              "%s" % statuses(h))
         elif typ == "system" and sub == "task_started":
             if payload.get("data", {}).get("task_id") == bg_task and \
-                    h["bg"].task_tool_map.get(bg_task) != use["payload"].get("id"):
+                    h["bg"].task_tool_map.get(bg_task) != bg_tool:
                 fails.append("task_started did not bind task_id -> tool_use_id")
-        elif typ == "tool_result" and payload.get("tool_use_id") == use["payload"].get("id"):
+        elif typ == "tool_result" and payload.get("tool_use_id") == bg_tool:
             if not statuses(h):
                 fails.append(
                     "BUG: the launch ack closed the ⚙ row — a running background "
                     "task looks finished the instant it starts, so the ⚙ strip is "
                     "empty and there is nothing left to reconcile. ack text was: %r"
                     % (str(payload.get("content"))[:120],))
-        elif typ == "result" and not completed:
-            if not statuses(h):
+        elif typ == "result" and payload.get("origin"):
+            if not injected_open:
+                fails.append("a tagged result arrived with no injected_turn before it")
+            injected_open = False
+            if h["turn"].busy:
+                fails.append("the injected turn's result did not idle the session")
+        elif typ == "result":
+            if not completed and not statuses(h):
                 fails.append("BUG: the turn's own result closed the ⚙ row while "
                              "the task was still running")
+            settle(h)
         elif typ == "system" and sub in ("task_updated", "task_notification"):
             data = payload.get("data") or {}
             if data.get("task_id") == bg_task and \
                     (data.get("status") or (data.get("patch") or {}).get("status")) \
                     in ("completed", "failed", "cancelled", "canceled", "error"):
                 completed = True
-        elif typ == "result":
-            pass
 
-    # The completion. Whatever the CLI calls it, the host must surface it once —
-    # but only once the turn is over: while it is busy the gate holds the buffer
-    # and `_on_done` retries the flush, which is what `settle` emulates.
-    settle(h)
-    if not h["queries"]:
-        fails.append(
-            "BUG: the task completed and the user was told nothing — no "
-            "notification turn. (This CLI reports a background bash completion "
-            "as task_updated{status:completed}, and the host only flips the row.)")
-    else:
-        if len(h["queries"]) != n_before + 1:
-            fails.append("expected exactly one notification turn, got %d: %s"
-                         % (len(h["queries"]) - n_before,
-                            [q[0][:60] for q in h["queries"][n_before:]]))
-        body, _display = h["queries"][n_before]
-        if "CC_BG_DONE" not in body:
-            fails.append("the notification turn does not carry the job's output "
-                         "(looked for 'CC_BG_DONE')")
-        if not body.startswith("<task-notification>"):
-            fails.append("notification body is not a <task-notification> block: "
-                         "%r" % body[:80])
-        for tid in fg_ids:
-            if tid in body:
-                fails.append("a FOREGROUND task (%s) produced a notification: %r"
-                             % (tid, body[:120]))
-        print("   notification body: %r" % body[:200])
-
+    # The completion: the row flips once, with the job's output, and no turn
+    # is started by the host — the CLI runs its own (adopted above).
+    if h["queries"]:
+        fails.append("BUG: the host queried the model about the completion: %s"
+                     % ([q[0][:60] for q in h["queries"]],))
     if statuses(h):
         fails.append("the ⚙ row survived completion: %s" % statuses(h))
+    row = h["out"].find_tool_by_id(bg_tool)
+    if row is None:
+        fails.append("the background row is gone after completion")
+    else:
+        res = str(getattr(row, "result", "") or "")
+        if "CC_BG_DONE" not in res:
+            fails.append("the finished row does not carry the job's output "
+                         "(looked for 'CC_BG_DONE'): %r" % res[:120])
+        print("   row result: %r" % res[:160])
+    if len(h["surfaced"]) != 1:
+        fails.append("expected exactly one surface (unread/hints) for the "
+                     "completion, got %d" % len(h["surfaced"]))
 
     # A repeated completion event (SDK re-send / poll + notification) must not
-    # start a second turn.
+    # flip or surface anything again.
     for rec in fixture:
         payload = rec["payload"]
         if payload.get("type") == "system" and payload.get("subtype") in (
                 "task_updated", "task_notification"):
             h["router"].dispatch("message", payload)
-    settle(h)
-    if len(h["queries"]) != n_before + 1:
-        fails.append("a repeated completion event produced another notification "
-                     "turn (%d -> %d)" % (n_before + 1, len(h["queries"])))
+    h["sched"].fire_due()
+    if len(h["surfaced"]) != 1 or h["queries"]:
+        fails.append("a repeated completion event surfaced again "
+                     "(surfaced=%d queries=%d)" % (len(h["surfaced"]),
+                                                   len(h["queries"])))
 
     # Fallback: completion event lost entirely -> the poll's `running` list must
-    # clear the stale ⚙ rather than leave it forever.
+    # clear the stale ⚙ rather than leave it forever, and never start a turn.
     h2 = build(read_output)
     h2["turn"].begin_query()
     h2["router"].dispatch("message", use["payload"])
@@ -329,7 +363,7 @@ def check(fixture, read_output=__import__("builtins").str):
                      "payload: %s" % (h2["queries"],))
 
     # `during`: a foreground Bash also gets task_started/task_notification from
-    # the CLI. It was already answered inside the turn — no ⚙, no wake.
+    # the CLI. It was already answered inside the turn — no ⚙, nothing to show.
     for rec in fixture:
         payload = rec["payload"]
         data = payload.get("data") or {}
@@ -346,9 +380,10 @@ def check(fixture, read_output=__import__("builtins").str):
                          "summary": data.get("description") or "foreground"},
             })
             h3["sched"].fire_due()
-            if h3["queries"]:
-                fails.append("a foreground command produced a notification turn: "
-                             "%s" % (h3["queries"],))
+            if h3["queries"] or h3["surfaced"]:
+                fails.append("a foreground command's completion surfaced: "
+                             "queries=%s surfaced=%d" % (h3["queries"],
+                                                          len(h3["surfaced"])))
 
     return fails
 

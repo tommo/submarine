@@ -1,38 +1,31 @@
-"""Background-task gate: ⚙ pairing, poll epochs, notify dedupe, flush.
+"""Background-task gate: ⚙ pairing, completion display, poll, reconcile.
+
+A background job's completion never starts a turn from here. Every runtime
+delivers its own results to the model:
+  * Claude Code enqueues a follow-up turn itself (a user message with
+    ``origin.kind == "task-notification"``); the bridge forwards it and the
+    host adopts it (``BridgeEventRouter.injected_turn``).
+  * Grok self-wakes after ``terminal/wait_for_exit`` (synthetic prompt,
+    ``turn_completed`` closer) — the host owns that with ``resume_stream``.
+  * Kimi runs its own internal completion turn.
+A host-built ``<task-notification>`` query on top of that was a second, full
+context send answering "already accounted for" — that is what this used to do.
+
+What the host owes the user is the row: ⚙ while the job runs, ✓/✗ with what it
+printed when it ends, unread + hint refresh, and a poll/reconcile that never
+leaves a dead ⚙ behind. Completion events differ per backend and all count:
+  * ``task_notification`` carries status + summary + output_file (acp/kimi,
+    and Claude Code — after the turn it follows ``task_updated`` by ~0 ms);
+  * a terminal ``task_updated`` has neither tool_use_id nor output_file, so
+    ``note_launch_ack`` keeps the task id and log path from the launch ack.
+The first completion event flips the row (ACP bridges send the rich
+``task_notification`` first); later ones for the same job are no-ops.
 
 Authority split (do not invert):
-  * Host ``notified_*`` is the durable "already shown / already queried"
-    set. Mark only when surface/query actually happens. ``abort()``
+  * Host ``notified_*`` is the durable "row already flipped" set. ``abort()``
     clears it (sleep/wake /clear must not skip a later reused id).
-  * Bridge ``_bg_notified_*`` is ephemeral emit suppression for the
-    process lifetime only. The host never treats a wire sighting as
-    "notified."
-
-Notify policy goes through TurnController.notify_action:
-  claude/kimi → query (host starts a turn with the notification body)
-  grok → surface (⚙ strip + unread; agent auto-continues)
-  busy → hold (KEEP the generation-stamped buffer; retry on end_live)
-
-Dedupe is source-contains (TaskGet/TaskOutput already delivered bash-*)
-plus mirrored aliases (acp-term-* and bash-* sharing one tool_use_id).
-
-Wake budget (``background_notify`` setting: defer | auto | always):
-  A notification turn costs a full context re-send and interrupts whatever
-  the user and the agent were doing. Default `defer`: a completion never
-  starts a turn — it is surfaced (✓ row, unread) and its block rides along
-  with the user's next prompt, where the agent reads it in context.
-  `auto`: a completion wakes the agent unless its last turn used no tool
-  (it was talking, not working; those jobs are *acknowledged* and deferred);
-  failures wake. `always`: every completion wakes.
-
-Completion events differ per backend and all of them count:
-  * `task_notification` carries status + summary + output_file (acp/kimi, and
-    claude when the turn is still live);
-  * a terminal `task_updated` is the only completion claude background bash
-    sends once the turn has ended — it has neither tool_use_id nor output_file,
-    so `note_launch_ack` keeps the task id and log path from the launch ack.
-Both buffer one block keyed by tool_use_id, so the richer event replaces the
-pending one instead of waking the session twice.
+  * Bridge ``_bg_notified_*`` is ephemeral emit suppression for the process
+    lifetime only. The host never treats a wire sighting as "notified."
 """
 from __future__ import annotations
 
@@ -46,11 +39,7 @@ if TYPE_CHECKING:
 _TASK_TERMINAL = (
     "completed", "failed", "cancelled", "canceled",
     "error", "errored", "aborted", "timeout", "crashed",
-)
-
-# Poll-of-output names only. "Task" / "Subagent" are spawn names, not polls.
-_POLL_TOOLS = (
-    "TaskGet", "TaskOutput", "get_command_or_subagent_output",
+    "killed", "stopped",
 )
 
 # Canonical host allowlists. UI imports these; bridge cannot (separate
@@ -62,8 +51,6 @@ SUBAGENT_BG = (
     "Task", "Subagent",
 )
 
-_BASH_ID_RE = re.compile(r"\b(bash-[\w-]+)\b", flags=re.I)
-
 # Claude Code's background-bash launch ack (Bash tool_result). The SDK's later
 # `task_updated` carries no output_file, so this text is the only place that
 # names the task AND its log — `sandbox/claude_bg/` captures it:
@@ -74,7 +61,6 @@ _CC_BG_ACK_RE = re.compile(r"running in background with ID:\s*([A-Za-z0-9_-]+)",
 _CC_BG_LOG_RE = re.compile(
     r"output is being written to:\s*(\S+)", re.I)
 
-FLUSH_DEBOUNCE_MS = 1200
 POLL_BUSY_MS = 5000
 POLL_IDLE_MS = 8000
 
@@ -96,12 +82,9 @@ def bg_notify_already(state, task_id="", tool_use_id=""):
     # type: (dict, str, str) -> bool
     if tool_use_id and tool_use_id in state.get("_bg_notified_tool_ids", ()):
         return True
-    if tool_use_id and tool_use_id in state.get("_pending_bg_tool_ids", ()):
-        return True
     mapping = state.get("_task_tool_map") or {}
     for tid in alias_bg_task_ids(mapping, tool_use_id, task_id):
-        if tid in state.get("_bg_notified_task_ids", ()) or tid in state.get(
-                "_pending_bg_task_ids", ()):
+        if tid in state.get("_bg_notified_task_ids", ()):
             return True
     return False
 
@@ -110,15 +93,13 @@ def mark_bg_notify_ids(state, task_id="", tool_use_id=""):
     # type: (dict, str, str) -> None
     if tool_use_id:
         state.setdefault("_bg_notified_tool_ids", set()).add(tool_use_id)
-        state.setdefault("_pending_bg_tool_ids", set()).discard(tool_use_id)
     mapping = state.get("_task_tool_map") or {}
     for tid in alias_bg_task_ids(mapping, tool_use_id, task_id):
         state.setdefault("_bg_notified_task_ids", set()).add(tid)
-        state.setdefault("_pending_bg_task_ids", set()).discard(tid)
 
 
 class BackgroundTaskGate:
-    """Owns ⚙ registry, poll epochs, notify buffer, and flush."""
+    """Owns the ⚙ registry, completion display, poll epochs and reconcile."""
 
     def __init__(
         self,
@@ -127,30 +108,16 @@ class BackgroundTaskGate:
         output,  # type: OutputPort
         backend="claude",  # type: str
         send_poll=None,  # type: Optional[Callable[[Callable], bool]]
-        on_query=None,  # type: Optional[Callable[[str, str], None]]
         on_surface=None,  # type: Optional[Callable[[], None]]
-        on_compact_done=None,  # type: Optional[Callable[[], None]]
         read_output_file=None,  # type: Optional[Callable[[str], str]]
-        policy=None,  # type: Optional[Callable[[], str]]
     ):
         self.turn = turn
         self.scheduler = scheduler
         self.output = output
         self.backend = backend
         self.send_poll = send_poll
-        self.on_query = on_query
         self.on_surface = on_surface
-        self.on_compact_done = on_compact_done
         self.read_output_file = read_output_file or _read_file
-        # "defer" | "auto" | "always" — see the module docstring. The Session
-        # passes the setting (default defer); a bare gate is auto.
-        self.policy = policy or (lambda: "auto")
-        # Tasks the agent has already judged (a notification turn with no
-        # tool call ended while they ran): their completion is deferred.
-        self.acknowledged = set()  # type: Set[str]
-        # Blocks waiting for the next real prompt (never a turn of their own).
-        self.deferred = []  # type: list
-        self.pending_block_status = []  # type: list  # status per pending block
 
         self.task_tool_map = {}  # type: dict  # task_id -> tool_use_id
         self.bg_tools = {}  # type: dict
@@ -159,14 +126,8 @@ class BackgroundTaskGate:
         self.task_labels = {}  # type: dict  # task_id -> label
         self.task_logs = {}  # type: dict  # task_id -> output file (from the ack)
         self.foreground_tasks = set()  # type: Set[str]
-        self.pending_notifications = []  # type: list
-        self.pending_block_task = []  # type: list  # task_id per block above
-        self.pending_task_ids = set()  # type: Set[str]
-        self.pending_tool_ids = set()  # type: Set[str]
         self.notified_task_ids = set()  # type: Set[str]
         self.notified_tool_ids = set()  # type: Set[str]
-        self.flush_scheduled = False
-        self.pending_hold_gen = None  # type: Optional[int]
         self.poll_epoch = 0
         self._poll_armed = False
 
@@ -176,8 +137,6 @@ class BackgroundTaskGate:
             "_task_tool_map": self.task_tool_map,
             "_bg_notified_task_ids": self.notified_task_ids,
             "_bg_notified_tool_ids": self.notified_tool_ids,
-            "_pending_bg_task_ids": self.pending_task_ids,
-            "_pending_bg_tool_ids": self.pending_tool_ids,
         }
 
     def alias_ids(self, tool_use_id, task_id=""):
@@ -272,16 +231,14 @@ class BackgroundTaskGate:
         )
         if not tool_use_id:
             return
-        # A terminal update IS the completion for backends that never send
-        # `task_notification` for this kind of job (Claude Code background bash
-        # reports only task_updated + background_tasks_changed). Flipping the
-        # row is not enough: the user has to be told the job ended, with what it
-        # printed — that is the whole point of a background task.
-        self._surface_completion(task_id, tool_use_id, status)
-        self.finalize_tool(tool_use_id, keep=(status == "completed"))
+        # A terminal update IS the completion for jobs that never get a
+        # `task_notification` (Claude Code background bash once the turn has
+        # ended sends only task_updated + background_tasks_changed).
+        self._complete(task_id, tool_use_id, status)
 
     def on_task_notification(self, data, working=False):
         # type: (dict, bool) -> None
+        _ = working
         task_id = data.get("task_id") or ""
         status = data.get("status") or ""
         tool_use_id = (
@@ -289,36 +246,18 @@ class BackgroundTaskGate:
             or self.task_tool_map.get(task_id)
             or ("bg-%s" % task_id if task_id else "")
         )
-        if task_id:
-            self.task_tool_map.pop(task_id, None)
         if not status:
             return
         if task_id in self.foreground_tasks:
             return
-        if self._notified(task_id, tool_use_id):
-            # Already surfaced (a terminal task_updated got there first, or this
-            # is a repeat) — visual cleanup only.
-            if tool_use_id:
-                self.finalize_tool(tool_use_id, keep=False)
-                self.drop_tool(tool_use_id)
-            return
-        if tool_use_id:
-            self.bg_task_ids.discard(tool_use_id)
-        if tool_use_id:
-            self.finalize_tool(
-                tool_use_id, keep=(status == "completed"))
-            self.bg_tools.pop(tool_use_id, None)
-        # `working` is unused for drop: hold at flush-time keeps the buffer.
-        _ = working
-        if not self._surface_completion(
-                task_id, tool_use_id, status,
-                summary=data.get("summary") or "",
-                output_file=data.get("output_file") or ""):
-            return
+        self._complete(
+            task_id, tool_use_id, status,
+            summary=data.get("summary") or "",
+            output_file=data.get("output_file") or "")
 
     def _notified(self, task_id="", tool_use_id=""):
         # type: (str, str) -> bool
-        """True only once a flush actually surfaced this task (not while buffered)."""
+        """True once the row was flipped for this job."""
         if tool_use_id and tool_use_id in self.notified_tool_ids:
             return True
         for tid in self.alias_ids(tool_use_id, task_id):
@@ -326,120 +265,39 @@ class BackgroundTaskGate:
                 return True
         return False
 
-    def _pending_block_index(self, task_id="", tool_use_id=""):
-        # type: (str, str) -> Optional[int]
-        # Aliases count: acp-term-* and bash-* are one job (one tool_use_id), and
-        # its two ids must find the same pending block.
-        keys = set(self.alias_ids(tool_use_id, task_id))
-        if tool_use_id:
-            keys.add(tool_use_id)
-        for i, key in enumerate(self.pending_block_task):
-            if key in keys:
-                return i
-        return None
-
-    def _completion_block(self, task_id, status, summary="", output_file=""):
-        # type: (str, str, str, str) -> str
-        output = ""
-        if output_file:
-            try:
-                output = (self.read_output_file(output_file) or "").strip()
-            except Exception:
-                output = ""
-        max_out = 8000
-        if len(output) > max_out:
-            output = (
-                output[:max_out]
-                + "\n…[truncated %s chars; full: %s]" % (
-                    len(output) - max_out, output_file)
-            )
-        summary = (summary or self.task_labels.get(task_id) or task_id
-                   or "background task").strip()
-        if is_child_session_id(summary):
-            summary = "subagent"
-        if "\n" in summary:
-            summary = " ⏎ ".join(
-                s.strip() for s in summary.splitlines() if s.strip())
-        if len(summary) > 100:
-            summary = summary[:99] + "…"
-        header = "%s [%s]" % (summary, status) if status != "completed" else summary
-        if output:
-            return "<task-notification>%s\n%s</task-notification>" % (
-                header, output)
-        tip = "task_id=%s" % task_id if task_id else "background task"
-        if is_child_session_id(task_id) or (
-                isinstance(task_id, str) and task_id.startswith("acp-child-")):
-            tip = "background task"
-        if output_file:
-            tip += "\nlog: %s" % output_file
-        return "<task-notification>%s\n%s</task-notification>" % (header, tip)
-
-    def _surface_completion(self, task_id, tool_use_id, status, summary="",
-                            output_file=""):
+    def _complete(self, task_id, tool_use_id, status, summary="",
+                  output_file=""):
         # type: (str, str, str, str, str) -> bool
-        """Buffer one completion block; False when it must not be surfaced.
+        """Flip the job's row once, with what it printed; surface it.
 
-        A `task_updated` completion carries no output_file and no summary, and
-        the CLI's own `task_notification` (which has both) may follow it for the
-        same task. So a block that is still pending is replaced in place rather
-        than duplicated — the richer event wins, and the same task never
-        produces two turns.
+        Never starts a turn. The first event wins: ACP bridges send the rich
+        `task_notification` before their `task_updated`; Claude Code's
+        `task_updated` has no output but the launch ack named the log
+        (`task_logs`). Later events for the same job (aliases, re-sends,
+        the poll) are no-ops. Returns False when nothing was shown.
         """
         if self._notified(task_id, tool_use_id):
             return False
         if task_id and task_id in self.foreground_tasks:
             return False
+        if not (task_id or tool_use_id):
+            return False
+        # Mark before touching the row: alias events for the same job must
+        # find it already flipped.
+        self.mark(task_id, tool_use_id)
         if not output_file:
             output_file = self.task_logs.get(task_id, "")
-        block = self._completion_block(task_id, status, summary, output_file)
-        if self._defers(task_id, tool_use_id, status):
-            self._defer(block, task_id, tool_use_id)
-            return True
-        # Always buffer. "notified" means shown/queried, not seen on the
-        # wire — mark() happens in flush after surface/query, not here.
-        index = self._pending_block_index(task_id, tool_use_id)
-        if index is None:
-            self.pending_notifications.append(block)
-            # Keyed by tool_use_id when we have one: it is stable across the
-            # acp-term-*/bash-* aliases of a single job.
-            self.pending_block_task.append(tool_use_id or task_id)
-            self.pending_block_status.append(status)
-        else:
-            self.pending_notifications[index] = block
-            self.pending_block_status[index] = status
-        if task_id:
-            self.pending_task_ids.add(task_id)
+        text = self._result_text(task_id, status, summary, output_file)
         if tool_use_id:
-            self.pending_tool_ids.add(tool_use_id)
-        if not self.flush_scheduled:
-            self.flush_scheduled = True
-            self.scheduler.call_later(FLUSH_DEBOUNCE_MS, self.flush)
-        return True
-
-    # --- wake budget ------------------------------------------------------
-
-    def _defers(self, task_id, tool_use_id, status):
-        # type: (str, str, str) -> bool
-        """A result the agent need not be woken for."""
-        try:
-            policy = str(self.policy() or "auto")
-        except Exception:
-            policy = "auto"
-        if policy == "defer":
-            return True           # nothing wakes the agent; it reads it with the next prompt
-        if status != "completed":
-            return False          # auto / always: failures and timeouts wake
-        if policy == "always":
-            return False
-        return bool((task_id and task_id in self.acknowledged)
-                    or (tool_use_id and tool_use_id in self.acknowledged))
-
-    def _defer(self, block, task_id="", tool_use_id=""):
-        # type: (str, str, str) -> None
-        """Show the completion, keep its text for the next real prompt."""
-        if block not in self.deferred:
-            self.deferred.append(block)
-        self.mark(task_id, tool_use_id)
+            self.finalize_tool(
+                tool_use_id, keep=True, result=text,
+                error=(status != "completed"))
+            self.drop_tool(tool_use_id)
+        if task_id:
+            self.task_tool_map.pop(task_id, None)
+            self.task_labels.pop(task_id, None)
+            self.task_logs.pop(task_id, None)
+            self.seen_running.discard(task_id)
         if self.on_surface is not None:
             try:
                 self.on_surface()
@@ -450,193 +308,44 @@ class BackgroundTaskGate:
                 self.output.refresh_background_hints()
             except Exception:
                 pass
+        return True
 
-    def acknowledge_running(self):
-        # type: () -> None
-        """The agent answered a notification turn without acting: whatever
-        is still running is part of a batch it has judged. Their later
-        `completed` results are deferred, and any completed block already
-        buffered for them stops being a reason to wake."""
-        running = set()
-        for tid, tuid in list(self.task_tool_map.items()):
-            if tid:
-                running.add(tid)
-            if tuid:
-                running.add(tuid)
-        running.update(self.bg_task_ids)
-        running.update(self.bg_tools.keys())
-        # Completions that landed during the turn were not in what the agent
-        # read either, but they are the same batch: judge them with it.
-        running.update(self.pending_task_ids)
-        running.update(self.pending_tool_ids)
-        running.update(k for k in self.pending_block_task if k)
-        running.discard("")
-        self.acknowledged.update(running)
-        if not self.pending_notifications:
-            return
-        keep, keep_task, keep_status = [], [], []
-        for block, key, status in zip(self.pending_notifications,
-                                      self.pending_block_task,
-                                      self.pending_block_status):
-            if status == "completed" and key in self.acknowledged:
-                self._defer(block, key, key)
-                continue
-            keep.append(block)
-            keep_task.append(key)
-            keep_status.append(status)
-        self.pending_notifications = keep
-        self.pending_block_task = keep_task
-        self.pending_block_status = keep_status
-        if not keep:
-            self.pending_task_ids.clear()
-            self.pending_tool_ids.clear()
+    def _result_text(self, task_id, status, summary="", output_file=""):
+        # type: (str, str, str, str) -> str
+        """What the finished row shows: a one-line header, then the log."""
+        output = ""
+        if output_file:
+            try:
+                output = (self.read_output_file(output_file) or "").strip()
+            except Exception:
+                output = ""
+        max_out = 8000
+        if len(output) > max_out:
+            output = (
+                "…[%s chars omitted; full: %s]\n" % (
+                    len(output) - max_out, output_file)
+                + output[-max_out:]
+            )
+        summary = (summary or self.task_labels.get(task_id) or task_id
+                   or "background task").strip()
+        if is_child_session_id(summary):
+            summary = "subagent"
+        if "\n" in summary:
+            summary = " ⏎ ".join(
+                s.strip() for s in summary.splitlines() if s.strip())
+        if len(summary) > 100:
+            summary = summary[:99] + "…"
+        header = summary if status == "completed" else "%s [%s]" % (
+            summary, status)
+        if output:
+            return "%s\n%s" % (header, output)
+        if output_file:
+            return "%s\nlog: %s" % (header, output_file)
+        return header
 
-    def defer_pending(self):
-        # type: () -> int
-        """Move buffered completions into the deferred text: the user's own
-        queued message is about to start a turn and must go first; what the
-        jobs printed rides along with it instead of taking a turn of its own
-        ahead of it. Returns how many blocks moved."""
-        blocks = list(self.pending_notifications)
-        if not blocks:
-            return 0
-        tasks = set(self.pending_task_ids)
-        tools = set(self.pending_tool_ids)
-        self.pending_notifications = []
-        self.pending_block_task = []
-        self.pending_block_status = []
-        self.pending_task_ids.clear()
-        self.pending_tool_ids.clear()
-        self.pending_hold_gen = None
-        for tid in tasks:
-            self.mark(tid, "")
-        for tuid in tools:
-            self.mark("", tuid)
-        for b in blocks:
-            if b not in self.deferred:
-                self.deferred.append(b)
-        return len(blocks)
-
-    def take_deferred(self):
-        # type: () -> str
-        """The deferred blocks, joined, for a real prompt; clears them."""
-        if not self.deferred:
-            return ""
-        text = "\n".join(self.deferred)
-        self.deferred = []
-        return text
-
-    def note_task_poll_delivery(self, tool_name, content):
-        # type: (str, str) -> None
-        """Mark bash-* tasks the agent already saw via TaskGet/TaskOutput."""
-        if not content or tool_name not in _POLL_TOOLS:
-            return
-        text = content if isinstance(content, str) else str(content)
-        low = text.lower()
-        terminal = (
-            "status: completed" in low
-            or "status: failed" in low
-            or "status: cancelled" in low
-            or "status: canceled" in low
-            or "retrieval_status: ready" in low
-            or "exitcode:" in low.replace(" ", "")
-            or "exit_code" in low
-        )
-        if not terminal and "status: running" in low:
-            return
-        for m in _BASH_ID_RE.finditer(text):
-            tid = m.group(1)
-            tuid = self.task_tool_map.get(tid) or ""
-            self.mark(tid, tuid)
-        # Not every backend names its tasks `bash-*` (Claude Code uses short
-        # ids), but a poll result that quotes a task we track is proof the agent
-        # already has that outcome — the completion must not wake it again.
-        for tid in list(self.task_tool_map):
-            if tid and tid in text:
-                self.mark(tid, self.task_tool_map.get(tid) or "")
-        if self.pending_notifications:
-            kept = []
-            kept_tasks = []
-            kept_status = []
-            for i, block in enumerate(self.pending_notifications):
-                drop = False
-                for m in _BASH_ID_RE.finditer(block):
-                    if m.group(1) in self.notified_task_ids:
-                        drop = True
-                        break
-                if not drop and self.pending_block_task[i] in self.notified_task_ids:
-                    drop = True
-                if not drop:
-                    kept.append(block)
-                    kept_tasks.append(self.pending_block_task[i])
-                    kept_status.append(self._status_at(i))
-            self.pending_notifications = kept
-            self.pending_block_task = kept_tasks
-            self.pending_block_status = kept_status
-
-    def flush(self):
-        # type: () -> None
-        """Apply TurnState.notify_action — never fake-adopt a turn.
-
-        wait_for_exit often completes after session/prompt already returned.
-        Kimi self-wakes but does not emit session/update without a live prompt
-        (sandbox/kimi_bg/check_recovery.py). Flush uses notify_action
-        (kimi=query) so the continuation has a closer. Grok stays surface.
-        """
-        self.flush_scheduled = False
-        if not self.pending_notifications:
-            return
-        action = self.turn.notify_action(self.backend)
-        if action == "hold":
-            # Keep the generation-stamped buffer; retry on end_live.
-            self.pending_hold_gen = getattr(self.turn, "gen", None)
-            return
-        blocks = self.pending_notifications
-        pending_tasks = set(self.pending_task_ids)
-        pending_tools = set(self.pending_tool_ids)
-        self.pending_notifications = []
-        self.pending_block_task = []
-        self.pending_block_status = []
-        self.pending_task_ids.clear()
-        self.pending_tool_ids.clear()
-        self.pending_hold_gen = None
-        seen = set()
-        uniq = []
-        for b in blocks:
-            if b in seen:
-                continue
-            seen.add(b)
-            uniq.append(b)
-        if not uniq:
-            return
-        # Surface/query is about to happen — now the ids are "notified".
-        for tid in pending_tasks:
-            self.mark(tid, "")
-        for tuid in pending_tools:
-            self.mark("", tuid)
-        joined = "\n".join(uniq)
-        from .turn import looks_like_compact_done
-        if looks_like_compact_done(joined) or "compaction" in joined.lower():
-            if self.on_compact_done is not None:
-                self.on_compact_done()
-            return
-        if action == "surface":
-            if self.on_surface is not None:
-                self.on_surface()
-            else:
-                try:
-                    self.output.refresh_background_hints()
-                except Exception:
-                    pass
-            return
-        if action == "query" and self.on_query is not None:
-            n = len(uniq)
-            display = "⚙ %s task notification%s" % (n, "s" if n != 1 else "")
-            self.on_query(joined, display)
-
-    def finalize_tool(self, tool_use_id, keep):
-        # type: (str, bool) -> None
-        """Idempotent ⚙ → ✓ (keep) or drop. Visual only."""
+    def finalize_tool(self, tool_use_id, keep, result=None, error=False):
+        # type: (str, bool, Optional[str], bool) -> None
+        """Idempotent ⚙ → ✓ (keep; ✗ when error) with `result`, or drop."""
         tool = self.bg_tools.get(tool_use_id)
         if tool is None:
             try:
@@ -647,9 +356,16 @@ class BackgroundTaskGate:
         if tool is None or status not in ("background", "⚙"):
             self.bg_tools.pop(tool_use_id, None)
             return
-        if keep:
+        if keep and error:
             try:
-                self.output.tool_done(getattr(tool, "name", "tool"), "", tool_use_id)
+                self.output.tool_error(
+                    getattr(tool, "name", "tool"), result or "", tool_use_id)
+            except Exception:
+                pass
+        elif keep:
+            try:
+                self.output.tool_done(
+                    getattr(tool, "name", "tool"), result or "", tool_use_id)
             except Exception:
                 pass
         else:
@@ -750,27 +466,14 @@ class BackgroundTaskGate:
             if tuid in live:
                 live_tools.add(tuid)
 
-        from .turn import _SELF_WAKE_BACKENDS
         for task_id, tool_use_id in list(self.task_tool_map.items()):
             if task_id in live:
                 continue
-            # Missed terminal event. Grok still needs a wake; Kimi already
-            # got the native completion mid-turn — only flip ⚙.
-            if (
-                not self.already(task_id, tool_use_id)
-                and not self.turn.busy
-                and (self.backend or "") in _SELF_WAKE_BACKENDS
-            ):
-                self.on_task_notification({
-                    "task_id": task_id,
-                    "tool_use_id": tool_use_id,
-                    "status": "completed",
-                    "summary": "%s (completed)" % task_id,
-                    "output_file": "",
-                }, working=self.turn.busy)
-            else:
-                self.finalize_tool(tool_use_id, keep=True)
-                self.drop_tool(tool_use_id)
+            # Missed terminal event: only the row is owed. The runtime already
+            # delivered the result to the model (or never will — the job died
+            # with it); a host turn here would be a duplicate either way.
+            self.finalize_tool(tool_use_id, keep=True)
+            self.drop_tool(tool_use_id)
             self.task_tool_map.pop(task_id, None)
             self.task_labels.pop(task_id, None)
             self.task_logs.pop(task_id, None)
@@ -797,26 +500,10 @@ class BackgroundTaskGate:
         self.task_labels.clear()
         self.task_logs.clear()
         self.foreground_tasks.clear()
-        self.pending_notifications = []
-        self.pending_block_task = []
-        self.pending_block_status = []
-        self.pending_task_ids.clear()
-        self.pending_tool_ids.clear()
         self.notified_task_ids.clear()
         self.notified_tool_ids.clear()
-        self.acknowledged.clear()
-        # Deferred text is kept: the jobs are gone, what they printed is not.
-        self.pending_hold_gen = None
-        self.flush_scheduled = False
         self.poll_epoch += 1
         self._poll_armed = False
-
-    def _status_at(self, index):
-        # type: (int) -> str
-        try:
-            return self.pending_block_status[index]
-        except IndexError:
-            return "completed"
 
     def has_background(self):
         # type: () -> bool

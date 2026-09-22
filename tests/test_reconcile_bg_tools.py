@@ -44,7 +44,7 @@ class TestReconcileUnseenDeadGear(unittest.TestCase):
         g.finalized = []
         g.woke = []
 
-        def _fin(tool_use_id, keep):
+        def _fin(tool_use_id, keep, result=None, error=False):
             g.finalized.append((tool_use_id, keep))
             t = g.bg_tools.get(tool_use_id)
             if t is not None:
@@ -74,12 +74,15 @@ class TestReconcileUnseenDeadGear(unittest.TestCase):
         self.assertEqual(g.woke, [])
         self.assertIn("8:tool_GwLP", g.bg_task_ids)
 
-    def test_grok_idle_vanished_wakes(self):
+    def test_grok_idle_vanished_finalizes_without_wake(self):
+        """Grok self-wakes on the exit itself; a synthesized notification
+        here was a second turn about the same job."""
         g = self._gate("grok")
         g.seen_running.add("bash-0eaakzzi")
         g.reconcile(running=[])
-        self.assertEqual(len(g.woke), 1)
-        self.assertEqual(g.woke[0]["tool_use_id"], "8:tool_GwLP")
+        self.assertIn(("8:tool_GwLP", True), g.finalized)
+        self.assertEqual(g.woke, [])
+        self.assertNotIn("bash-0eaakzzi", g.task_tool_map)
 
     def test_on_done_polls_bg(self):
         path = os.path.join(

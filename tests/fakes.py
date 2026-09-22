@@ -148,11 +148,13 @@ class FakeOutput:
         self.done.append((name, result, tool_id))
         if tool_id and tool_id in self._tools_by_id:
             self._tools_by_id[tool_id].status = "done"
+            self._tools_by_id[tool_id].result = result
 
     def tool_error(self, name, result=None, tool_id=None):
         self.errors.append((name, result, tool_id))
         if tool_id and tool_id in self._tools_by_id:
             self._tools_by_id[tool_id].status = "error"
+            self._tools_by_id[tool_id].result = result
 
     def text(self, content):
         self.texts.append(content)
@@ -345,10 +347,7 @@ def make_session(**kwargs):
         rpc_factory = lambda on_n, _c=client: _c
     elif rpc_factory is None:
         rpc_factory = FakeClient
-    # The lifecycle tests describe the wake-on-completion ("auto") behaviour;
-    # the shipped default is "defer". Tests that want the default pass it.
     settings = dict(kwargs.pop("settings", None) or {})
-    settings.setdefault("background_notify", "auto")
     s = Session(
         output, chrome, scheduler, persist,
         registry=registry, rpc_factory=rpc_factory, settings=settings, **kwargs)
