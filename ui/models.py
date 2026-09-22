@@ -415,6 +415,12 @@ class Conversation:
     region: Optional[tuple] = (0, 0)  # buffer span; None while detached
     context_names: List[str] = field(default_factory=list)
     context_refs: List[dict] = field(default_factory=list)
+    # Who ran this turn: (provider label, model, effort), taken from the
+    # session when the turn ends. The @done line renders from this, never
+    # from the view's stamps — in single-view mode the host view carries
+    # whichever session is bound now, so old turns (and turns of a session
+    # that finished while another was on screen) showed a foreign provider.
+    identity: Optional[tuple] = None
 
     @property
     def tools(self) -> List[ToolCall]:

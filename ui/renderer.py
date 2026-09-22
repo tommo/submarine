@@ -608,10 +608,51 @@ class TurnRenderer:
                 pass
         self._render_current()
 
+    def _session(self):
+        """The session that owns this output — bound or not.
+
+        `get_session_for_view` answers for whatever is bound to the view; a
+        viewless sheet (and a sheet mid-swap) needs the owner of THIS output.
+        """
+        try:
+            sess = get_session_for_view(self.owner.view)
+        except Exception:
+            sess = None
+        if sess is not None and getattr(sess, "output", None) is self.owner:
+            return sess
+        try:
+            from core.registry import default_registry
+            for s in default_registry.iter_sessions():
+                if getattr(s, "output", None) is self.owner:
+                    return s
+        except Exception:
+            pass
+        return None
+
+    def _turn_identity(self):
+        """(provider label, model, effort) of the session running this turn."""
+        sess = self._session()
+        if sess is None:
+            return None
+        label = str(getattr(sess, "provider_label", "") or "")
+        if not label:
+            try:
+                spec = sess._spec()
+                label = str(getattr(spec, "label", None) or sess.backend or "")
+            except Exception:
+                label = str(getattr(sess, "backend", "") or "")
+        model = str(getattr(sess, "model", "") or "")
+        effort = str(getattr(sess, "effort", "") or "")
+        if not (label or model or effort):
+            return None
+        return (label, model, effort)
+
     def meta(self, duration, cost=None, usage=None):
         """Finish the live turn. Viewless: records meta, skips buffer flush."""
         if not self.current:
             return
+        if not getattr(self.current, "identity", None):
+            self.current.identity = self._turn_identity()
         try:
             self.current.duration = max(0.0, float(duration or 0))
         except (TypeError, ValueError):
@@ -1034,12 +1075,9 @@ class TurnRenderer:
                     lines.append(line if line.endswith("\n") else line + "\n")
                 i += 1
         if conv.has_meta or conv.duration > 0:
-            meta_parts = []
-            if conv.duration > 0:
-                meta_parts.append("%.1f s" % conv.duration)
-            if not meta_parts:
-                meta_parts.append("ok")
-            lines.append("\n  @done(%s)\n" % ", ".join(meta_parts))
+            # Same line the live turn got — including the provider it ran on
+            # (`conv.identity`), so a repaint does not quietly drop it.
+            lines.append(self._meta_line(conv))
         return "".join(lines)
 
     def repaint_from_state(self):
@@ -1493,21 +1531,32 @@ class TurnRenderer:
                     meta_parts.append("%dk ctx" % (input_t // 1000))
                 else:
                     meta_parts.append("%d ctx" % input_t)
-        view = self.owner.view
-        if view is not None:
-            st = view.settings()
-            label = keys.read_setting(st, keys.PROVIDER_LABEL)
-            model = keys.read_setting(st, keys.MODEL)
-            effort = keys.read_setting(st, keys.EFFORT)
-            if model:
-                if label and label != "Claude" and label != "Submarine":
-                    meta_parts.append("%s/%s" % (label, model))
-                else:
-                    meta_parts.append(model)
-            elif label and label not in ("Claude", "Submarine"):
-                meta_parts.append(label)
-            if effort:
-                meta_parts.append("effort:%s" % effort)
+        # This turn's own provider, recorded when it ended. The view stamps
+        # only stand in for the LIVE turn (they describe the session bound
+        # right now); a finished turn that has no identity of its own stays
+        # silent rather than claiming whatever session the host view holds.
+        identity = getattr(conv, "identity", None)
+        if not identity and conv is self.current:
+            identity = self._turn_identity()
+        if not identity and conv is self.current:
+            view = self.owner.view
+            if view is not None:
+                st = view.settings()
+                identity = (
+                    keys.read_setting(st, keys.PROVIDER_LABEL),
+                    keys.read_setting(st, keys.MODEL),
+                    keys.read_setting(st, keys.EFFORT),
+                )
+        label, model, effort = (list(identity or ()) + ["", "", ""])[:3]
+        if model:
+            if label and label not in ("Claude", "Submarine"):
+                meta_parts.append("%s/%s" % (label, model))
+            else:
+                meta_parts.append(model)
+        elif label and label not in ("Claude", "Submarine"):
+            meta_parts.append(label)
+        if effort:
+            meta_parts.append("effort:%s" % effort)
         if not meta_parts:
             meta_parts.append("ok")
         return "\n  @done(%s)\n" % ", ".join(meta_parts)
@@ -2377,6 +2426,7 @@ def _clone_conv(conv):
             dict(r) if isinstance(r, dict) else r
             for r in (conv.context_refs or [])
         ],
+        identity=getattr(conv, "identity", None),
     )
 
 
