@@ -92,7 +92,32 @@ def _flatten(content) -> str:
 
 
 def _new_turn(prompt: str) -> dict:
-    return {"prompt": prompt or "", "reply": "", "tools": []}
+    # `events` is the turn as it happened: ("text", str) / ("tool", name) in
+    # transcript order. `reply` and `tools` are the flattened views of it
+    # (summaries, the CLI, `select_preview`'s length check) — the painter
+    # uses `events`, because a turn is text *between* tool calls, not a pile
+    # of tool names followed by every word the agent said.
+    return {"prompt": prompt or "", "reply": "", "tools": [], "events": []}
+
+
+def _turn_text(cur: dict, text) -> None:
+    text = text if isinstance(text, str) else ("" if text is None else str(text))
+    if not text:
+        return
+    cur["reply"] += text
+    events = cur.setdefault("events", [])
+    if events and events[-1][0] == "text":
+        events[-1] = ("text", events[-1][1] + text)
+    else:
+        events.append(("text", text))
+
+
+def _turn_tool(cur: dict, name) -> None:
+    name = str(name or "").strip()
+    if not name:
+        return
+    cur["tools"].append(name)
+    cur.setdefault("events", []).append(("tool", name))
 
 
 def select_preview(turns: List[dict], min_chars: int = MIN_CHARS,
@@ -148,15 +173,15 @@ def parse_claude_jsonl(path: str) -> List[dict]:
                     msg = rec.get("message") or {}
                     content = msg.get("content", [])
                     if isinstance(content, str):
-                        cur["reply"] += content
+                        _turn_text(cur, content)
                     elif isinstance(content, list):
                         for b in content:
                             if not isinstance(b, dict):
                                 continue
                             if b.get("type") == "text":
-                                cur["reply"] += b.get("text") or ""
+                                _turn_text(cur, b.get("text") or "")
                             elif b.get("type") == "tool_use" and b.get("name"):
-                                cur["tools"].append(b["name"])
+                                _turn_tool(cur, b["name"])
     except OSError:
         return []
     return turns
@@ -185,10 +210,10 @@ def parse_grok_chat(path: str) -> List[dict]:
                     cur = _new_turn(prompt)
                     turns.append(cur)
                 elif et == "assistant" and cur is not None:
-                    cur["reply"] += _flatten(rec.get("content"))
+                    _turn_text(cur, _flatten(rec.get("content")))
                     for tc in rec.get("tool_calls") or []:
                         if isinstance(tc, dict) and tc.get("name"):
-                            cur["tools"].append(tc["name"])
+                            _turn_tool(cur, tc["name"])
     except OSError:
         return []
     return turns
@@ -261,11 +286,11 @@ def parse_kimi_wire(path: str) -> List[dict]:
                 ev = rec.get("event") if isinstance(rec.get("event"), dict) else {}
                 et = ev.get("type")
                 if et == "tool.call" and ev.get("name"):
-                    cur["tools"].append(str(ev["name"]))
+                    _turn_tool(cur, ev["name"])
                 elif et == "content.part":
                     part = ev.get("part") if isinstance(ev.get("part"), dict) else {}
                     if part.get("type") == "text" and part.get("text"):
-                        cur["reply"] += part["text"]
+                        _turn_text(cur, part["text"])
     except OSError:
         return []
     return turns
@@ -545,20 +570,18 @@ def parse_codex_rollout(path: str) -> List[dict]:
                         last = payload.get("last_agent_message")
                         for cur in (cur_old, cur_new):
                             if cur is not None and last and not cur["reply"]:
-                                cur["reply"] = str(last)
+                                _turn_text(cur, str(last))
                     continue
                 if rtype != "response_item":
                     continue
                 if ptype == "message":
                     if payload.get("role") != "assistant" or cur_old is None:
                         continue
-                    text = _codex_text(payload.get("content"))
-                    if text:
-                        cur_old["reply"] += text
+                    _turn_text(cur_old, _codex_text(payload.get("content")))
                 elif ptype in ("function_call", "custom_tool_call"):
                     name = payload.get("name")
                     if name and cur_old is not None:
-                        cur_old["tools"].append(str(name))
+                        _turn_tool(cur_old, name)
     except OSError:
         return []
     return new_turns or old_turns
@@ -579,17 +602,14 @@ def _codex_item_turn(item, cur, turns: List[dict]):
     if cur is None:
         return cur
     if itype == "AgentMessage":
-        text = _codex_text(item.get("content"))
-        if text:
-            cur["reply"] += text
+        _turn_text(cur, _codex_text(item.get("content")))
     elif itype == "CommandExecution":
-        cur["tools"].append("exec_command")
+        _turn_tool(cur, "exec_command")
     elif itype == "McpToolCall":
         server = item.get("server")
         tool = item.get("tool")
         name = ("%s.%s" % (server, tool)) if server and tool else (tool or "")
-        if name:
-            cur["tools"].append(str(name))
+        _turn_tool(cur, name)
     return cur
 
 
@@ -664,28 +684,63 @@ def load_turns(session_id: str, backend: str, cwd: str = "",
     return parse_claude_jsonl(path) if path else []
 
 
+_MAX_TOOL_LINES = 12
+
+
+def _tool_lines(names: List[str]) -> List[str]:
+    """One line per tool, `×N` only for a genuine consecutive run."""
+    collapsed: List[list] = []
+    for n in names:
+        if collapsed and collapsed[-1][0] == n:
+            collapsed[-1][1] += 1
+        else:
+            collapsed.append([n, 1])
+    shown = collapsed[:_MAX_TOOL_LINES]
+    lines = [f"⚙ {n}" + (f" ×{c}" if c > 1 else "") for n, c in shown]
+    extra = len(collapsed) - len(shown)
+    if extra > 0:
+        lines.append(f"⚙ … +{extra} more")
+    return lines
+
+
 def format_turn_body(turn: dict) -> str:
-    tools = turn.get("tools") or []
-    reply = (turn.get("reply") or "").rstrip()
-    parts = []
-    if tools:
-        collapsed = []
-        for n in tools:
-            if collapsed and collapsed[-1][0] == n:
-                collapsed[-1] = (n, collapsed[-1][1] + 1)
-            else:
-                collapsed.append((n, 1))
-        shown = collapsed[:12]
-        lines = [
-            f"⚙ {n}" + (f" ×{c}" if c > 1 else "")
-            for n, c in shown
-        ]
-        extra = len(collapsed) - len(shown)
-        if extra > 0:
-            lines.append(f"⚙ … +{extra} more")
-        parts.append("\n".join(lines))
-    if reply:
-        parts.append(reply)
+    """The turn as it ran: text and tool calls in transcript order.
+
+    A turn is the agent talking *between* its tool calls. Pooling every tool
+    name into one block above the whole reply (what this used to do) reordered
+    the turn and merged calls that were pages apart into `×N` runs that never
+    happened. Only calls that really followed each other collapse.
+    """
+    events = turn.get("events")
+    if not events:
+        # Parsed before `events` existed (or by a caller that builds the
+        # flattened shape): tools first, then the text, as before.
+        tools = turn.get("tools") or []
+        parts = []
+        if tools:
+            parts.append("\n".join(_tool_lines([str(t) for t in tools])))
+        reply = (turn.get("reply") or "").rstrip()
+        if reply:
+            parts.append(reply)
+        return "\n\n".join(parts)
+
+    parts: List[str] = []
+    run: List[str] = []
+
+    def _flush_tools():
+        if run:
+            parts.append("\n".join(_tool_lines(run)))
+            del run[:]
+
+    for kind, value in events:
+        if kind == "tool":
+            run.append(str(value))
+            continue
+        _flush_tools()
+        text = (value or "").strip("\n").rstrip()
+        if text:
+            parts.append(text)
+    _flush_tools()
     return "\n\n".join(parts)
 
 

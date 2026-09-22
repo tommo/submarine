@@ -259,6 +259,64 @@ class TestResumePreview(unittest.TestCase):
         self.assertEqual(turns[0]["reply"], "world")
         self.assertEqual(turns[0]["tools"], ["Read"])
 
+    def test_a_turn_replays_in_order_and_never_merges_across_text(self):
+        """A resumed turn is text *between* tool calls. The preview used to
+        pool every tool name above the whole reply — reordering the turn and
+        turning calls pages apart into `×N` runs that never happened."""
+        recs = [
+            {"type": "user", "message": {"content": [{"type": "text", "text": "check both"}]}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Reading the first file."},
+                {"type": "tool_use", "name": "Read", "id": "1"},
+            ]}},
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "1", "content": "…"}]}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Now the second."},
+                {"type": "tool_use", "name": "Read", "id": "2"},
+                {"type": "tool_use", "name": "Read", "id": "3"},
+            ]}},
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "2", "content": "…"}]}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Both match."}]}},
+        ]
+        fd, path = tempfile.mkstemp(suffix=".jsonl")
+        os.close(fd)
+        try:
+            with open(path, "w") as f:
+                for r in recs:
+                    f.write(json.dumps(r) + "\n")
+            turns = parse_claude_jsonl(path)
+        finally:
+            os.remove(path)
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(turns[0]["events"], [
+            ("text", "Reading the first file."),
+            ("tool", "Read"),
+            ("text", "Now the second."),
+            ("tool", "Read"),
+            ("tool", "Read"),
+            ("text", "Both match."),
+        ])
+        self.assertEqual(format_turn_body(turns[0]), "\n\n".join([
+            "Reading the first file.",
+            "⚙ Read",
+            "Now the second.",
+            "⚙ Read ×2",          # these two really were consecutive
+            "Both match.",
+        ]))
+        # The flattened views the CLI and the length check use are unchanged.
+        self.assertEqual(turns[0]["tools"], ["Read", "Read", "Read"])
+        self.assertEqual(
+            turns[0]["reply"],
+            "Reading the first file.Now the second.Both match.")
+
+    def test_a_turn_parsed_without_events_still_renders(self):
+        self.assertEqual(
+            format_turn_body({"prompt": "p", "reply": "hi", "tools": ["Bash", "Bash"]}),
+            "⚙ Bash ×2\n\nhi")
+
     def test_parse_grok_chat(self):
         recs = [
             {"type": "user", "content": [{"type": "text", "text": "hi"}]},
