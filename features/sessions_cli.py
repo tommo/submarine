@@ -75,7 +75,13 @@ def call(action: str, timeout: float = DEFAULT_TIMEOUT, path: str = "",
     """Send one `op:"sessions"` request and return its envelope."""
     req = {"op": "sessions", "action": action}
     req.update({k: v for k, v in fields.items() if v is not None})
-    req["caller"] = caller or {"kind": "cli", "pid": os.getpid(), "cwd": os.getcwd()}
+    if caller is None:
+        caller = {"kind": "cli", "pid": os.getpid(), "cwd": os.getcwd()}
+        # Run by an agent inside a Submarine session (its Bash tool): say who.
+        aid = os.environ.get("SUBMARINE_AGENT_ID") or ""
+        if aid:
+            caller["agent_id"] = aid
+    req["caller"] = caller
     resp = send(req, timeout=timeout, path=path)
     if not isinstance(resp, dict):
         return {"ok": False, "error": "malformed response", "raw": resp}

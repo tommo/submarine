@@ -253,6 +253,26 @@ class SubmarineRestartNewCommand(sublime_plugin.WindowCommand):
         restart_session_new(self.window)
 
 
+class SubmarineCopyAgentIdCommand(sublime_plugin.WindowCommand):
+    """The id agents address this session by (send_to_session agent_id=…)."""
+
+    def run(self):
+        view = self.window.active_view()
+        s = (get_session_for_view(view) if view else None) or get_active_session(self.window)
+        aid = getattr(s, "agent_id", None) if s else None
+        if not aid:
+            sublime.status_message("Submarine: no agent id for this view")
+            return
+        sublime.set_clipboard(aid)
+        sublime.status_message(
+            "Submarine: agent id copied — %s (send_to_session agent_id=…)" % aid)
+
+    def is_enabled(self):
+        view = self.window.active_view()
+        s = (get_session_for_view(view) if view else None) or get_active_session(self.window)
+        return bool(getattr(s, "agent_id", None)) if s else False
+
+
 class SubmarineCopySessionIdCommand(sublime_plugin.WindowCommand):
     def run(self):
         view = self.window.active_view()

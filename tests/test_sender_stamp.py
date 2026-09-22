@@ -39,6 +39,14 @@ class TestStampSenderPrompt(unittest.TestCase):
             sr.sender_display_prompt(stamped), "📬 from agent-abc123")
         self.assertEqual(
             sr.sender_display_prompt("[from user]\nhi"), "📬 from user")
+        # Extras after the id: no stray "]" on the token; the name wins.
+        full = sr.stamp_sender_prompt(
+            "x", sender_agent_id="agent-abc123", sender_session_id="s9")
+        self.assertEqual(sr.sender_display_prompt(full), "📬 from agent-abc123")
+        named = sr.stamp_sender_prompt(
+            "x", sender_agent_id="agent-abc123", sender_session_id="s9",
+            sender_name="Bonsai UX")
+        self.assertEqual(sr.sender_display_prompt(named), "📬 from Bonsai UX")
 
 
 if __name__ == "__main__":

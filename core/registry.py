@@ -120,8 +120,15 @@ def sender_display_prompt(stamped):
         return first[:50] if first else "📬"
     if m.group(1) == "user":
         return "📬 from user"
-    rest = first[len("[from agent"):].strip(" ]")
-    token = (rest.split() or ["agent"])[0]
+    # "[from agent <id>] session_id=… name=<name…>" — the header's closing
+    # bracket sits right after the id, so strip it off the token (a stray
+    # "]" showed on every stamp that carried extras); prefer the name.
+    head = first[len("[from agent"):].strip()
+    ident, _sep, extras = head.partition("]")
+    token = (ident.split() or ["agent"])[0]
+    name = extras.split("name=", 1)[1].strip() if "name=" in extras else ""
+    if name:
+        return "📬 from %s" % name[:40]
     return "📬 from %s" % token
 
 

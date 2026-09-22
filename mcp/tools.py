@@ -126,8 +126,9 @@ def _spawn_codegen(args: Dict[str, Any]) -> str:
 
 def _send_codegen(args: Dict[str, Any]) -> str:
     parts = ["prompt=%r" % (args.get("prompt") or "")]
-    if args.get("agent_id"):
-        parts.append("agent_id=%r" % args["agent_id"])
+    for key in ("agent_id", "session_id", "name"):
+        if args.get(key):
+            parts.append("%s=%r" % (key, args[key]))
     if args.get("_caller_agent_id") is not None:
         parts.append("_caller_agent_id=%r" % args["_caller_agent_id"])
     return "return send_to_session(%s)" % ", ".join(parts)
@@ -503,8 +504,11 @@ TOOL_TABLE = {
     },
     "send_to_session": {
         "description": (
-            "Send a message by stable agent_id (preferred). Direct mail only — "
-            "mid-task steer, questions, follow-ups.\n"
+            "Send a message to another session — any window. Address it by "
+            "agent_id (preferred), session_id, or its exact name (a unique "
+            "name; an ambiguous one returns the candidates). Find peers with "
+            "list_sessions(scope=\"all\"). Direct mail only — mid-task steer, "
+            "questions, follow-ups.\n"
             "\n"
             "Do NOT use this to tell a parent that a spawned child is done. "
             "That is signal_complete (parent wait_for_subsession / host inject). "
@@ -522,6 +526,8 @@ TOOL_TABLE = {
             "type": "object",
             "properties": {
                 "agent_id": {"type": "string", "description": "Stable id from spawn_session / list_sessions"},
+                "session_id": {"type": "string", "description": "The target's session_id (if you have that instead)"},
+                "name": {"type": "string", "description": "The target's exact session name (must be unique)"},
                 "prompt": {"type": "string", "description": "Message to send"},
             },
             "required": ["prompt"],
@@ -530,12 +536,21 @@ TOOL_TABLE = {
     },
     "list_sessions": {
         "description": (
-            "List your subsessions with agent_id, sleeping/working, "
-            "context_budget. Always use agent_id for send_to_session / "
-            "fork_from_agent_id."
+            "List sessions with agent_id, sleeping/working, context_budget. "
+            "Default scope \"children\": your subsessions. scope \"all\": "
+            "every live session in every window (name, window, project, "
+            "backend) — to find a peer to send_to_session. Use agent_id for "
+            "send_to_session / fork_from_agent_id."
         ),
-        "schema": _EMPTY_SCHEMA,
-        "codegen": _simple("list_sessions"),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "scope": {"type": "string", "enum": ["children", "all"],
+                          "description": "children (default) or all"},
+            },
+        },
+        "codegen": lambda args: (
+            "return list_sessions(scope=%r)" % (args.get("scope") or "children")),
     },
     "read_session_edits": {
         "description": (

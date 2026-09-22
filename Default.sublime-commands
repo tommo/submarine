@@ -4,6 +4,10 @@
         "command": "submarine_query"
     },
     {
+        "caption": "Submarine: Copy Agent ID",
+        "command": "submarine_copy_agent_id"
+    },
+    {
         "caption": "Submarine: Copy Session ID",
         "command": "submarine_copy_session_id"
     },

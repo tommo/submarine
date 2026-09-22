@@ -1295,23 +1295,44 @@ class MCPSocketServer:
         prompt: str,
         agent_id: str = None,
         _caller_agent_id: str = None,
+        session_id: str = None,
+        name: str = None,
     ) -> dict:
         if _caller_agent_id is not None:
             self._caller_agent_id = _caller_agent_id
         if not prompt:
             return {"error": "prompt is required"}
-        if agent_id is None:
+        if not (agent_id or session_id or name):
             return {
-                "error": "Pass agent_id",
-                "hint": "Call list_sessions for agent_id",
+                "error": "Pass agent_id, session_id or name",
+                "hint": 'Call list_sessions(scope="all") to find a session',
             }
+        if agent_id:
+            session = _get_session_by_agent_id(str(agent_id))
+            if not session:
+                return {
+                    "error": "Session not found for agent_id %r" % agent_id,
+                    "hint": 'Call list_sessions(scope="all")',
+                }
+        else:
+            # Same resolution the sessions CLI uses: every window, live only.
+            resolve = _try_import("features.session_control._resolve_live")
+            if resolve is None:
+                return {"error": "cannot resolve by session_id/name here; pass agent_id"}
+            ref = {"session_id": str(session_id)} if session_id else {"name": str(name)}
+            try:
+                session = resolve(ref)
+            except Exception as e:
+                detail = getattr(e, "data", None) or {}
+                return {
+                    "error": str(getattr(e, "message", None) or e),
+                    "candidates": [
+                        {k: c.get(k) for k in ("agent_id", "name", "state") if k in c}
+                        for c in (detail.get("candidates") or [])[:20]
+                    ],
+                    "hint": "Retry with the agent_id of the one you mean",
+                }
         prompt, display = self._stamp_send_prompt(prompt)
-        session = _get_session_by_agent_id(str(agent_id))
-        if not session:
-            return {
-                "error": "Session not found for agent_id %r" % agent_id,
-                "hint": "Call list_sessions",
-            }
         aid = getattr(session, "agent_id", None)
         name = session.name or "(unnamed)"
         if session.working or getattr(session, "_compacting", False):
@@ -1356,7 +1377,9 @@ class MCPSocketServer:
             pass
         return {"summary": "ctx:unknown", "has_usage": False}
 
-    def _list_sessions(self) -> dict:
+    def _list_sessions(self, scope: str = "children") -> dict:
+        if str(scope or "children").lower() == "all":
+            return self._list_all_sessions()
         caller_id = self._caller_agent_id
         caller = _get_session_by_agent_id(str(caller_id)) if caller_id is not None else None
         parent_agent_id = getattr(caller, "agent_id", None) if caller else None
@@ -1457,6 +1480,43 @@ class MCPSocketServer:
                 "caller_agent_id": parent_agent_id,
             }
         return {"summary": "\n".join(lines), "sessions": sessions, "count": len(sessions)}
+
+    def _list_all_sessions(self) -> dict:
+        """Every live session in every window — peers to send_to_session."""
+        caller_id = self._caller_agent_id
+        iter_fn = _try_import("core.registry.iter_sessions")
+        live = list(iter_fn()) if iter_fn is not None else list(_sessions_map().values())
+        rows, lines = [], []
+        for session in live:
+            if getattr(session, "quick_mode", False):
+                continue
+            aid = getattr(session, "agent_id", None) or ""
+            sleeping = _is_sleeping(session)
+            state = "sleeping" if sleeping else ("working" if session.working else "idle")
+            window = getattr(session, "window", None)
+            try:
+                wid = window.id() if window is not None else None
+            except Exception:
+                wid = None
+            project = getattr(session, "cwd", None) or ""
+            name = " ".join(str(session.name or "(unnamed)").split())
+            me = bool(caller_id) and str(aid) == str(caller_id)
+            rows.append({
+                "agent_id": aid,
+                "name": name,
+                "state": state,
+                "backend": getattr(session, "backend", None),
+                "window": wid,
+                "project": project or None,
+                "parent_agent_id": getattr(session, "parent_agent_id", None),
+                "you": me,
+            })
+            lines.append("%s %-9s %s%s  [win %s · %s]" % (
+                aid, state, name[:70], "  (you)" if me else "",
+                wid if wid is not None else "?",
+                os.path.basename(project.rstrip("/")) or "-"))
+        return {"summary": "\n".join(lines) or "No live sessions",
+                "sessions": rows, "count": len(rows), "scope": "all"}
 
     def _read_session_edits(
         self,

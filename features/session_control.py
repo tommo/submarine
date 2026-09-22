@@ -624,6 +624,33 @@ def _default_display(caller: Any, prompt: str = "") -> str:
     return "📨 %s" % prompt
 
 
+def _stamp_agent_sender(caller: Any, target: Any, prompt: str, display: str,
+                        explicit: bool = False):
+    """A chat sent by an agent inside another session (the sessions CLI from
+    its Bash tool carries SUBMARINE_AGENT_ID) gets the same `[from agent …]`
+    header send_to_session uses, so the target knows who asked and can
+    reply. Anyone else — the web UI, a terminal — sends as before."""
+    aid = str((caller or {}).get("agent_id") or "") if isinstance(caller, dict) else ""
+    if not aid or aid == str(getattr(target, "agent_id", "") or ""):
+        return prompt, display
+    try:
+        from core.registry import (default_registry, sender_display_prompt,
+                                   stamp_sender_prompt)
+    except Exception:
+        return prompt, display
+    sender = None
+    try:
+        sender = default_registry.by_agent_id(aid)
+    except Exception:
+        sender = None
+    stamped = stamp_sender_prompt(
+        prompt, sender_agent_id=aid,
+        sender_session_id=str(getattr(sender, "session_id", "") or "") if sender else "",
+        sender_name=str(getattr(sender, "name", "") or "") if sender else "")
+    shown = display if explicit else sender_display_prompt(stamped)
+    return stamped, shown
+
+
 def action_chat(params: dict, caller: Any = None) -> dict:
     prompt = str(params.get("prompt") or "").strip()
     if not prompt:
@@ -636,6 +663,8 @@ def action_chat(params: dict, caller: Any = None) -> dict:
     display = str(params.get("display") or _default_display(caller, prompt))
     key = params.get("idem")
     session = _resolve_live(params.get("ref"))
+    prompt, display = _stamp_agent_sender(caller, session, prompt, display,
+                                          explicit=bool(params.get("display")))
     ref = _row_ref(session)
     data = {
         "accepted": True,

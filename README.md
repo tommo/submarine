@@ -133,6 +133,7 @@ All commands available via Command Palette (`Cmd+Shift+P`): type "Submarine"
 | Query | - | Focus / start a session and query |
 | Query Selection… | - | Query about selected code |
 | Query File… | - | Query about current file |
+| Copy Agent ID | - | Copy the id agents address this session by (`send_to_session agent_id=…`) |
 | Copy Session ID | - | Copy the current session id |
 | Codex: New Session | - | Start a fresh Codex session |
 | Pi: New Session | - | Start a fresh Pi session |
@@ -616,8 +617,8 @@ From `mcp/tools.py` (`read_image` is advertised only when enabled — default
 | `list_backends` | Built-ins + custom providers, availability, fork-family |
 | `list_profiles` | Session profiles |
 | `spawn_session` | Spawn a child (`profile`, `backend`, live fork) |
-| `send_to_session` | Message a worker by `agent_id` (auto-wake; queues if busy) |
-| `list_sessions` | This window’s subsessions (`agent_id` is stable) |
+| `send_to_session` | Message any session, any window, by `agent_id`, `session_id` or unique `name` (auto-wake; queues if busy; the target sees who sent it) |
+| `list_sessions` | Your subsessions; `scope="all"` lists every live session in every window |
 | `read_session_output` | Tail a child + `context_budget` |
 | `list_profile_docs` / `read_profile_doc` | Profile docset |
 | `lsp` | hover / definition / references / symbols / diagnostics |

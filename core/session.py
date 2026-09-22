@@ -558,6 +558,10 @@ class Session:
                 for k, v in (defaults or {}).items():
                     env.setdefault(k, v)
 
+        # Who "I" am, for tools the agent runs itself: the sessions CLI stamps
+        # a message sent from here with this sender, so the target can reply.
+        if self.agent_id:
+            env.setdefault("SUBMARINE_AGENT_ID", str(self.agent_id))
         label = getattr(spec, "label", None) or self.backend
         self.provider_label = str(label)
         self.effort_pin = (str(env.get("CLAUDE_CODE_EFFORT_LEVEL") or "").strip()

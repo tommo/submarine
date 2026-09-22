@@ -46,6 +46,7 @@ from commands import (  # noqa: F401
     SubmarineQueryCommand,
     SubmarineRestartCommand,
     SubmarineRestartNewCommand,
+    SubmarineCopyAgentIdCommand,
     SubmarineCopySessionIdCommand,
     SubmarineQueuePromptCommand,
     SubmarineInterruptCommand,
