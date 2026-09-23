@@ -739,6 +739,22 @@ class SubmarinePasteImageCommand(sublime_plugin.TextCommand):
 
 
 class SubmarineOpenLinkCommand(sublime_plugin.TextCommand):
+    def _focus_agent_at(self, line, col):
+        """An agent id under the click (`submarine::<hex>`, or the old
+        `agent-<hex>`) → show that session, in whatever window holds it."""
+        try:
+            from core.agent_ids import ID_IN_TEXT_RE, PREFIX, canon_agent_id
+            from ui.session_list import focus_agent
+        except Exception:
+            return False
+        for match in ID_IN_TEXT_RE.finditer(line):
+            if match.start() <= col <= match.end():
+                if not str(canon_agent_id(match.group())).startswith(PREFIX):
+                    return False   # `agent-oriented`, not an id
+                focus_agent(self.view.window(), match.group())
+                return True
+        return False
+
     def run(self, edit, event=None):
         import re
         import webbrowser
@@ -771,6 +787,8 @@ class SubmarineOpenLinkCommand(sublime_plugin.TextCommand):
             if session and session.output and hasattr(session.output, "show_media_popup"):
                 session.output.show_media_popup(media_path, location=pt)
                 return
+        if self._focus_agent_at(line, col):
+            return
         url_pattern = r'https?://[^\s\]\)>\'"]+|file://[^\s\]\)>\'"]+'
         for match in re.finditer(url_pattern, line):
             if match.start() <= col <= match.end():

@@ -19,8 +19,22 @@ import uuid
 from typing import Any, List, Optional
 
 
-def new_agent_id() -> str:
-    return "agent-%s" % uuid.uuid4().hex[:12]
+from .agent_ids import ID_IN_TEXT_RE, canon_agent_id, new_agent_id  # noqa: F401
+
+
+def agent_id_for(session_id: Optional[str] = None) -> str:
+    """The agent_id of a conversation with no saved one.
+
+    Derived from the session_id, so every restore of that conversation (a
+    record without an id, a record capped out of the store, a view without
+    a stamp) lands on the same id instead of a fresh random one. Only a
+    conversation the backend has not named yet gets a random id — and that
+    id is persisted with its first record.
+    """
+    if not session_id:
+        return new_agent_id()
+    from .agent_ids import derived_agent_id
+    return derived_agent_id(session_id)
 
 
 def resolve_spawn_model(
@@ -179,16 +193,13 @@ def _clear_output_view(session):
             pass
 
 
-_AGENT_ID_RE = re.compile(r"agent-[0-9a-f]{8,}", re.I)
-
-
 def subsession_notify_key(prompt):
     # type: (str) -> str
     """Stable key for one child-completion notify (dedupe queue entries)."""
     if not prompt:
         return ""
-    m = _AGENT_ID_RE.search(prompt)
-    return ("subsession:" + m.group(0).lower()) if m else ""
+    m = ID_IN_TEXT_RE.search(prompt)
+    return ("subsession:" + str(canon_agent_id(m.group(0))).lower()) if m else ""
 
 
 def subsession_display(child_session):
@@ -265,7 +276,6 @@ def mark_child_parent_notified(child_session):
 # Children still stamp the old parent_agent_id, so list_sessions lost them.
 # Keep aliases + noted child ids so the link survives rotation.
 
-_AGENT_ID_RE = re.compile(r"agent-[0-9A-Za-z]{6,}")
 
 
 def _as_id_set(value):
@@ -273,8 +283,8 @@ def _as_id_set(value):
     if value is None:
         return set()
     if isinstance(value, (list, tuple, set)):
-        return {v for v in value if v is not None and v != ""}
-    return {value}
+        return {canon_agent_id(v) for v in value if v is not None and v != ""}
+    return {canon_agent_id(value)}
 
 
 def remember_agent_alias(session, old_aid):
@@ -282,6 +292,7 @@ def remember_agent_alias(session, old_aid):
     """Keep a previous agent_id so children stamped with it still match."""
     if not session or not old_aid:
         return
+    old_aid = canon_agent_id(old_aid)
     cur = getattr(session, "agent_id", None)
     if old_aid == cur:
         return
@@ -298,6 +309,7 @@ def note_child(parent, child_agent_id):
     """Record a spawn child on the parent (survives parent agent_id rotation)."""
     if not parent or not child_agent_id:
         return
+    child_agent_id = canon_agent_id(child_agent_id)
     ids = getattr(parent, "child_agent_ids", None)
     if not isinstance(ids, list):
         ids = []
@@ -383,7 +395,8 @@ def harvest_mentioned_orphans_impl(parent, text, registry=None):
     aids, _vids, _sids, _kids = parent_match_keys(parent)
     out = []  # type: List[Any]
     seen = set()
-    for aid in _AGENT_ID_RE.findall(text):
+    for aid in ID_IN_TEXT_RE.findall(text):
+        aid = canon_agent_id(aid)
         key = aid.lower() if isinstance(aid, str) else aid
         if key in seen:
             continue
@@ -506,7 +519,7 @@ class SessionRegistry:
         """Resolve stable agent_id (also accepts subsession_id alias)."""
         if not agent_id:
             return None
-        aid = str(agent_id).strip()
+        aid = canon_agent_id(str(agent_id).strip())
         s = self.by_agent.get(aid)
         if s is not None:
             return s

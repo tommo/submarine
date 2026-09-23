@@ -359,7 +359,7 @@ class TestInitializeParams(unittest.TestCase):
         s.start()
         params = [t[1] for t in client.sent if t[0] == "initialize"][0]
         self.assertEqual(params["agent_id"], s.agent_id)
-        self.assertTrue(str(s.agent_id).startswith("agent-"))
+        self.assertTrue(str(s.agent_id).startswith("submarine::"))
         self.assertEqual(params["parent_agent_id"], "agent-parent")
         self.assertNotIn("view_id", params)
         self.assertNotIn("parent_view_id", params)

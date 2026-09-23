@@ -259,7 +259,8 @@ def _resolve_live(ref: Any) -> Any:
     sessions = _live_sessions()
     if isinstance(ref, dict):
         if ref.get("agent_id"):
-            wanted = str(ref["agent_id"])
+            from core.agent_ids import canon_agent_id
+            wanted = str(canon_agent_id(str(ref["agent_id"])))
             for s in sessions:
                 if wanted in (str(getattr(s, "agent_id", "")),
                               str(getattr(s, "subsession_id", ""))):

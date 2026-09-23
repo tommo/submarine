@@ -1323,6 +1323,45 @@ def open_row(window, row: dict) -> bool:
     return resume_saved(window, row)
 
 
+def focus_agent(window, agent_id) -> bool:
+    """Show the session an agent id names (Cmd+click on an id in a sheet).
+
+    Live: open it as the list would, in its own window, brought forward. Not
+    live: resume it from the saved record (an old alias counts too).
+    """
+    try:
+        from core.agent_ids import PREFIX, canon_agent_id
+    except Exception:
+        return False
+    aid = canon_agent_id(agent_id)
+    if not isinstance(aid, str) or not aid.startswith(PREFIX):
+        return False
+    live = get_session_by_agent_id(aid)
+    if live is not None:
+        target = getattr(live, "window", None)
+        try:
+            if target is None or not target.is_valid():
+                target = window
+        except Exception:
+            target = window
+        if target is not window:
+            try:
+                target.bring_to_front()
+            except Exception:
+                pass
+        return open_row(target, {"kind": "live", "agent_id": aid,
+                                 "session_id": getattr(live, "session_id", None)})
+    try:
+        from core.agent_ids import canon_agent_ids
+        for rec in load_saved_sessions() or []:
+            if aid == rec.get("agent_id") or aid in canon_agent_ids(rec.get("agent_id_aliases")):
+                return resume_saved(window, rec)
+    except Exception:
+        pass
+    sublime.status_message("Submarine: no session %s" % aid)
+    return False
+
+
 def _same_view(a, b) -> bool:
     if a is None or b is None:
         return False

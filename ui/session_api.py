@@ -266,7 +266,7 @@ def new_agent_id() -> str:
         return _fn()
     except Exception:
         import uuid
-        return "ag_" + uuid.uuid4().hex[:10]
+        return "submarine::" + uuid.uuid4().hex[:12]
 
 
 def register_session(session) -> None:

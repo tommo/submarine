@@ -32,7 +32,8 @@ from .records import (
     stamp_identity,
     starred_ids_for_projects,
 )
-from .registry import SessionRegistry, default_registry, merge_subsession_queue, new_agent_id, resolve_init_model
+from .registry import SessionRegistry, default_registry, merge_subsession_queue, agent_id_for, new_agent_id, resolve_init_model
+from .agent_ids import canon_agent_id, canon_agent_ids
 from .rewind import RewindService, is_synthetic_turn
 from .turn import (
     _SELF_WAKE_BACKENDS,
@@ -189,6 +190,33 @@ class Session:
     a bridge until start().
     """
 
+    # Ids are stored canonical (`submarine::<hex>`) whatever form they came
+    # in as — a saved record, a view stamp, a tool argument — so every
+    # comparison against them is plain string equality.
+    @property
+    def agent_id(self):
+        return self._agent_id
+
+    @agent_id.setter
+    def agent_id(self, value):
+        self._agent_id = canon_agent_id(value)
+
+    @property
+    def subsession_id(self):
+        return self._subsession_id
+
+    @subsession_id.setter
+    def subsession_id(self, value):
+        self._subsession_id = canon_agent_id(value)
+
+    @property
+    def parent_agent_id(self):
+        return self._parent_agent_id
+
+    @parent_agent_id.setter
+    def parent_agent_id(self, value):
+        self._parent_agent_id = canon_agent_id(value)
+
     def __init__(
         self,
         output,  # type: OutputPort
@@ -303,9 +331,9 @@ class Session:
                 saved = self.store.find(resume_id)
             except Exception:
                 saved = None
+            # Never a fresh random id for a known conversation.
+            self.agent_id = (saved or {}).get("agent_id") or agent_id_for(resume_id)
             if saved:
-                if saved.get("agent_id"):
-                    self.agent_id = saved.get("agent_id")
                 if saved.get("subsession_id"):
                     self.subsession_id = saved.get("subsession_id")
                 if saved.get("parent_agent_id"):
@@ -317,6 +345,8 @@ class Session:
                 kids = list(saved.get("child_agent_ids") or [])
                 # Children spawned by the previous incarnation of this sheet.
                 self.child_agent_ids = [c for c in kids if c]
+        self.child_agent_ids = canon_agent_ids(self.child_agent_ids)
+        self.agent_id_aliases = canon_agent_ids(self.agent_id_aliases)
 
         self.last_activity = time.time()
         self.last_access = self.last_activity
@@ -2119,12 +2149,13 @@ class Session:
         if not self.session_id:
             return
         mid = self.model or read_stamp(self.persist, STAMP_MODEL)
+        aid = getattr(self, "agent_id", None)
         existing = self.store.find(self.session_id)
         if existing:
-            self.store.persist_state(self.session_id, state, mid)
+            self.store.persist_state(self.session_id, state, mid, aid)
             return
         self._save_session()
-        self.store.persist_state(self.session_id, state, mid)
+        self.store.persist_state(self.session_id, state, mid, aid)
 
     def _apply_sleep_ui(self, touch_buffer=False):
         # type: (bool) -> None

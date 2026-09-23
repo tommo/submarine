@@ -1089,10 +1089,10 @@ class SubmarineOutputEventListener(sublime_plugin.ViewEventListener):
             aid = (
                 keys.read_setting(view.settings(), keys.AGENT_ID)
                 or (matched or {}).get("agent_id")
-                or None
+                # Session() already resolved saved-or-derived for resume_id.
+                or getattr(session, "agent_id", None)
+                or new_agent_id()
             )
-            if not aid:
-                aid = new_agent_id()
             session.agent_id = aid
             session.subsession_id = (
                 keys.read_setting(view.settings(), keys.SUBSESSION_ID)

@@ -40,10 +40,10 @@ def _server():
 class CrossSessionTest(unittest.TestCase):
     def setUp(self):
         default_registry.clear()
-        self.me = self._live("agent-000000000001", "planner", "s1", _Win(1))
-        self.peer = self._live("agent-000000000002", "Bonsai UX implementation", "s2", _Win(2))
-        self.twin_a = self._live("agent-000000000003", "review", "s3", _Win(2))
-        self.twin_b = self._live("agent-000000000004", "review", "s4", _Win(3))
+        self.me = self._live("submarine::000000000001", "planner", "s1", _Win(1))
+        self.peer = self._live("submarine::000000000002", "Bonsai UX implementation", "s2", _Win(2))
+        self.twin_a = self._live("submarine::000000000003", "review", "s3", _Win(2))
+        self.twin_b = self._live("submarine::000000000004", "review", "s4", _Win(3))
 
     def tearDown(self):
         default_registry.clear()
@@ -62,10 +62,10 @@ class CrossSessionTest(unittest.TestCase):
         srv._caller_agent_id = self.me.agent_id
         out = srv._list_sessions(scope="all")
         by_id = {r["agent_id"]: r for r in out["sessions"]}
-        self.assertEqual(set(by_id), {"agent-000000000001", "agent-000000000002",
-                                      "agent-000000000003", "agent-000000000004"})
-        self.assertEqual(by_id["agent-000000000002"]["window"], 2)
-        self.assertTrue(by_id["agent-000000000001"]["you"])
+        self.assertEqual(set(by_id), {"submarine::000000000001", "submarine::000000000002",
+                                      "submarine::000000000003", "submarine::000000000004"})
+        self.assertEqual(by_id["submarine::000000000002"]["window"], 2)
+        self.assertTrue(by_id["submarine::000000000001"]["you"])
         self.assertIn("Bonsai UX implementation", out["summary"])
 
     def test_default_scope_is_still_children(self):
@@ -79,7 +79,7 @@ class CrossSessionTest(unittest.TestCase):
         out = srv._send_to_session("status?", name="Bonsai UX implementation")
         self.assertTrue(out.get("sent"), out)
         prompt = self._queries(self.peer)[-1]
-        self.assertTrue(prompt.startswith("[from agent agent-000000000001]"), prompt)
+        self.assertTrue(prompt.startswith("[from agent submarine::000000000001]"), prompt)
         self.assertIn("status?", prompt)
 
     def test_send_by_session_id(self):
@@ -92,7 +92,7 @@ class CrossSessionTest(unittest.TestCase):
         out = srv._send_to_session("hi", name="review")
         self.assertIn("error", out)
         self.assertEqual({c["agent_id"] for c in out["candidates"]},
-                         {"agent-000000000003", "agent-000000000004"})
+                         {"submarine::000000000003", "submarine::000000000004"})
         self.assertEqual(self._queries(self.twin_a), [])
 
     def test_no_address_at_all(self):
@@ -106,9 +106,9 @@ class CliSenderStampTest(unittest.TestCase):
     def setUp(self):
         default_registry.clear()
         self.me = make_session(client=FakeClient(), initialized=True, registry=default_registry)
-        self.me.agent_id, self.me.name, self.me.session_id = "agent-00000000000a", "planner", "sa"
+        self.me.agent_id, self.me.name, self.me.session_id = "submarine::00000000000a", "planner", "sa"
         self.peer = make_session(client=FakeClient(), initialized=True, registry=default_registry)
-        self.peer.agent_id, self.peer.name, self.peer.session_id = "agent-00000000000b", "worker", "sb"
+        self.peer.agent_id, self.peer.name, self.peer.session_id = "submarine::00000000000b", "worker", "sb"
         for s in (self.me, self.peer):
             default_registry.register_session(s)
 
@@ -118,9 +118,9 @@ class CliSenderStampTest(unittest.TestCase):
     def test_an_agent_caller_is_stamped(self):
         from features.session_control import _stamp_agent_sender
         prompt, shown = _stamp_agent_sender(
-            {"kind": "cli", "agent_id": "agent-00000000000a"}, self.peer,
+            {"kind": "cli", "agent_id": "submarine::00000000000a"}, self.peer,
             "please check", "📨 please check")
-        self.assertTrue(prompt.startswith("[from agent agent-00000000000a]"))
+        self.assertTrue(prompt.startswith("[from agent submarine::00000000000a]"))
         self.assertIn("name=planner", prompt)
         self.assertEqual(shown, "📬 from planner")
 
@@ -134,7 +134,7 @@ class CliSenderStampTest(unittest.TestCase):
         import features.sessions_cli as cli
         sent = []
         orig = cli.send if hasattr(cli, "send") else None
-        os.environ["SUBMARINE_AGENT_ID"] = "agent-00000000000a"
+        os.environ["SUBMARINE_AGENT_ID"] = "submarine::00000000000a"
         try:
             import inspect
             src = inspect.getsource(cli)
@@ -145,9 +145,9 @@ class CliSenderStampTest(unittest.TestCase):
 
     def test_every_bridge_gets_its_agent_id_in_env(self):
         s = make_session(client=FakeClient(), backend="claude")
-        s.agent_id = "agent-00000000000c"
+        s.agent_id = "submarine::00000000000c"
         s.start()
-        self.assertEqual(s.client.started[1].get("SUBMARINE_AGENT_ID"), "agent-00000000000c")
+        self.assertEqual(s.client.started[1].get("SUBMARINE_AGENT_ID"), "submarine::00000000000c")
 
 
 if __name__ == "__main__":

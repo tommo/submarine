@@ -14,6 +14,8 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Union
 
+from .agent_ids import agent_id_folder, agent_id_hex, canon_agent_id
+
 try:
     from plat.constants import ARTIFACTS_DIR
     from plat.jsonio import safe_json_dump, safe_json_load
@@ -187,6 +189,12 @@ class ArtifactStore:
         return os.path.join(self.root, "index.json")
 
     def owner_dir(self, owner: str) -> str:
+        folder = agent_id_folder(owner)
+        if folder:
+            # `::` is not path-safe; a folder made under the old `agent-<hex>`
+            # id keeps its artifacts with the same session.
+            legacy = os.path.join(self.root, "agent-" + (agent_id_hex(owner) or ""))
+            return legacy if os.path.isdir(legacy) else os.path.join(self.root, folder)
         slug = _SLUG_RE.sub("-", (owner or "unknown").strip()) or "unknown"
         return os.path.join(self.root, slug)
 
@@ -256,7 +264,7 @@ class ArtifactStore:
         with open(jp, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-        owner = self.owner_of_path(ap) or agent_id
+        owner = canon_agent_id(self.owner_of_path(ap) or agent_id)
         rec = {
             "path": ap,
             "owner": owner,
@@ -413,8 +421,9 @@ class ArtifactStore:
             return list(entries)
         if not agent_id:
             return []
-        aid = str(agent_id)
-        return [e for e in entries if str(e.get("owner") or "") == aid]
+        aid = str(canon_agent_id(str(agent_id)))
+        return [e for e in entries
+                if str(canon_agent_id(str(e.get("owner") or ""))) == aid]
 
     def _require_artifact(self, path: str) -> str:
         ap = os.path.abspath(os.path.expanduser(path or ""))

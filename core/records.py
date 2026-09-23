@@ -18,6 +18,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from .agent_ids import canon_agent_id, canon_agent_ids, derived_agent_id  # noqa: F401
+
 try:
     from plat.jsonio import safe_json_dump, safe_json_load
     from plat.constants import SESSIONS_FILE as _SESSIONS_NAME
@@ -220,6 +222,8 @@ class SessionRecord:
         )
 
 
+
+
 class SessionStore:
     """`.sessions.json` — plugin dir, capped by `SESSIONS_CAP`, MRU-front."""
 
@@ -228,9 +232,23 @@ class SessionStore:
 
     def load(self) -> List[Dict[str, Any]]:
         data = safe_json_load(self.path, default=[])
-        if isinstance(data, list):
-            return data
-        return []
+        if not isinstance(data, list):
+            return []
+        # Every row answers with the id a restore of it would get, so a list,
+        # a Copy Agent ID and a wake all agree (older rows were written bare,
+        # or with the pre-`submarine::` form).
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            if row.get("session_id") and not row.get("agent_id"):
+                row["agent_id"] = derived_agent_id(row["session_id"])
+            for key in ("agent_id", "subsession_id", "parent_agent_id"):
+                if row.get(key):
+                    row[key] = canon_agent_id(row[key])
+            for key in ("child_agent_ids", "agent_id_aliases"):
+                if row.get(key):
+                    row[key] = canon_agent_ids(row[key])
+        return data
 
     def save(self, sessions: List[Dict[str, Any]]) -> bool:
         projects = [s.get("project") for s in (sessions or []) if isinstance(s, dict)]
@@ -258,7 +276,8 @@ class SessionStore:
         sessions.insert(0, entry)
         self.save(sessions)
 
-    def persist_state(self, session_id: str, state: str, model: Optional[str] = None) -> None:
+    def persist_state(self, session_id: str, state: str, model: Optional[str] = None,
+                      agent_id: Optional[str] = None) -> None:
         if not session_id:
             return
         sessions = self.load()
@@ -267,9 +286,16 @@ class SessionStore:
                 sessions[i]["state"] = state
                 if model:
                     sessions[i]["model"] = model
+                # The live id is the truth (as in a full save); a bare row
+                # would restore to a derived one instead.
+                if agent_id:
+                    sessions[i]["agent_id"] = canon_agent_id(agent_id)
                 self.save(sessions)
                 return
-        self.upsert({"session_id": session_id, "state": state, "model": model})
+        entry = {"session_id": session_id, "state": state, "model": model}
+        if agent_id:
+            entry["agent_id"] = agent_id
+        self.upsert(entry)
 
     def rename(self, session_id: str, name: str) -> bool:
         name = (name or "").strip()

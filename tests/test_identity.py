@@ -144,7 +144,7 @@ class TestNoViewIdOnSession(unittest.TestCase):
         s = make_session()
         self.assertFalse(hasattr(s, "view_id"))
         self.assertFalse(hasattr(s, "parent_view_id"))
-        self.assertTrue(s.agent_id.startswith("agent-"))
+        self.assertTrue(s.agent_id.startswith("submarine::"))
 
 
 class TestResumeReusesSavedAgentId(unittest.TestCase):
