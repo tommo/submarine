@@ -658,6 +658,32 @@ function sheetFromTurns(body, row) {
     const prompt = String(t.prompt || '').replace(/\s+$/, '');
     out.push('◎ ' + prompt + (t.prompt_truncated ? ' …' : '') + ' ▶');
     out.push('');
+    if (t.events && t.events.length) {
+      // As the turn ran: text between its tool calls; only calls that
+      // really followed each other collapse into ×N.
+      let run = null, n = 0;
+      const flush = () => { if (run) out.push('⚙ ' + run + (n > 1 ? ' ×' + n : '')); run = null; n = 0; };
+      let toolsOpen = false;
+      for (const [kind, value] of t.events) {
+        if (kind === 'tool') {
+          if (value === run) { n++; continue; }
+          flush(); run = value; n = 1; toolsOpen = true;
+          continue;
+        }
+        const text = String(value || '').replace(/^\n+|\s+$/g, '');
+        if (!text) continue;
+        flush();
+        if (toolsOpen) { out.push(''); toolsOpen = false; }
+        out.push(text);
+        out.push('');
+      }
+      flush();
+      if (toolsOpen) out.push('');
+      if (t.reply_truncated) { out.push('… truncated'); out.push(''); }
+      out.push('  @done(' + model + ')');
+      out.push('');
+      continue;
+    }
     const tools = t.tools || [];
     if (tools.length) {
       let i = 0;

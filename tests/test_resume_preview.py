@@ -306,11 +306,12 @@ class TestResumePreview(unittest.TestCase):
             "⚙ Read ×2",          # these two really were consecutive
             "Both match.",
         ]))
-        # The flattened views the CLI and the length check use are unchanged.
+        # The flattened views the CLI, the web UI and the length check use:
+        # text split by a tool call stays separate paragraphs, never glued.
         self.assertEqual(turns[0]["tools"], ["Read", "Read", "Read"])
         self.assertEqual(
             turns[0]["reply"],
-            "Reading the first file.Now the second.Both match.")
+            "Reading the first file.\n\nNow the second.\n\nBoth match.")
 
     def test_a_turn_parsed_without_events_still_renders(self):
         self.assertEqual(

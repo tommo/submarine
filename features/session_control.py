@@ -490,7 +490,7 @@ def _turn_summary(turn: dict, max_chars: int) -> dict:
     prompt = display_prompt(str(turn.get("prompt") or ""))
     cut = len(reply) > max_chars
     tools = turn.get("tools") or []
-    return {
+    out = {
         "prompt": prompt[:max_chars],
         "prompt_truncated": len(prompt) > max_chars,
         "reply": reply[:max_chars],
@@ -498,6 +498,22 @@ def _turn_summary(turn: dict, max_chars: int) -> dict:
         "tools": [str(t)[:120] for t in tools][:20],
         "ts": turn.get("ts"),
     }
+    # The turn in order — text between its tool calls — for a client that
+    # rebuilds the sheet (the web UI); `reply`/`tools` stay the flat views.
+    events = []
+    budget = max_chars
+    for kind, value in turn.get("events") or []:
+        if kind == "tool":
+            events.append(["tool", str(value)[:120]])
+        elif budget > 0:
+            text = str(value or "")
+            events.append(["text", text[:budget]])
+            budget -= len(text)
+        if len(events) >= 400:
+            break
+    if events:
+        out["events"] = events
+    return out
 
 
 def _sheet_text(session: Any, max_chars: int) -> Optional[str]:

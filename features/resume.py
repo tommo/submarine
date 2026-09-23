@@ -104,12 +104,18 @@ def _turn_text(cur: dict, text) -> None:
     text = text if isinstance(text, str) else ("" if text is None else str(text))
     if not text:
         return
-    cur["reply"] += text
     events = cur.setdefault("events", [])
     if events and events[-1][0] == "text":
+        # The same stretch of text (a streamed part): glue as is.
+        cur["reply"] += text
         events[-1] = ("text", events[-1][1] + text)
-    else:
-        events.append(("text", text))
+        return
+    # Text after a tool call is a new paragraph in the flattened reply too —
+    # glued, "…the layout):Now fix the two issues" read as one line.
+    if cur["reply"] and not cur["reply"].endswith("\n\n"):
+        cur["reply"] = cur["reply"].rstrip("\n") + "\n\n"
+    cur["reply"] += text.lstrip("\n") if cur["reply"] else text
+    events.append(("text", text))
 
 
 def _turn_tool(cur: dict, name) -> None:
