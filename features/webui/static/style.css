@@ -530,43 +530,41 @@ body.working .head-actions .interrupt { display: inline-flex; align-items: cente
 
   .btn { min-height: 44px; }
 
-  /* The list is a sheet over the session view: slides up from the bottom,
-     backdrop dims the view; ☰ / the session name open it, a row / the
-     backdrop / ✕ / Esc / a swipe down on its head close it. */
+  /* The list is a drawer over the session view: slides in from the left,
+     backdrop dims the view; ☰ / a right flick on Sheet open it, a row /
+     the backdrop / ✕ / Esc / a left flick close it. While a finger drags
+     it (body.flicking) app.js sets the transform and the transitions stop. */
   .list {
     position: fixed;
-    left: 0; right: 0; bottom: 0;
-    top: max(24px, env(safe-area-inset-top, 0px));
-    width: auto;
+    left: 0; top: 0; bottom: 0;
+    width: min(86vw, 380px);
     max-width: none;
     min-width: 0;
     max-height: none;
     z-index: 30;
-    border-right: 0;
-    border-top: 1px solid var(--line);
-    border-radius: 14px 14px 0 0;
+    border-right: 1px solid var(--line);
     background: var(--bg);
-    box-shadow: 0 -12px 40px rgba(0,0,0,0.5);
+    box-shadow: 12px 0 40px rgba(0,0,0,0.5);
+    padding-top: env(safe-area-inset-top, 0px);
     padding-left: env(safe-area-inset-left, 0px);
-    padding-right: env(safe-area-inset-right, 0px);
-    transform: translateY(105%);
-    transition: transform 0.22s ease-out;
+    transform: translateX(-102%);
+    /* visibility waits for the slide out, so closing is seen too */
+    transition: transform 0.24s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s linear 0.24s;
     visibility: hidden;
   }
-  body.list-open .list { transform: none; visibility: visible; }
+  body.list-open .list {
+    transform: none; visibility: visible;
+    transition: transform 0.24s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s;
+  }
+  body.flicking .list { visibility: visible; }
+  body.flicking .list, body.flicking .backdrop { transition: none; }
   .backdrop {
     position: fixed; inset: 0; z-index: 29;
     background: rgba(0,0,0,0.45);
-    opacity: 0; pointer-events: none; transition: opacity 0.22s ease-out;
+    opacity: 0; pointer-events: none; transition: opacity 0.24s ease-out;
   }
   body.list-open .backdrop { opacity: 1; pointer-events: auto; }
-  .list-head { border-radius: 14px 14px 0 0; }
-  .list-head::before {
-    /* grab handle */
-    content: ''; display: block; width: 36px; height: 4px; border-radius: 2px;
-    background: #3a4150; margin: 0 auto 6px;
-  }
-  @media (prefers-reduced-motion: reduce) { .list, .backdrop { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { .list, .backdrop, body.list-open .list { transition: none; } }
 
   .list-head { padding: 6px 12px 6px; }
   .list-head input[type="search"] { font-size: max(16px, calc(16px * var(--fs))); padding: 8px 10px; }   /* no iOS zoom */
@@ -768,3 +766,12 @@ body.working .head-actions .interrupt { display: inline-flex; align-items: cente
   /* A read-only editor still wants native long-press selection. */
   .pane.is-sheet .cm-content { -webkit-user-select: text; user-select: text; }
 }
+
+/* Flicks (app.js "flicks"): the pane leans with the finger, then the next
+   page slides in from the side it was pushed from. */
+body.flicking #pane { transition: none; }
+#pane.in-right { animation: pane-in-right 0.2s ease-out; }
+#pane.in-left { animation: pane-in-left 0.2s ease-out; }
+@keyframes pane-in-right { from { transform: translateX(28px); opacity: 0.4; } to { transform: none; opacity: 1; } }
+@keyframes pane-in-left { from { transform: translateX(-28px); opacity: 0.4; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { #pane.in-right, #pane.in-left { animation: none; } }

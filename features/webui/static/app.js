@@ -195,8 +195,9 @@ function showError(env) {
 }
 
 // ── navigation ──────────────────────────────────────────────────────────────
-// A phone shows the session view; the list is a sheet that slides over it
-// (☰ in the header opens it, the backdrop / a row / ✕ closes it). Which
+// A phone shows the session view; the list is a drawer that slides over it
+// from the left (☰ or a right flick on Sheet opens it; the backdrop, a row,
+// ✕, Esc or a left flick closes it — see "flicks"). Which
 // session is open lives in the URL hash, so it is a link. On a wide screen
 // both panes are visible and the list state is inert.
 
@@ -1492,6 +1493,161 @@ async function mountComposer() {
   syncToolbar();
 }
 
+// ── flicks ──────────────────────────────────────────────────────────────────
+// The session view's tabs are pages laid out left to right, with the list
+// parked off the left edge in single-column mode:
+//
+//     [list] · Sheet · Transcript · Edits · (open file)
+//
+// Flick left → the next page, flick right → the previous one. Right on Sheet
+// pulls the list out, following the finger; a left flick on the list (or on
+// the dimmed view beside it) puts it back. Right on an open file is ← Edits.
+// A flick commits past FLICK.dist of the width or above FLICK.speed; anything
+// that starts vertical, in a field, on a selection or on a strip that can
+// still scroll that way is left alone.
+
+const MODES = ['sheet', 'tail', 'edits'];
+const FLICK = {
+  lock: 10,      // px before the axis is decided
+  ratio: 1.3,    // |dx| must beat |dy| by this to count as horizontal
+  dist: 0.3,     // commit past this share of the width…
+  speed: 0.45,   // …or at this px/ms, once past FLICK.min
+  min: 36,
+  hold: 450,     // ms: a finger that rests first is selecting, not flicking
+  stale: 90,     // ms: a pause before lifting drops the speed
+};
+
+function selectMode(mode, from) {
+  if (MODES.indexOf(mode) < 0) return;
+  for (const t of document.querySelectorAll('.tab')) t.classList.toggle('on', t.getAttribute('data-mode') === mode);
+  if (state.file) { unmountFile(); state.file = null; $('filebar').hidden = true; }
+  state.mode = mode;
+  state.editsKey = null;
+  clearError();
+  refreshPane();
+  if (from) slideIn(from);
+}
+
+// The new page arrives from the side the finger pushed it from.
+function slideIn(from) {
+  const pane = $('pane');
+  pane.classList.remove('in-left', 'in-right');
+  void pane.offsetWidth;   // restart the animation
+  pane.classList.add(from === 'left' ? 'in-left' : 'in-right');
+}
+
+function flickBlocked(target) {
+  if (!target || !target.closest) return true;
+  if (target.closest('input, textarea, select, #compose, #modal, #create, .cm-panels')) return true;
+  const sel = window.getSelection && window.getSelection();
+  return !!(sel && !sel.isCollapsed && String(sel).trim());
+}
+
+// A strip (wide code, the tab row) that can still scroll the finger's way
+// keeps the gesture.
+function scrollsThatWay(target, stop, dx) {
+  for (let n = target; n && n !== stop; n = n.parentElement) {
+    if (n.scrollWidth <= n.clientWidth + 1) continue;
+    const ox = getComputedStyle(n).overflowX;
+    if (ox !== 'auto' && ox !== 'scroll') continue;
+    if (dx < 0 && n.scrollLeft + n.clientWidth < n.scrollWidth - 1) return true;
+    if (dx > 0 && n.scrollLeft > 0) return true;
+  }
+  return false;
+}
+
+// Horizontal drag → h.grab(dx) decides whether it is ours (returns falsy to
+// let it go), h.move(dx) follows the finger, h.end(commit, dx) settles.
+function onFlick(el, h) {
+  let s = null;
+  el.addEventListener('touchstart', (e) => {
+    s = null;
+    if (e.touches.length !== 1 || !h.armed() || flickBlocked(e.target)) return;
+    const t = e.touches[0];
+    s = { x: t.clientX, y: t.clientY, t0: e.timeStamp, lx: t.clientX, lt: e.timeStamp, vx: 0, dx: 0, on: false, target: e.target };
+  }, { passive: true });
+  el.addEventListener('touchmove', (e) => {
+    if (!s) return;
+    if (e.touches.length !== 1) { if (s.on) h.end(false, s.dx); s = null; return; }
+    const t = e.touches[0];
+    const dx = t.clientX - s.x, dy = t.clientY - s.y;
+    if (!s.on) {
+      if (Math.abs(dx) < FLICK.lock && Math.abs(dy) < FLICK.lock) return;
+      if (e.timeStamp - s.t0 > FLICK.hold || Math.abs(dx) < Math.abs(dy) * FLICK.ratio
+          || scrollsThatWay(s.target, el, dx) || !h.grab(dx)) { s = null; return; }
+      s.on = true;
+      document.body.classList.add('flicking');
+    }
+    e.preventDefault();   // the pane must not scroll under a horizontal drag
+    const dt = e.timeStamp - s.lt;
+    if (dt > 0) s.vx = (t.clientX - s.lx) / dt;
+    s.lx = t.clientX; s.lt = e.timeStamp; s.dx = dx;
+    h.move(dx);
+  }, { passive: false });
+  const finish = (e) => {
+    if (!s || !s.on) { s = null; return; }
+    const dx = s.dx, w = el.clientWidth || window.innerWidth;
+    const vx = e.timeStamp - s.lt > FLICK.stale ? 0 : s.vx;
+    const fast = Math.abs(dx) > FLICK.min && Math.abs(vx) > FLICK.speed && Math.sign(vx) === Math.sign(dx);
+    const far = Math.abs(dx) > w * FLICK.dist;
+    document.body.classList.remove('flicking');
+    h.end(e.type === 'touchend' && (fast || far), dx);
+    s = null;
+  };
+  el.addEventListener('touchend', finish, { passive: true });
+  el.addEventListener('touchcancel', finish, { passive: true });
+}
+
+// The list drawer at `p` of the way out (0 closed, 1 open); null hands it back
+// to the stylesheet.
+function drawer(p) {
+  const list = document.querySelector('.list'), dim = $('backdrop');
+  if (p === null) { list.style.transform = ''; dim.style.opacity = ''; return; }
+  p = Math.max(0, Math.min(1, p));
+  list.style.transform = 'translateX(' + ((p - 1) * 100) + '%)';
+  dim.style.opacity = String(p);
+}
+
+function wireFlicks() {
+  const list = document.querySelector('.list');
+  const pane = $('pane');
+  const listW = () => list.getBoundingClientRect().width || window.innerWidth;
+
+  // The session view: tabs, the file's way back, and the list's way out.
+  let act = null;
+  onFlick(document.querySelector('.detail'), {
+    armed: () => !(NARROW.matches && listOpen()),
+    grab: (dx) => {
+      const i = MODES.indexOf(state.mode);
+      if (dx > 0) act = state.file ? 'file' : i > 0 ? 'prev' : NARROW.matches ? 'list' : null;
+      else act = !state.file && i >= 0 && i < MODES.length - 1 ? 'next' : null;
+      return act;
+    },
+    move: (dx) => {
+      if (act === 'list') { drawer(dx / listW()); return; }
+      pane.style.transform = 'translateX(' + (dx * 0.35) + 'px)';
+      pane.style.opacity = String(1 - Math.min(0.5, Math.abs(dx) / pane.clientWidth));
+    },
+    end: (commit, dx) => {
+      pane.style.transform = ''; pane.style.opacity = '';
+      if (act === 'list') { drawer(null); if (commit) showList(); }
+      else if (commit && act === 'file') { closeFile(); slideIn('left'); }
+      else if (commit) selectMode(MODES[MODES.indexOf(state.mode) + (act === 'next' ? 1 : -1)], act === 'next' ? 'right' : 'left');
+      act = null;
+    },
+  });
+
+  // The open list, and the dimmed view beside it: flick left to close.
+  const closer = {
+    armed: () => NARROW.matches && listOpen(),
+    grab: (dx) => dx < 0,
+    move: (dx) => drawer(1 + dx / listW()),
+    end: (commit) => { drawer(null); if (commit) closeList(); },
+  };
+  onFlick(list, closer);
+  onFlick($('backdrop'), closer);
+}
+
 function wire() {
   $('refresh').addEventListener('click', () => { clearError(); refreshPane(); schedule(0); });
 
@@ -1499,29 +1655,12 @@ function wire() {
   $('list-close').addEventListener('click', closeList);
   $('backdrop').addEventListener('click', closeList);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && listOpen() && NARROW.matches) closeList(); });
-  // A swipe down on the sheet's head closes it.
-  (function () {
-    let y0 = null;
-    const head = document.querySelector('.list-head');
-    head.addEventListener('touchstart', (e) => { y0 = e.touches[0].clientY; }, { passive: true });
-    head.addEventListener('touchend', (e) => {
-      if (y0 !== null && e.changedTouches[0].clientY - y0 > 60) closeList();
-      y0 = null;
-    }, { passive: true });
-  })();
   window.addEventListener('hashchange', onHashChange);
 
   for (const tab of document.querySelectorAll('.tab')) {
-    tab.addEventListener('click', () => {
-      for (const other of document.querySelectorAll('.tab')) other.classList.remove('on');
-      tab.classList.add('on');
-      if (state.file) { unmountFile(); state.file = null; $('filebar').hidden = true; }
-      state.mode = tab.getAttribute('data-mode');
-      state.editsKey = null;
-      clearError();
-      refreshPane();
-    });
+    tab.addEventListener('click', () => selectMode(tab.getAttribute('data-mode')));
   }
+  wireFlicks();
 
   $('turns').addEventListener('change', () => { clearError(); refreshPane(); });
   $('reload').addEventListener('click', () => { clearError(); refreshPane(); schedule(0); });
