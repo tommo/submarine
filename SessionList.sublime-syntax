@@ -29,7 +29,7 @@ contexts:
       scope: keyword.bound.session-list
       push: row_lead
 
-    - match: '^  (?=[⊡●!?✘○⏸·])'
+    - match: '^  (?=[⊡●⚙!?✘○⏸·])'
       push: row_lead
 
     - match: '^⊡'
@@ -37,6 +37,11 @@ contexts:
       push: row_rest_torn-off
 
     - match: '^●'
+      scope: keyword.working.session-list
+      push: row_rest_working
+
+    # ⚙ background tasks outlived the turn: still busy, styled as working.
+    - match: '^⚙'
       scope: keyword.working.session-list
       push: row_rest_working
 
@@ -70,6 +75,10 @@ contexts:
       set: row_rest_torn-off
 
     - match: '●'
+      scope: keyword.working.session-list
+      set: row_rest_working
+
+    - match: '⚙'
       scope: keyword.working.session-list
       set: row_rest_working
 

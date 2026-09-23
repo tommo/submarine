@@ -2058,6 +2058,21 @@ class TestSessionListKeymap(unittest.TestCase):
         self.assertIn("[A-Za-z][A-Za-z0-9_-]{0,7}", syn)
         self.assertNotIn("claude|grok|kimi|codex|pi|deepseek", syn)
 
+    def test_syntax_knows_every_state_mark(self):
+        """A mark the syntax does not match leaves the row unstyled (⚙ did)."""
+        import os
+        import re
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        syn = open(os.path.join(root, "SessionList.sublime-syntax"),
+                   encoding="utf-8").read()
+        lead = re.search(r"\^  \(\?=\[([^\]]+)\]\)", syn).group(1)
+        for status in ("input", "error", "unread", "working", "bg",
+                       "sleeping", "ready"):
+            mark = sl._mark(status)
+            self.assertIn(mark, lead, status)
+            self.assertRegex(syn, r"- match: '\\?%s'\n\s+scope: .*\n\s+set: row_rest_"
+                             % re.escape(mark), status)
+
     def test_cmd_w_closes_the_row_with_confirm(self):
         hits = [e for e in self.keymap
                 if e.get("command") == "submarine_session_list_close"
