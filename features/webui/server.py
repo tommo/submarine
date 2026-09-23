@@ -18,13 +18,15 @@ One action per endpoint, named after the CLI's subcommands, so the API really is
   GET  /api/file?path=…&ref=…      a text file's contents, for the code view  (`read`)
   POST /api/clear                  {"ref", "keep_last"} — clear the sheet (Cmd+K / Cmd+Shift+K)  (`clear`)
 
-Plus `GET /` and `/static/*` for the console itself. The plugin's envelope is
-returned verbatim, with `http` added, and `data.code` decides the status code —
-so a caller sees the CLI's own error text and the same stable codes.
+Plus `GET /` and `/static/*` for the console itself, and `/api/access/*` so a
+browser can ask for a device grant. Every other `/api` route needs a device
+cookie, the legacy `--token`, or a loopback peer (unless
+`--require-auth-on-loopback`). The plugin's envelope is returned verbatim,
+with `http` added, and `data.code` decides the status code — so a caller sees
+the CLI's own error text and the same stable codes.
 
 Stdlib only and Sublime-free: `ThreadingHTTPServer` over the CLI's socket
-client. Binding 0.0.0.0 is deliberate (see `features/webui/cli.py`); `--token`
-optionally gates every `/api` route.
+client. Binding 0.0.0.0 is deliberate (see `features/webui/cli.py`).
 """
 from __future__ import annotations
 
@@ -33,6 +35,8 @@ import json
 import os
 import socket
 import sys
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
@@ -55,9 +59,14 @@ _STATUS = {
     "no_session": 409,
     "transcript": 500,
     "internal": 500,
+    "rate_limited": 429,
 }
 TRANSPORT_STATUS = 503
 MAX_BODY_BYTES = 1024 * 1024
+COOKIE_NAME = "submarine_device"
+COOKIE_MAX_AGE = 365 * 24 * 60 * 60
+#: A revoke shows up once this expires, without a socket call on every request.
+CHECK_TTL = 3.0
 
 _POST_ROUTES = ("/api/chat", "/api/interrupt", "/api/answer", "/api/create",
                 "/api/rename", "/api/close", "/api/open", "/api/clear")
@@ -88,6 +97,94 @@ def _int_or_none(raw: Optional[str]) -> Optional[int]:
         return None
 
 
+def is_loopback(ip: str) -> bool:
+    host = (ip or "").strip().lower()
+    if host.startswith("::ffff:"):
+        host = host[len("::ffff:"):]
+    return host in ("127.0.0.1", "::1")
+
+
+def access_allowed(peer_ip: str, cookie_ok: bool, legacy_ok: bool,
+                   auth_loopback: bool) -> bool:
+    """A device cookie, the legacy shared secret, or loopback unless the flag."""
+    if cookie_ok or legacy_ok:
+        return True
+    if not auth_loopback and is_loopback(peer_ip):
+        return True
+    return False
+
+
+def cookie_value(header: str, name: str) -> str:
+    if not header:
+        return ""
+    for part in header.split(";"):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        if key.strip() == name:
+            return value.strip()
+    return ""
+
+
+def _cookie_token_safe(token: str) -> bool:
+    if not token or len(token) > 200:
+        return False
+    for ch in token:
+        if not (ch.isalnum() or ch in "-_"):
+            return False
+    return True
+
+
+def device_cookie(token: str, secure: bool) -> str:
+    """HttpOnly so page script cannot read the grant. Secure only on https."""
+    parts = [
+        "%s=%s" % (COOKIE_NAME, token),
+        "Path=/",
+        "Max-Age=%d" % COOKIE_MAX_AGE,
+        "HttpOnly",
+        "SameSite=Strict",
+    ]
+    if secure:
+        parts.append("Secure")
+    return "; ".join(parts)
+
+
+class CheckCache(object):
+    """A few seconds of `web_access_check` results, keyed by the raw token."""
+
+    def __init__(self, ttl: float) -> None:
+        self.ttl = float(ttl)
+        self._lock = threading.Lock()
+        self._hits = {}  # type: Dict[str, Tuple[float, bool]]
+
+    def get(self, token: str) -> Optional[bool]:
+        if self.ttl <= 0:
+            return None
+        now = time.monotonic()
+        with self._lock:
+            row = self._hits.get(token)
+            if row is None:
+                return None
+            if row[0] <= now:
+                self._hits.pop(token, None)
+                return None
+            return row[1]
+
+    def put(self, token: str, ok: bool) -> None:
+        if self.ttl <= 0 or not token:
+            return
+        now = time.monotonic()
+        with self._lock:
+            self._hits[token] = (now + self.ttl, bool(ok))
+            if len(self._hits) <= 256:
+                return
+            stale = [key for key, item in self._hits.items() if item[0] <= now]
+            for key in stale:
+                self._hits.pop(key, None)
+            while len(self._hits) > 256:
+                self._hits.pop(next(iter(self._hits)), None)
+
+
 class WebUIHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "SubmarineWebUI/1"
@@ -113,19 +210,22 @@ class WebUIHandler(BaseHTTPRequestHandler):
         parts = urlparse(self.path)
         return unquote(parts.path), parse_qs(parts.query)
 
-    def _send(self, status: int, body: bytes, ctype: str) -> None:
+    def _send(self, status: int, body: bytes, ctype: str,
+              extra: Optional[list] = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        for item in extra or []:
+            self.send_header(item[0], item[1])
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def _json(self, status: int, payload: Any) -> None:
+    def _json(self, status: int, payload: Any, extra: Optional[list] = None) -> None:
         body = json.dumps(payload, default=str).encode("utf-8")
-        self._send(status, body, "application/json; charset=utf-8")
+        self._send(status, body, "application/json; charset=utf-8", extra)
 
     def _reply(self, env: Dict[str, Any]) -> None:
         """Status from the envelope's `data.code`, body as the envelope."""
@@ -140,14 +240,79 @@ class WebUIHandler(BaseHTTPRequestHandler):
         body["http"] = status
         self._json(status, body)
 
-    def _token_ok(self, query: Dict[str, list], header: bool = True) -> bool:
-        want = getattr(self.server, "token", "")
+    def _legacy_ok(self, query: Dict[str, list]) -> bool:
+        want = str(getattr(self.server, "token", "") or "")
         if not want:
-            return True
+            return False
         got = _first(query, "token") or ""
-        if not got and header:
+        if not got:
             got = self.headers.get("X-Submarine-Token") or ""
-        return hmac.compare_digest(str(want), str(got))
+        got = str(got)
+        if len(got) != len(want):
+            return False
+        return hmac.compare_digest(want, got)
+
+    def _peer_ip(self) -> str:
+        addr = self.client_address
+        if isinstance(addr, tuple) and addr:
+            return str(addr[0])
+        return ""
+
+    def _cookie_ok(self) -> bool:
+        token = cookie_value(self.headers.get("Cookie") or "", COOKIE_NAME)
+        if not token:
+            return False
+        cache = getattr(self.server, "check_cache", None)
+        if cache is not None:
+            hit = cache.get(token)
+            if hit is not None:
+                return hit
+        fn = getattr(self._client, "web_access_check", None)
+        if fn is None:
+            return False
+        try:
+            env = fn(token)
+        except Exception:
+            return False
+        if not isinstance(env, dict) or not env.get("ok"):
+            return False
+        data = env.get("data") if isinstance(env.get("data"), dict) else {}
+        valid = bool(data.get("ok"))
+        if cache is not None:
+            cache.put(token, valid)
+        return valid
+
+    def _access_ok(self, query: Dict[str, list]) -> bool:
+        return access_allowed(
+            self._peer_ip(),
+            self._cookie_ok(),
+            self._legacy_ok(query),
+            bool(getattr(self.server, "auth_loopback", False)),
+        )
+
+    def _request_is_https(self) -> bool:
+        proto = (self.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
+        if proto == "https":
+            return True
+        try:
+            import ssl
+            return isinstance(self.connection, ssl.SSLSocket)
+        except Exception:
+            return False
+
+    def _unauthorized(self, closing: bool) -> None:
+        if getattr(self.server, "token", ""):
+            payload = {"ok": False, "http": 401,
+                       "error": "missing or wrong token",
+                       "hint": "append ?token=\u2026 or send X-Submarine-Token"}
+        else:
+            payload = {"ok": False, "http": 401, "error": "access required",
+                       "hint": "request access, then grant it in Sublime: "
+                               "Submarine: Web Access\u2026"}
+        if closing:
+            self._refuse(401, payload)
+        else:
+            self._json(401, payload)
 
     def _refuse(self, status: int, payload: Dict[str, Any]) -> None:
         """Refuse a POST before its body is read: the connection has to end here,
@@ -183,16 +348,17 @@ class WebUIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         route, query = self._route()
-        if route in _POST_ROUTES:
+        if route in _POST_ROUTES or route == "/api/access/request":
             return self._json(405, {"ok": False, "http": 405,
                                     "error": "use POST for %s" % route})
         if not route.startswith("/api/"):
             return self._static(route)
-        if not self._token_ok(query):
-            return self._json(401, {"ok": False, "http": 401,
-                                    "error": "missing or wrong token",
-                                    "hint": "append ?token=… or send "
-                                            "X-Submarine-Token"})
+        if route == "/api/access/me":
+            return self._access_me(query)
+        if route == "/api/access/status":
+            return self._access_status(query)
+        if not self._access_ok(query):
+            return self._unauthorized(closing=False)
         if route == "/api/health":
             return self._json(200, self._client.health())
         if route == "/api/list":
@@ -236,11 +402,12 @@ class WebUIHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         route, query = self._route()
+        if route == "/api/access/request":
+            return self._access_request()
         if route not in _POST_ROUTES:
             return self._refuse(404, {"ok": False, "error": "no route %s" % route})
-        if not self._token_ok(query):
-            return self._refuse(401, {"ok": False,
-                                      "error": "missing or wrong token"})
+        if not self._access_ok(query):
+            return self._unauthorized(closing=True)
         body = self._body()
         if body is None:
             return
@@ -290,6 +457,63 @@ class WebUIHandler(BaseHTTPRequestHandler):
             idem=str(body["idem"])[:200] if body.get("idem") else None,
             display=str(body["display"])[:200] if body.get("display") else None))
 
+    # ─── device access ──────────────────────────────────────────────────────
+
+    def _access_me(self, query: Dict[str, list]) -> None:
+        if self._cookie_ok():
+            via = "cookie"  # type: Optional[str]
+            auth = True
+        elif self._legacy_ok(query):
+            via = "token"
+            auth = True
+        elif access_allowed(self._peer_ip(), False, False,
+                            bool(getattr(self.server, "auth_loopback", False))):
+            via = "loopback"
+            auth = True
+        else:
+            via = None
+            auth = False
+        self._json(200, {"ok": True, "authenticated": auth, "via": via})
+
+    def _access_status(self, query: Dict[str, list]) -> None:
+        ident = _first(query, "id") or ""
+        if not ident:
+            return self._json(400, {"ok": False, "http": 400,
+                                    "error": "id is required"})
+        fn = getattr(self._client, "web_access_status", None)
+        if fn is None:
+            return self._json(503, {"ok": False, "http": 503,
+                                    "error": "access status is unavailable"})
+        env = fn(ident[:64])
+        if not isinstance(env, dict) or not env.get("ok"):
+            return self._reply(env if isinstance(env, dict)
+                               else {"ok": False, "error": "malformed envelope"})
+        data = env.get("data") if isinstance(env.get("data"), dict) else {}
+        token = data.get("token") if isinstance(data.get("token"), str) else ""
+        public = {
+            "status": data.get("status") or "unknown",
+            "id": data.get("id") or ident,
+            "cookie": False,
+        }
+        extra = None
+        if token and _cookie_token_safe(token):
+            public["cookie"] = True
+            extra = [("Set-Cookie", device_cookie(token, self._request_is_https()))]
+        self._json(200, {"ok": True, "data": public}, extra)
+
+    def _access_request(self) -> None:
+        body = self._body()
+        if body is None:
+            return
+        fn = getattr(self._client, "web_access_request", None)
+        if fn is None:
+            return self._json(503, {"ok": False, "http": 503,
+                                    "error": "access requests are unavailable"})
+        env = fn(str(body.get("name") or ""), self._peer_ip(),
+                 self.headers.get("User-Agent") or "")
+        self._reply(env if isinstance(env, dict)
+                    else {"ok": False, "error": "malformed envelope"})
+
     # ─── static files ───────────────────────────────────────────────────────
 
     def _static(self, route: str) -> None:
@@ -320,20 +544,26 @@ class WebUIServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
     def __init__(self, address: Tuple[str, int], client: SessionClient,
-                 token: str = "", verbose: bool = False) -> None:
+                 token: str = "", verbose: bool = False,
+                 auth_loopback: bool = False,
+                 check_ttl: float = CHECK_TTL) -> None:
         ThreadingHTTPServer.__init__(self, address, WebUIHandler)
         self.client = client
         self.token = token or ""
         self.verbose = bool(verbose)
+        self.auth_loopback = bool(auth_loopback)
+        self.check_cache = CheckCache(check_ttl)
 
 
 def build_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
                  socket_path: str = "", token: str = "",
                  client: Optional[SessionClient] = None,
-                 verbose: bool = False) -> WebUIServer:
+                 verbose: bool = False, auth_loopback: bool = False,
+                 check_ttl: float = CHECK_TTL) -> WebUIServer:
     """A bound server. Port 0 picks a free one (the tests use that)."""
-    return WebUIServer((host, port), client or SessionClient(socket_path),
-                       token, verbose)
+    server = WebUIServer((host, port), client or SessionClient(socket_path),
+                         token, verbose, auth_loopback, check_ttl)
+    return server
 
 
 def lan_addresses(limit: int = 3) -> list:
@@ -354,10 +584,11 @@ def lan_addresses(limit: int = 3) -> list:
 
 def run(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
         socket_path: str = "", token: str = "", quiet: bool = False,
-        verbose: bool = False) -> int:
+        verbose: bool = False, auth_loopback: bool = False) -> int:
     """Bind, print where to point a browser, then serve until Ctrl-C."""
     try:
-        server = build_server(host, port, socket_path, token, verbose=verbose)
+        server = build_server(host, port, socket_path, token, verbose=verbose,
+                              auth_loopback=auth_loopback)
     except OSError as e:
         sys.stderr.write("error: cannot bind %s:%s: %s\n" % (host, port, e))
         return 1
@@ -376,10 +607,16 @@ def run(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
             "" if os.path.exists(client.socket_path) else "  (missing — start "
                                                           "Sublime with Submarine)"))
         if server.token:
-            out.write("  token     required (X-Submarine-Token or ?token=…)\n")
+            out.write("  token     shared secret accepted "
+                      "(X-Submarine-Token or ?token=…)\n")
         else:
-            out.write("  token     off — anyone who can reach this port can "
-                      "read and prompt your sessions\n")
+            out.write("  token     off\n")
+        if server.auth_loopback:
+            out.write("  access    this machine also needs a device cookie "
+                      "or the shared secret\n")
+        else:
+            out.write("  access    this machine is open; other machines need "
+                      "a device cookie or the shared secret\n")
         out.write("Ctrl-C to stop.\n")
         out.flush()
     try:

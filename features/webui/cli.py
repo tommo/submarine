@@ -4,9 +4,10 @@
   python3 submarine_web.py …          # same thing through the repo shim
 
 The default bind is every interface: a browser on another machine on the LAN can
-drive the sessions this Sublime is running. `--token` (or
-`SUBMARINE_WEB_TOKEN`) gates every `/api` route for that case; without it the
-port is open to whoever can reach it.
+drive the sessions this Sublime is running. Loopback is open so this machine
+is never locked out. Everyone else needs a device cookie (granted from Sublime)
+or `--token` / `SUBMARINE_WEB_TOKEN`. `--require-auth-on-loopback` applies that
+gate to this machine too.
 """
 from __future__ import annotations
 
@@ -33,9 +34,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="plugin socket path override (default $TMPDIR/"
                         "submarine_mcp.sock)")
     p.add_argument("--token", default=os.environ.get(TOKEN_ENV, ""),
-                   help="shared secret required on /api routes; defaults to "
-                        "$%s. Without it the port is open to anyone who can "
-                        "reach it." % TOKEN_ENV)
+                   help="shared secret accepted on /api routes; defaults to "
+                        "$%s. A granted device cookie is also accepted."
+                        % TOKEN_ENV)
+    p.add_argument("--require-auth-on-loopback", action="store_true",
+                   help="this machine also needs a device cookie or --token "
+                        "(default: loopback is open)")
     p.add_argument("--quiet", action="store_true", help="no startup banner")
     p.add_argument("--verbose", action="store_true",
                    help="log every request (default: only failures)")
@@ -45,7 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     return run(host=args.host, port=args.port, socket_path=args.socket,
-               token=args.token, quiet=args.quiet, verbose=args.verbose)
+               token=args.token, quiet=args.quiet, verbose=args.verbose,
+               auth_loopback=args.require_auth_on_loopback)
 
 
 if __name__ == "__main__":

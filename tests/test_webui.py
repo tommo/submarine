@@ -77,11 +77,15 @@ class FakeClient(object):
 
 class ServerCase(unittest.TestCase):
     token = ""
+    # Loopback is open unless a test turns the exemption off.
+    auth_loopback = False
+    check_ttl = 3.0
 
     def setUp(self):
         self.client = FakeClient()
-        self.server = build_server("127.0.0.1", 0, token=self.token,
-                                   client=self.client)
+        self.server = build_server(
+            "127.0.0.1", 0, token=self.token, client=self.client,
+            auth_loopback=self.auth_loopback, check_ttl=self.check_ttl)
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever,
                                        kwargs={"poll_interval": 0.05})
@@ -335,6 +339,8 @@ class TestStatusMapping(ServerCase):
 
 class TestToken(ServerCase):
     token = "s3cret"
+    # These assert the shared secret. Loopback would otherwise skip it.
+    auth_loopback = True
 
     def test_api_needs_the_token(self):
         status, body = self.get("/api/list")

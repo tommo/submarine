@@ -28,7 +28,7 @@ VERBS = {
     "Hide", "Interrupt", "Manage", "New", "Next", "Open", "Pause", "Previous",
     "Query", "Queue", "Refresh", "Rename", "Reset", "Restart", "Resume",
     "Reveal", "Search", "Select", "Send", "Session", "Set", "Show", "Sleep",
-    "Stop", "Switch", "Tear", "Toggle", "Undo", "Wake",
+    "Stop", "Switch", "Tear", "Toggle", "Undo", "Wake", "Web",
 }
 # Commands whose caption is a plain noun by design.
 NOUN_CAPTIONS = {"Submarine: Session List"}

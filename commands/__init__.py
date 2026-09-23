@@ -73,6 +73,9 @@ from .ui_cmds import (  # noqa: F401
     SubmarineDevtoolsReloadCommand,
     SubmarineArtifactsCommand,
 )
+from .web_access_cmds import (  # noqa: F401
+    SubmarineWebAccessCommand,
+)
 from .text_cmds import (  # noqa: F401
     SubmarineToggleSubmitModeCommand,
     SubmarineSendNowCommand,

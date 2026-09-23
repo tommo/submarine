@@ -119,6 +119,16 @@ class SessionClient(object):
     def answer(self, ref: str, **fields: Any) -> Dict[str, Any]:
         return self.call("answer", ref=ref, **fields)
 
+    def web_access_request(self, name: str, ip: str, user_agent: str) -> Dict[str, Any]:
+        return self.call("web_access_request", name=name, ip=ip,
+                         user_agent=user_agent)
+
+    def web_access_status(self, request_id: str) -> Dict[str, Any]:
+        return self.call("web_access_status", id=request_id)
+
+    def web_access_check(self, token: str) -> Dict[str, Any]:
+        return self.call("web_access_check", token=token)
+
     def health(self) -> Dict[str, Any]:
         """Whether the socket exists. Cheap: no round-trip, no plugin work."""
         present = False

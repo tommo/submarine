@@ -340,6 +340,10 @@
         "command": "submarine_wake_session"
     },
     {
+        "caption": "Submarine: Web Access…",
+        "command": "submarine_web_access"
+    },
+    {
         "caption": "Submarine: Edit Output Settings",
         "command": "edit_settings",
         "args": {

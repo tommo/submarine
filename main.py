@@ -737,6 +737,12 @@ def plugin_loaded():
         log_plugin("MCP socket start failed: %s" % e)
 
     try:
+        from features.webui.hosted import start as web_start
+        web_start()
+    except Exception as e:
+        log_plugin("web ui start failed: %s" % e)
+
+    try:
         from features.devtools.server import start as devtools_start
         devtools_start()
     except Exception as e:
@@ -950,6 +956,12 @@ def plugin_unloaded():
     try:
         from features.devtools.server import stop as devtools_stop
         devtools_stop()
+    except Exception:
+        pass
+
+    try:
+        from features.webui.hosted import stop as web_stop
+        web_stop()
     except Exception:
         pass
 

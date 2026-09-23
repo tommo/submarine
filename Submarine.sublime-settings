@@ -43,6 +43,14 @@
     // when a turn *ends* (not when sticky ◎ opens mid-stream).
     // "auto_sleep_minutes": 60,
 
+    // Browser UI, served by the plugin on this port (0 = off). A phone on
+    // the LAN uses http://<this-machine>:8787/. web_token is the legacy
+    // shared secret; a device granted from "Submarine: Web Access…" also works.
+    // "web_host": "0.0.0.0",
+    // "web_port": 8787,
+    // "web_token": "",
+    // "web_require_auth_on_loopback": false,
+
     // Service Manager base URL for subscription usage on "with XXX…"
     // switch-panel rows (Grok / Kimi). Empty → http://127.0.0.1:3001
     // "quota_service_url": "http://127.0.0.1:3001",

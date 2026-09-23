@@ -113,6 +113,64 @@ main {
   min-height: 0;
 }
 
+/* Shown instead of the console until Sublime grants this browser a cookie.
+   Author `display` beats the UA `[hidden]` rule, so the class is the switch. */
+.access { display: none; }
+body.needs-access .access {
+  display: flex;
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg);
+}
+body.needs-access main { display: none; }
+.access-card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.access-card h1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: calc(16px * var(--fs));
+}
+.access-card .logo {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: 0 0 auto;
+}
+.access-card p { margin: 0; }
+.access-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--dim);
+  font-size: calc(12px * var(--fs));
+}
+.access-card input[type="text"] {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--fg);
+  font: inherit;
+  font-size: max(16px, calc(14px * var(--fs)));
+  padding: 8px;
+}
+.access-card .btn { align-self: flex-start; }
+
 .list {
   width: 34%;
   min-width: 260px;

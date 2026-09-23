@@ -32,8 +32,18 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
-ACTIONS = frozenset(("list", "view", "chat", "interrupt", "pending", "answer",
-                     "backends", "create", "rename", "close", "open", "read", "clear"))
+from features.web_access import WebAccessError, handle as web_access_handle
+
+_SESSION_ACTIONS = (
+    "list", "view", "chat", "interrupt", "pending", "answer",
+    "backends", "create", "rename", "close", "open", "read", "clear",
+)
+_WEB_ACCESS_ACTIONS = (
+    "web_access_request", "web_access_status", "web_access_check",
+    "web_access_list", "web_access_grant", "web_access_deny",
+    "web_access_revoke",
+)
+ACTIONS = frozenset(_SESSION_ACTIONS + _WEB_ACCESS_ACTIONS)
 #: `read` returns at most this much of a file (the browser code view).
 MAX_READ_BYTES = 2 * 1024 * 1024
 PERMISSION_RESPONSES = frozenset(("allow", "deny", "allow_session", "allow_all"))
@@ -129,6 +139,8 @@ def dispatch(request: dict) -> dict:
             body, target = action_read(request or {})
         elif action == "clear":
             body, target = action_clear(request or {})
+        elif action in _WEB_ACCESS_ACTIONS:
+            body, target = _web_access(action, request or {}), None
         else:
             body, target = action_interrupt(request or {})
     except ControlError as e:
@@ -143,6 +155,14 @@ def dispatch(request: dict) -> dict:
 
 
 # ─── addressing ─────────────────────────────────────────────────────────────
+
+
+def _web_access(action: str, params: dict) -> dict:
+    """Device grants. The raw token is not part of the audit detail."""
+    try:
+        return web_access_handle(action, params)
+    except WebAccessError as e:
+        raise ControlError(e.code, e.message)
 
 
 def _registry():

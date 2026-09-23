@@ -69,6 +69,92 @@ function token() {
   try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
 }
 
+// A browser without a grant sees this instead of the console. The cookie is
+// HttpOnly, so the page only learns "granted" and reloads — it never reads
+// the token. Loopback and a legacy ?token= skip the gate (see /api/access/me).
+const DEVICE_NAME_KEY = 'submarine_device_name';
+let accessPoll = 0;
+
+function showAccess(message) {
+  document.body.classList.add('needs-access');
+  const gate = $('access');
+  if (gate) gate.hidden = false;
+  if (message) $('access-note').textContent = message;
+  let saved = '';
+  try { saved = localStorage.getItem(DEVICE_NAME_KEY) || ''; } catch (e) { saved = ''; }
+  if (saved && !$('access-name').value) $('access-name').value = saved;
+  try { $('access-name').focus(); } catch (e) { /* not visible yet */ }
+}
+
+function hideAccess() {
+  document.body.classList.remove('needs-access');
+  const gate = $('access');
+  if (gate) gate.hidden = true;
+}
+
+async function requestAccess(ev) {
+  ev.preventDefault();
+  const name = $('access-name').value.trim();
+  if (!name) return;
+  try { localStorage.setItem(DEVICE_NAME_KEY, name); } catch (e) { /* private mode */ }
+  $('access-go').disabled = true;
+  $('access-note').textContent = 'Asking Sublime…';
+  const body = await api('/api/access/request', { method: 'POST', body: JSON.stringify({ name: name }) });
+  const id = body && body.data && body.data.id;
+  if (!body || body.ok !== true || !id) {
+    $('access-go').disabled = false;
+    $('access-note').textContent = (body && body.error) || 'Could not request access';
+    return;
+  }
+  const gen = ++accessPoll;
+  $('access-note').textContent = 'Waiting for the owner to grant this device in Sublime (Submarine: Web Access…).';
+  pollAccess(id, gen);
+}
+
+async function pollAccess(id, gen) {
+  if (gen !== accessPoll) return;
+  let res;
+  try {
+    res = await fetch('/api/access/status?id=' + encodeURIComponent(id), { credentials: 'same-origin' });
+  } catch (e) {
+    setTimeout(() => pollAccess(id, gen), 2000);
+    return;
+  }
+  let body = null;
+  try { body = await res.json(); } catch (e) { body = null; }
+  const data = (body && body.data) || {};
+  if (data.status === 'granted' && data.cookie) {
+    location.reload();
+    return;
+  }
+  if (data.status === 'granted') {
+    $('access-go').disabled = false;
+    $('access-note').textContent = 'Granted, but the token expired before this page received it. Request access again.';
+    return;
+  }
+  if (data.status === 'denied') {
+    $('access-go').disabled = false;
+    $('access-note').textContent = 'Denied. Ask the owner, then request again.';
+    return;
+  }
+  if (data.status === 'unknown') {
+    $('access-go').disabled = false;
+    $('access-note').textContent = 'That request is gone. Request access again.';
+    return;
+  }
+  setTimeout(() => pollAccess(id, gen), 1500);
+}
+
+async function ensureAccess() {
+  const me = await api('/api/access/me');
+  if (me && me.authenticated === true) {
+    hideAccess();
+    return true;
+  }
+  showAccess('');
+  return false;
+}
+
 async function api(path, opts) {
   const o = opts || {};
   const headers = Object.assign({}, o.headers || {});
@@ -77,7 +163,9 @@ async function api(path, opts) {
   if (o.body !== undefined) headers['Content-Type'] = 'application/json';
   let res;
   try {
-    res = await fetch(path, { method: o.method || 'GET', headers: headers, body: o.body });
+    res = await fetch(path, {
+      method: o.method || 'GET', headers: headers, body: o.body, credentials: 'same-origin',
+    });
   } catch (e) {
     return { ok: false, error: 'request failed: ' + e.message };
   }
@@ -1649,6 +1737,7 @@ function wireFlicks() {
 }
 
 function wire() {
+  $('access-form').addEventListener('submit', requestAccess);
   $('refresh').addEventListener('click', () => { clearError(); refreshPane(); schedule(0); });
 
   $('back').addEventListener('click', () => { if (listOpen()) closeList(); else showList(); });
@@ -1738,6 +1827,9 @@ function wire() {
 
 const deepRef = claimInitialHash();
 wire();
-if (deepRef) openSession(deepRef, { hash: false });
-else showList();
-tick();
+ensureAccess().then((ok) => {
+  if (!ok) return;
+  if (deepRef) openSession(deepRef, { hash: false });
+  else showList();
+  tick();
+});

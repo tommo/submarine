@@ -44,6 +44,18 @@ window.SubmarineEditor = { ready: new Promise((r) => { window.__submarineEditorR
 <body data-pane="list">
 <div id="error" class="error" hidden></div>
 
+<div id="access" class="access" hidden>
+  <form id="access-form" class="access-card">
+    <h1><span class="logo" aria-hidden="true"></span>Submarine</h1>
+    <p>This browser needs access. Name the device, then ask. The owner grants it in Sublime with <b>Submarine: Web Access…</b></p>
+    <label>Device name
+      <input id="access-name" type="text" maxlength="64" required placeholder="Kitchen tablet" autocomplete="off" autocapitalize="words">
+    </label>
+    <button id="access-go" class="btn primary" type="submit">Request access</button>
+    <p id="access-note" class="dim small"></p>
+  </form>
+</div>
+
 <main>
   <!-- Phone: the list is a sheet over the session view; this dims the view. -->
   <div id="backdrop" class="backdrop" aria-hidden="true"></div>

@@ -35,6 +35,18 @@ try:
 except ImportError:
     SubmarineCycleSessionCommand = getattr(
         _session_cmds, "SubmarineCycleSessionCommand", None)
+# Reload before the import: ST often reloads this file before the commands
+# package, and a missing name in `from commands import` aborts plugin load.
+import commands.web_access_cmds as _web_access_cmds
+try:
+    importlib.reload(_web_access_cmds)
+except Exception:
+    pass
+try:
+    from commands.web_access_cmds import SubmarineWebAccessCommand  # noqa: F401
+except ImportError:
+    SubmarineWebAccessCommand = getattr(
+        _web_access_cmds, "SubmarineWebAccessCommand", None)
 from commands import (  # noqa: F401
     SubmarineStartCommand,
     CodexStartCommand,
