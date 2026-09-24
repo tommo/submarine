@@ -185,6 +185,21 @@ def _is_claude_bridge(spec):
     return script in CLAUDE_BRIDGE_SCRIPTS
 
 
+
+def _background_label(tool):
+    # type: (Any) -> str
+    """`Bash: sleep 300` — what a ⚙ row is running, on one line."""
+    name = str(getattr(tool, "name", "") or "task")
+    inp = getattr(tool, "tool_input", None) or {}
+    what = ""
+    if isinstance(inp, dict):
+        what = str(inp.get("command") or inp.get("description")
+                   or inp.get("prompt") or "")
+    what = " ".join(what.split())
+    if len(what) > 60:
+        what = what[:59] + "…"
+    return "%s: %s" % (name, what) if what else name
+
 class Session:
     """One agent conversation. Constructed with injected ports; does not spawn
     a bridge until start().
@@ -1827,6 +1842,56 @@ class Session:
         except Exception:
             pass
         return True, "%s · %s" % (label, model)
+
+    def background_tasks(self):
+        # type: () -> List[dict]
+        """The running ⚙ rows: tool, its ids and a one-line label."""
+        try:
+            tools = list(self.output.active_background_tools() or [])
+        except Exception:
+            tools = []
+        out = []
+        for tool in tools:
+            tid = str(getattr(tool, "id", "") or "")
+            out.append({
+                "tool": tool,
+                "tool_use_id": tid,
+                "task_id": self.bg.task_id_for(tid),
+                "label": _background_label(tool),
+            })
+        return out
+
+    def stop_background_task(self, tool_use_id, on_done=None):
+        # type: (str, Optional[Callable[[bool, str], None]]) -> bool
+        """Stop one ⚙ task, not the turn. `on_done(ok, message)` runs on
+        the scheduler once the bridge answers; the row closes when the
+        task's own completion arrives."""
+        def done(ok, msg):
+            if on_done is not None:
+                self.scheduler.call_later(0, lambda: on_done(ok, msg))
+
+        entry = next((e for e in self.background_tasks()
+                      if e["tool_use_id"] == tool_use_id), None)
+        if entry is None:
+            done(False, "that task is no longer running")
+            return False
+        if not self.client:
+            done(False, "the session is not connected")
+            return False
+
+        def cb(resp):
+            err = resp.get("error") if isinstance(resp, dict) else None
+            if err:
+                msg = err.get("message") if isinstance(err, dict) else str(err)
+                if "Method not found" in str(msg):
+                    msg = "%s cannot stop a single background task" % self.backend
+                done(False, str(msg or "not stopped"))
+                return
+            done(True, "stopping %s" % entry["label"])
+
+        self._send("stop_task", {"task_id": entry["task_id"],
+                                 "tool_use_id": entry["tool_use_id"]}, cb)
+        return True
 
     def _context_tokens(self):
         # type: () -> Optional[int]

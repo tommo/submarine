@@ -810,6 +810,33 @@ class SubmarineOpenLinkCommand(sublime_plugin.TextCommand):
             return False
         return False
 
+    def _stop_background_at(self, line, col):
+        """Cmd+click on a running ⚙ row's head (glyph and tool name) offers
+        to stop that task; a path further along the row still opens."""
+        stripped = line.lstrip()
+        if not stripped.startswith("⚙ "):
+            return False
+        head_end = line.find(":", len(line) - len(stripped))
+        if head_end < 0:
+            head_end = len(line)
+        if col > head_end:
+            return False
+        session = get_session_for_view(self.view)
+        if not session or not hasattr(session, "background_tasks"):
+            return False
+        from ui.tools import format_tool_row
+        want = stripped.rstrip()
+        for entry in session.background_tasks():
+            try:
+                row = format_tool_row(session.output, entry["tool"]).strip()
+            except Exception:
+                continue
+            if row == want:
+                from commands.session_cmds import confirm_stop_background
+                confirm_stop_background(self.view.window(), session, entry)
+                return True
+        return False
+
     def _focus_agent_at(self, line, col):
         """An agent id under the click (`submarine::<hex>`, or the old
         `agent-<hex>`) → show that session, in whatever window holds it."""
@@ -858,6 +885,8 @@ class SubmarineOpenLinkCommand(sublime_plugin.TextCommand):
             if session and session.output and hasattr(session.output, "show_media_popup"):
                 session.output.show_media_popup(media_path, location=pt)
                 return
+        if self._stop_background_at(line, col):
+            return
         if self._open_code_span_path(line, col):
             return
         if self._focus_agent_at(line, col):

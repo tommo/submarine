@@ -297,6 +297,7 @@ class AcpBridge(TransportMixin, SessionMixin, UpdatesMixin,
         return {
             "set_model": self.handle_set_model,
             "set_effort": self.handle_set_effort,
+            "stop_task": self.handle_stop_task,
             "set_permission_mode": self.handle_set_permission_mode,
             # plan_response: BaseBridge.handle_plan_response (+ mode switch override)
             "rewind_points": self.handle_rewind_points,

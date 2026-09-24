@@ -162,6 +162,18 @@ class BackgroundTaskGate:
             self.task_tool_map[str(task_id)] = tool_id
         self.schedule_poll()
 
+    def task_id_for(self, tool_use_id):
+        # type: (str) -> str
+        """The task id behind a ⚙ row, or "". A CLI task id (what
+        `stop_task` takes) wins over a bridge's `acp-term-*` alias."""
+        if not tool_use_id:
+            return ""
+        ids = [t for t, tool in self.task_tool_map.items() if tool == tool_use_id]
+        for t in reversed(ids):
+            if not t.startswith("acp-term-"):
+                return t
+        return ids[-1] if ids else ""
+
     def drop_tool(self, tool_id):
         # type: (str) -> None
         if not tool_id:

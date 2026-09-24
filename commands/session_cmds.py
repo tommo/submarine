@@ -119,6 +119,37 @@ def _default_start_detail(backend):
     return "Default provider: %s%s" % (label, extra)
 
 
+
+def confirm_stop_background(window, session, entry):
+    """Ask, then stop one ⚙ task (the turn keeps going)."""
+    if not session or not entry:
+        return
+    if not sublime.ok_cancel_dialog(
+            "Stop this background task?\n\n%s" % entry["label"], "Stop"):
+        return
+
+    def done(ok, msg):
+        sublime.status_message("Submarine: %s" % msg)
+        if not ok:
+            sublime.error_message("Could not stop the task:\n\n%s" % msg)
+
+    session.stop_background_task(entry["tool_use_id"], done)
+
+
+def pick_background_to_stop(window, session):
+    """Quick panel of the session's running ⚙ tasks → stop the one picked."""
+    entries = session.background_tasks() if session else []
+    if not entries:
+        sublime.status_message("Submarine: no background tasks running")
+        return
+    items = [[e["label"], e["task_id"] or e["tool_use_id"]] for e in entries]
+
+    def on_select(idx):
+        if idx >= 0:
+            confirm_stop_background(window, session, entries[idx])
+
+    window.show_quick_panel(items, on_select, placeholder="Stop which background task?")
+
 class SubmarineStartCommand(sublime_plugin.WindowCommand):
     """Start a new session. Shows profile picker if profiles are configured."""
 
@@ -855,6 +886,11 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
             if not active_session.working and active_session.session_id:
                 items.append(["↩ Undo Message", "Rewind session to previous turn"])
                 actions.append(("undo_message", active_session))
+            running_bg = active_session.background_tasks()
+            if running_bg:
+                items.append(["■ Stop Background Task…", "%d running · %s" % (
+                    len(running_bg), running_bg[0]["label"])])
+                actions.append(("stop_background", active_session))
             if not active_session.is_sleeping:
                 items.append(["○ Sleep Session", "Put session to sleep, free resources"])
                 actions.append(("sleep", active_session))
@@ -958,6 +994,10 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
                 msg = ("★ Starred: %s" % (data.name or data.session_id)
                        if now_starred else "☆ Unstarred: %s" % (data.name or data.session_id))
                 sublime.status_message(msg)
+                return
+            if action == "stop_background" and data:
+                sublime.set_timeout(
+                    lambda: pick_background_to_stop(self.window, data), 0)
                 return
             if action == "undo_message" and data:
                 self._undo_picker(data)

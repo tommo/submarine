@@ -218,6 +218,8 @@ class Bridge:
                 send_result(id, {"ok": True})
             elif method == "set_effort":
                 await self.set_effort(id, params)
+            elif method == "stop_task":
+                await self.stop_task(id, params)
             elif method == "set_permission_mode":
                 mode = params.get("mode")
                 if mode and self.client:
@@ -1372,6 +1374,25 @@ Agent ID: {agent_id_info}
     # only (--effort max): through apply_flag_settings it is silently dropped
     # and the flag layer's value is cleared, falling back to userSettings.
     LIVE_EFFORT = ("low", "medium", "high", "xhigh")
+
+    async def stop_task(self, id: int, params: dict) -> None:
+        """Stop one background task (a backgrounded Bash, an Agent, a
+        Workflow) and leave the turn alone. The CLI confirms with a
+        `task_notification` of status `stopped`, which closes the ⚙ row."""
+        task_id = str(params.get("task_id") or "").strip()
+        if not task_id:
+            send_error(id, -32602, "task_id is required")
+            return
+        stop = getattr(self.client, "stop_task", None) if self.client else None
+        if not callable(stop):
+            send_error(id, -32000, "this SDK cannot stop a single task")
+            return
+        try:
+            await stop(task_id)
+        except Exception as e:
+            send_error(id, -32000, f"stop_task failed: {e}")
+            return
+        send_result(id, {"ok": True, "task_id": task_id})
 
     async def set_effort(self, id: int, params: dict) -> None:
         """Change effort for the running session, no restart.

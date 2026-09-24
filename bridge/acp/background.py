@@ -11,6 +11,7 @@ are ⚙ (§9.30). TaskOutput is never ⚙. Notify once per logical job.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -21,7 +22,7 @@ _BRIDGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BRIDGE_DIR not in sys.path:
     sys.path.insert(0, _BRIDGE_DIR)
 
-from rpc_helpers import send_notification, send_result  # noqa: E402
+from rpc_helpers import send_error, send_notification, send_result  # noqa: E402
 
 
 class BackgroundMixin:
@@ -403,6 +404,46 @@ class BackgroundMixin:
             "input": call.input,
             "background": True,
         })
+
+    def _bg_terminal_for(self, task_id: str, tool_use_id: str) -> str:
+        """The terminal behind a ⚙ row, by its task id or its tool id."""
+        if task_id.startswith("acp-term-"):
+            return task_id[len("acp-term-"):]
+        for term, info in (self._terminal_bg or {}).items():
+            if tool_use_id and info.get("tool_use_id") == tool_use_id:
+                return term
+            if task_id and info.get("task_id") == task_id:
+                return term
+        return ""
+
+    async def handle_stop_task(self, req_id: Optional[int], params: dict) -> None:
+        """Stop one background shell and nothing else. Its exit path sends
+        the usual completion, so the ⚙ row closes as for a natural end."""
+        task_id = str(params.get("task_id") or "")
+        tool_use_id = str(params.get("tool_use_id") or "")
+        term = self._bg_terminal_for(task_id, tool_use_id)
+        slot = None
+        if term:
+            slot = (self._terminals.get(term)
+                    or (getattr(self, "_detached_slots", None) or {}).get(term))
+        proc = (slot or {}).get("proc")
+        if proc is None or proc.returncode is not None:
+            send_error(req_id, -32602,
+                       "no running background shell for %s" % (task_id or tool_use_id or "?"))
+            return
+        self.file_log(f"stop_task: term={term} task={task_id} tool={tool_use_id}")
+        self._kill_terminal_proc(proc)
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=1.5)
+        except (asyncio.TimeoutError, Exception):
+            try:
+                os.killpg(proc.pid, 9)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        send_result(req_id, {"ok": True, "task_id": task_id or "acp-term-%s" % term})
 
     def _bind_terminal_to_bg_tool(self, terminal_id: str, tool_use_id: str) -> None:
         if not terminal_id or not tool_use_id:

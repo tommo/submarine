@@ -135,6 +135,17 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(self.out, [], "no injected turn for a subagent's stream")
         self.assertFalse(self.b._injected)
 
+    def test_stop_task_stops_one_task_through_the_sdk(self):
+        stopped = []
+
+        async def stop_task(task_id):
+            stopped.append(task_id)
+        self.b.client = types.SimpleNamespace(stop_task=stop_task)
+        asyncio.run(self.b.stop_task(3, {"task_id": "b7x"}))
+        self.assertEqual(stopped, ["b7x"])
+        self.assertEqual([e for e in self.out if e[0] == "result"],
+                         [("result", 3, {"ok": True, "task_id": "b7x"})])
+
     def test_our_turn_closes_the_query_untagged(self):
         fut = self._open_query()
         self._route(self.user("hi"), self.assistant("yo"), self.result("human"))
