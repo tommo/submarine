@@ -30,11 +30,34 @@ class SessionMixin:
     def agent_mode_to_permission_mode(self, mode: str) -> str:
         return self.MODE_TO_PERM.get(mode, mode)
 
-    async def apply_model(self) -> None:
-        """Push self.model (and effort, if any) to the live session."""
+    def _offered_model_ids(self) -> List[str]:
+        """modelIds from session/new|load models.availableModels (if any)."""
+        ids: List[str] = []
+        for m in self._available_models or []:
+            mid = m.get("modelId") if isinstance(m, dict) else m
+            if mid:
+                ids.append(str(mid))
+        return ids
+
+    async def apply_model(self) -> bool:
+        """Push self.model (and effort, if any) to the live session.
+
+        False when the agent did not take it. A model it no longer offers
+        (a retired alias saved with the session) is not pushed at all, and
+        self.model falls back to what the agent actually runs — otherwise
+        the dead id went back to the host in the init result, was saved,
+        and was sent again on the next start.
+        """
         if not self.session_id or not self.model:
-            return
+            return True
         requested = self.model
+        running = getattr(self, "_agent_model", "") or ""
+        offered = self._offered_model_ids()
+        if offered and requested not in offered:
+            self.model = running or offered[0]
+            self.log(f"model {requested!r} is not offered by the agent; "
+                     f"staying on {self.model}")
+            return False
         try:
             result = await self._send_acp(
                 "session/set_model", self.set_model_params()) or {}
@@ -48,8 +71,12 @@ class SessionMixin:
             nxt = self.resolve_applied_model(requested, current)
             if nxt:
                 self.model = nxt
+            return True
         except Exception as e:
-            self.log(f"session/set_model({self.model}) failed: {e}")
+            self.log(f"session/set_model({requested}) failed: {e}")
+            if running:
+                self.model = running
+            return False
 
     def _advertised_mode_ids(self) -> List[str]:
         """modeIds from session/new|load modes.availableModes (if any)."""
@@ -570,8 +597,10 @@ class SessionMixin:
         models = result.get("models") or {}
         if models.get("availableModels"):
             self._available_models = models["availableModels"]
-        if models.get("currentModelId") and not self._host_model:
-            self.model = models["currentModelId"]
+        if models.get("currentModelId"):
+            self._agent_model = str(models["currentModelId"])
+            if not self._host_model:
+                self.model = models["currentModelId"]
 
     def _collect_mcp_servers(self) -> list:
         """MCP servers for ACP session/new (Grok, Kimi, …).
@@ -704,11 +733,19 @@ class SessionMixin:
 
     async def handle_set_model(self, req_id: Optional[int],
                                 params: dict) -> None:
-        self.model = self.normalize_model(params.get("model"))
+        previous = self.model
+        requested = self.normalize_model(params.get("model"))
+        self.model = requested
         if "effort" in params:
             self.effort = self.normalize_effort(params.get("effort"))
         try:
-            await self.apply_model()
+            if not await self.apply_model():
+                # The host must not show a model the agent refused.
+                if self.model == requested:
+                    self.model = previous
+                send_error(req_id, -32602,
+                           f"model {requested} is not available; still on {self.model}")
+                return
             send_result(req_id, {
                 "ok": True,
                 "model": self.model,

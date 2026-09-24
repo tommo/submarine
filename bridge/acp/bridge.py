@@ -83,6 +83,8 @@ class AcpBridge(TransportMixin, SessionMixin, UpdatesMixin,
         # True only when the host sent initialize.model. DEFAULT_MODEL is a
         # spawn placeholder — do not force it onto a resumed session.
         self._host_model: bool = False
+        # The model the agent reports running (session/new|load currentModelId).
+        self._agent_model: str = ""
         self.effort: str = ""  # reasoning effort (low/medium/high/…); empty = agent default
         self.cwd: str = process_cwd()
         self.agent_mode: str = ""

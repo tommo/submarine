@@ -778,7 +778,19 @@ class SubmarineSelectModelCommand(sublime_plugin.WindowCommand):
                 except Exception as e:
                     print("[Submarine] vision check on set_model: %s" % e)
             if s.client:
-                s.client.send("set_model", {"model": real_model})
+                def on_set(resp, _mid=mid, _real=real_model):
+                    err = resp.get("error") if isinstance(resp, dict) else None
+                    if err:
+                        msg = err.get("message") if isinstance(err, dict) else str(err)
+                        sublime.status_message("Submarine: %s" % (msg or "model not set"))
+                        return
+                    res = resp.get("result") if isinstance(resp, dict) else None
+                    applied = (res or {}).get("model") if isinstance(res, dict) else None
+                    _apply_session_model(s, applied or _real)
+                    sublime.status_message("Model: %s" % (applied or _mid))
+                s.client.send("set_model", {"model": real_model},
+                              lambda r: sublime.set_timeout(lambda: on_set(r), 0))
+                return
             _apply_session_model(s, real_model)
             sublime.status_message("Model: %s" % mid)
 
