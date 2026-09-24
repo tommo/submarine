@@ -59,6 +59,23 @@ class AdoptedTurnTest(unittest.TestCase):
         self.assertEqual(_queries(client), [], "the host never queried")
         self.assertTrue(s.output.metas, "the adopted turn gets its meta line")
 
+    def test_a_background_agents_report_is_not_the_prompt_row(self):
+        """An Agent's task summary is its whole report; 500 lines landed on
+        the ◎ row. The row names the task, the report is the turn."""
+        s, _client, _ended = self._idle_session()
+        report = ("## I explored `pxr` and the three package trees without changing "
+                  "anything, and the short version is below.\n\n" + "detail line\n" * 500)
+        s.events.dispatch("injected_turn", {
+            "origin": "task-notification",
+            "summaries": [report, "Background command \"build\" completed", "a", "b"],
+        })
+        row = s.output.prompts[-1][0]
+        self.assertNotIn("\n", row)
+        self.assertLess(len(row), 300)
+        self.assertTrue(row.startswith("⚙ I explored `pxr`"), row)
+        self.assertIn("…", row)
+        self.assertTrue(row.endswith("; +1 more"), row)
+
     def test_without_summaries_the_row_still_says_what_it_is(self):
         s, _client, _ended = self._idle_session()
         s.events.dispatch("injected_turn", {"origin": "task-notification"})
@@ -166,3 +183,46 @@ class NoHostNotificationTurnTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InjectedHeaderTest(unittest.TestCase):
+    """A turn the runtime started is headed `⚙ … ▷`, never as a prompt."""
+
+    def test_the_sheet_heads_it_as_a_runtime_turn(self):
+        from ui.render_policy import format_injected_header
+        self.assertEqual(format_injected_header("⚙ CommonPBR can show a  texture"),
+                         "⚙ CommonPBR can show a texture ▷\n")
+        from tests.stubs import install_sublime
+        from tests.test_composer_always_back import _live
+        from tests.test_single_view import RecordingWindow
+        from ui.host import HostView
+        install_sublime()
+        win = RecordingWindow()
+        s, out, _c = _live(win, "lead")
+        HostView.for_window(win).attach(win, s)
+        out.prompt("hello")                      # an earlier turn of yours
+        out.meta(0)
+        s._enter_input_with_draft()
+        s.events.dispatch("injected_turn", {"origin": "task-notification",
+                                            "summaries": ["Agent finished the survey"]})
+        text = out.view.substr(None)
+        self.assertIn("⚙ Agent finished the survey ▷", text)
+        self.assertNotIn("◎ ⚙", text)
+        self.assertIn("◎ hello ▶", text, "your own prompt keeps its header")
+        out.renderer._struct_dirty = True
+        out.renderer._render_current()
+        self.assertIn("⚙ Agent finished the survey ▷", out.view.substr(None))
+
+    def test_adopting_a_runtime_turn_marks_it(self):
+        client = FakeClient()
+        s = make_session(initialized=True, client=client, backend="claude")
+        s.events.dispatch("injected_turn", {"origin": "task-notification",
+                                            "summaries": ["Agent finished the survey"]})
+        self.assertEqual(s.output.injected_prompts, ["⚙ Agent finished the survey"])
+
+    def test_a_resumed_task_notification_is_a_runtime_turn(self):
+        from features import resume as R
+        raw = ("<task-notification>\n<task-id>a1</task-id>\n<summary>Agent done</summary>\n"
+               "</task-notification>")
+        self.assertTrue(R.is_synthetic_turn(raw))
+        self.assertFalse(R.is_synthetic_turn("hello there"))

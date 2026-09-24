@@ -15,6 +15,17 @@ contexts:
     - match: '^\s*@done\(.*\)$'
       scope: submarine.meta.done comment.line
 
+    # A turn the runtime started (a background task finished, a wake):
+    # `⚙ label ▷` at column 0 — not a prompt, so not the prompt style. Tool
+    # rows are indented, so they never match here. Same fold marker as ◎.
+    - match: '^(⚙ )(.*)( ▷)(\n)?'
+      captures:
+        1: submarine.turn.injected.marker
+        2: submarine.turn.injected
+        3: submarine.turn.injected.marker
+        4: meta.fold.turn.begin.submarine
+      push: conversation
+
     # Prompt starts with ◎ and ends with ▶
     - match: '^◎ '
       scope: submarine.prompt.marker punctuation.definition.prompt.begin
@@ -36,6 +47,8 @@ contexts:
   conversation:
     # Next prompt ends this section (pop BEFORE matching the new prompt)
     - match: '(?=^◎ )'
+      pop: true
+    - match: '(?=^⚙ .* ▷$)'
       pop: true
 
     # Sticky composer boundary (┄ rule above ◎ input)

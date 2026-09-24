@@ -31,6 +31,7 @@ from .models import (
 )
 from .render_policy import (
     cap_history,
+    format_injected_header,
     format_user_prompt_block,
     should_incremental_append,
     tasks_fold_rows,
@@ -277,11 +278,13 @@ class TurnRenderer:
             return
         self.prompt("(continued)")
 
-    def prompt(self, text, context_names=None, context_refs=None):
-        """Start a user turn. Viewless: records conversation, no buffer write."""
+    def prompt(self, text, context_names=None, context_refs=None, injected=False):
+        """Start a turn — the user's, or (`injected`) one the runtime started.
+        Viewless: records conversation, no buffer write."""
         self._mark_buffer_dirty(
             "prompt", (text,),
-            {"context_names": context_names, "context_refs": context_refs})
+            {"context_names": context_names, "context_refs": context_refs,
+             "injected": injected})
         if self._has_view():
             self.owner.show(focus=False)
         self._render_pending = False
@@ -330,7 +333,8 @@ class TurnRenderer:
                 live = c.get_input_text()
             except Exception:
                 live = ""
-            consuming = bool((text or "").strip() and live.strip() == (text or "").strip())
+            consuming = bool(not injected and (text or "").strip()
+                             and live.strip() == (text or "").strip())
             if consuming:
                 promoted = c.promote_to_prompt(text, has_context=has_ctx)
             if promoted is None:
@@ -367,7 +371,8 @@ class TurnRenderer:
 
         self.current = Conversation(
             prompt=text, todos=prev_todos, goal=prev_goal,
-            context_names=names, context_refs=refs, working=True)
+            context_names=names, context_refs=refs, working=True,
+            injected=bool(injected))
         self._reset_proj()
         self.owner.sheet.update_title()
 
@@ -390,7 +395,10 @@ class TurnRenderer:
             return
         start = view.size() if view else 0
         prefix = "\n" if start > 0 else ""
-        line = prefix + format_user_prompt_block(text, has_ctx, CONTEXT_PREFIX)
+        if injected:
+            line = prefix + format_injected_header(text)
+        else:
+            line = prefix + format_user_prompt_block(text, has_ctx, CONTEXT_PREFIX)
         if view:
             end = self.owner._write(line)
             self.current.region = (start, end)
@@ -1052,7 +1060,10 @@ class TurnRenderer:
     def conversation_body(self, conv, leading_nl=False):
         lines = []
         prefix = "\n" if leading_nl else ""
-        if conv.prompt:
+        if conv.prompt and getattr(conv, "injected", False):
+            lines.append(prefix + format_injected_header(conv.prompt))
+            prefix = ""
+        elif conv.prompt:
             prompt_lines = conv.prompt.split("\n")
             if len(prompt_lines) > 1:
                 indented = prompt_lines[0] + "\n" + "\n".join(
@@ -1395,7 +1406,9 @@ class TurnRenderer:
             except Exception:
                 reg0 = 0
         prefix = "\n" if reg0 > 0 else ""
-        if conv.prompt:
+        if conv.prompt and getattr(conv, "injected", False):
+            lines.append(prefix + format_injected_header(conv.prompt))
+        elif conv.prompt:
             has_ctx = bool(conv.context_names or conv.context_refs)
             lines.append(prefix + format_user_prompt_block(
                 conv.prompt, has_ctx, CONTEXT_PREFIX))
@@ -1687,7 +1700,10 @@ class TurnRenderer:
             if not self.current.prompt:
                 return
             content = view.substr(_R(0, view_size))
-            prompt_marker = "◎ %s" % self.current.prompt[:20]
+            if getattr(self.current, "injected", False):
+                prompt_marker = format_injected_header(self.current.prompt)[:22]
+            else:
+                prompt_marker = "◎ %s" % self.current.prompt[:20]
             last_pos = content.rfind(prompt_marker)
             if last_pos >= 0:
                 start = last_pos
@@ -2431,6 +2447,7 @@ def _clone_conv(conv):
             pass
     return Conversation(
         prompt=conv.prompt,
+        injected=getattr(conv, "injected", False),
         events=events,
         todos=todos,
         todos_all_done=conv.todos_all_done,

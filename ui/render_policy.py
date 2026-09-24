@@ -45,6 +45,14 @@ def last_event_is_text(events: list) -> bool:
     return bool(events) and isinstance(events[-1], str)
 
 
+def format_injected_header(text: str) -> str:
+    """Header of a turn the runtime started: `⚙ label ▷`, one line."""
+    label = " ".join((text or "").split())
+    if label.startswith("⚙"):
+        label = label[1:].strip()
+    return "⚙ %s ▷\n" % (label or "background task")
+
+
 def format_user_prompt_block(text: str, has_context: bool,
                              context_prefix: str) -> str:
     """Frozen ◎ user-turn header as written into the buffer.

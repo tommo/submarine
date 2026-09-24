@@ -652,9 +652,10 @@ class SubmarineOutputView(FormatHelpers):
 
     # --- OutputPort --------------------------------------------------------
 
-    def prompt(self, text, context_names=None, context_refs=None):
-        """Start a user turn. Viewless: records conversation, no buffer write."""
-        self.renderer.prompt(text, context_names, context_refs)
+    def prompt(self, text, context_names=None, context_refs=None, injected=False):
+        """Start a user turn (or, `injected`, one the runtime started).
+        Viewless: records conversation, no buffer write."""
+        self.renderer.prompt(text, context_names, context_refs, injected=injected)
 
     def begin_continued(self):
         """Open a live sheet after @done without wiping the last turn."""

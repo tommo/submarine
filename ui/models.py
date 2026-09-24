@@ -421,6 +421,9 @@ class Conversation:
     # whichever session is bound now, so old turns (and turns of a session
     # that finished while another was on screen) showed a foreign provider.
     identity: Optional[tuple] = None
+    # A turn the runtime started (a finished background task, a scheduled
+    # wake): headed `⚙ … ▷`, never `◎ … ▶` — it is not something you said.
+    injected: bool = False
 
     @property
     def tools(self) -> List[ToolCall]:

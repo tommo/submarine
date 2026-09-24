@@ -111,8 +111,11 @@ class FakeOutput:
         self.caret_restores = 0
         self._caret_owner = "draft"
 
-    def prompt(self, text, context_names=None, context_refs=None):
+    def prompt(self, text, context_names=None, context_refs=None, injected=False):
         self.prompts.append((text, context_names, context_refs))
+        self.injected_prompts = getattr(self, "injected_prompts", [])
+        if injected:
+            self.injected_prompts.append(text)
 
     def tool(self, name, tool_input, tool_id=None, background=False):
         # Upsert matches ui.renderer.tool: same id keeps the open row and

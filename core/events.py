@@ -51,6 +51,26 @@ def _compaction_hint(data):
     return "⟳ compacting context%s" % tail
 
 
+def _injected_label(summaries, per=80, most=3):
+    # type: (list, int, int) -> str
+    """The ◎ row for a turn the runtime started over finished tasks.
+
+    A background Agent's `summary` is its whole report — hundreds of lines
+    on the prompt row. The row names the tasks; the report is the turn.
+    """
+    heads = []
+    for text in summaries:
+        line = next((ln.strip().lstrip("#").strip()
+                     for ln in str(text).splitlines() if ln.strip()), "")
+        if len(line) > per:
+            line = line[:per - 1].rstrip() + "…"
+        if line:
+            heads.append(line)
+    shown = "; ".join(heads[:most])
+    if len(heads) > most:
+        shown += "; +%d more" % (len(heads) - most)
+    return shown
+
 class BridgeEventRouter:
     """Dispatch table for bridge → host notifications."""
 
@@ -352,7 +372,7 @@ class BridgeEventRouter:
         if not display:
             summaries = [str(x) for x in (params.get("summaries") or []) if x]
             if summaries:
-                display = "⚙ " + "; ".join(summaries)
+                display = "⚙ " + _injected_label(summaries)
             elif origin == "task-notification":
                 display = "⚙ background task"
             else:
@@ -362,7 +382,7 @@ class BridgeEventRouter:
             return
         self.turn.resume_stream()
         try:
-            self.output.prompt(display)
+            self.output.prompt(display, injected=True)
         except Exception:
             pass
 

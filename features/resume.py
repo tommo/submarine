@@ -813,8 +813,14 @@ def paint_resume_preview(session) -> bool:
     if not chosen:
         return False
     for t in chosen:
-        prompt = display_prompt(t.get("prompt") or "") or "(turn)"
-        out.prompt(prompt)
+        raw = t.get("prompt") or ""
+        prompt = display_prompt(raw) or "(turn)"
+        injected = bool(raw.strip()) and is_synthetic_turn(raw.strip()) \
+            and not _USER_QUERY.search(raw)
+        try:
+            out.prompt(prompt, injected=injected)
+        except TypeError:
+            out.prompt(prompt)
         body = format_turn_body(t)
         if body:
             out.text(body if body.endswith("\n") else body + "\n")

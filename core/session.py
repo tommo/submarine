@@ -2403,7 +2403,9 @@ class Session:
         except Exception:
             pass
         try:
-            self.output.prompt(display)
+            self.output.prompt(display, injected=True)
+        except TypeError:
+            self.output.prompt(display)     # a port without the flag
         except Exception:
             pass
         self._set_turn_phase("waiting")
