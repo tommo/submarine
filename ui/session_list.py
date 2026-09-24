@@ -296,8 +296,25 @@ def use_compact(cols: int) -> bool:
     return 0 < cols < COMPACT_COLS
 
 
-def format_header(cols: int = 0) -> str:
-    left = "SESSIONS"
+# Header slots after SESSIONS: running · waiting · error. Each shows its
+# row mark when any live session is in that state, a centered dot when none.
+_HEADER_SLOTS = (
+    (("working", "bg"), "●"),
+    (("input",), "?"),
+    (("error",), "✘"),
+)
+_HEADER_NONE = "·"
+
+
+def header_state_glyphs(live: Optional[List[dict]] = None) -> str:
+    states = {str(r.get("status") or "") for r in (live or [])
+              if r.get("kind", "live") == "live"}
+    return "".join(glyph if states & set(names) else _HEADER_NONE
+                   for names, glyph in _HEADER_SLOTS)
+
+
+def format_header(cols: int = 0, live: Optional[List[dict]] = None) -> str:
+    left = "SESSIONS " + header_state_glyphs(live)
     right = "enter open · v reveal · t tear · f fork · s star · r rename · del close"
     if not cols:
         return f"{left}                  {right}"
@@ -967,7 +984,7 @@ def render_list(live: List[dict], here: List[dict], other: List[dict],
     starred = starred or set()
     compact = use_compact(cols)
     lines = [
-        format_header(cols),
+        format_header(cols, live),
         "",
     ]
     index: List[dict] = []

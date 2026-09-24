@@ -1010,8 +1010,8 @@ class TestRenderSessionList(unittest.TestCase):
         self.assertEqual(cols, 97)
 
     def test_header_fits_view_cols(self):
-        wide = sl.format_header(72)
-        self.assertEqual(len(wide), 72)
+        wide = sl.format_header(76)            # SESSIONS + 3 state slots
+        self.assertEqual(len(wide), 76)
         self.assertTrue(wide.startswith("SESSIONS"))
         self.assertTrue(wide.endswith("del close"))
         self.assertIn("enter", wide)
@@ -1020,6 +1020,24 @@ class TestRenderSessionList(unittest.TestCase):
         narrow = sl.format_header(28)
         self.assertLessEqual(len(narrow), 28)
         self.assertTrue(narrow.startswith("SESSIONS"))
+
+    def test_header_shows_a_slot_per_state(self):
+        rows = [{"kind": "live", "status": "working"},
+                {"kind": "live", "status": "error"},
+                {"kind": "live", "status": "sleeping"}]
+        self.assertTrue(sl.format_header(76, rows).startswith("SESSIONS ●·✘"))
+        self.assertTrue(sl.format_header(76, []).startswith("SESSIONS ···"))
+        waiting = [{"kind": "live", "status": "input"}, {"kind": "live", "status": "bg"}]
+        self.assertTrue(sl.format_header(76, waiting).startswith("SESSIONS ●?·"))
+        text, _index = sl.render_list([{"kind": "live", "status": "input",
+                                        "name": "a", "session_id": "s1"}], [], [], cols=76)
+        self.assertTrue(text.startswith("SESSIONS ·?·"))
+
+    def test_syntax_colours_the_header_slots(self):
+        import os
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        syn = open(os.path.join(root, "SessionList.sublime-syntax"), encoding="utf-8").read()
+        self.assertIn("^(SESSIONS)( )([●·])([?·])([✘·])", syn)
 
     def test_auto_compact_by_width(self):
         self.assertTrue(sl.use_compact(24))

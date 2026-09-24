@@ -10,6 +10,16 @@ hidden: true
 
 contexts:
   main:
+    # SESSIONS then three state slots (running, waiting, error); a slot with
+    # no session in that state is a centered dot.
+    - match: '^(SESSIONS)( )([●·])([?·])([✘·])'
+      captures:
+        1: markup.heading.session-list
+        3: keyword.working.session-list
+        4: keyword.input.session-list
+        5: keyword.error.session-list
+      push: header_rest
+
     - match: '^SESSIONS\b'
       scope: markup.heading.session-list
       push: header_rest
