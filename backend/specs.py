@@ -1,6 +1,6 @@
 """BackendSpec registry: built-ins + custom Anthropic-compatible providers.
 
-Built-ins: claude, codex, kimi, grok, pi.
+Built-ins: claude, codex, kimi, grok, opencode, pi.
 
 `all_backends(settings=None)` merges `custom_providers` on every call. Pass an
 injected settings dict in tests (`{"custom_providers": {...}}`); when omitted,
@@ -18,6 +18,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from . import grok as grok_backend
 from . import kimi as kimi_backend
+from . import opencode as opencode_backend
 from . import providers as provider_mod
 
 try:
@@ -55,6 +56,11 @@ def _kimi_available():
             or shutil.which("kimi")
             or os.path.isfile(os.path.expanduser("~/.kimi-code/bin/kimi"))
         )
+
+
+def _opencode_available():
+    # type: () -> bool
+    return opencode_backend.opencode_available()
 
 
 @dataclass
@@ -140,6 +146,18 @@ BACKENDS = {
         available=_grok_available,
         pinned=True,
     ),
+    # Native opencode via ACP (`opencode acp`). Model ids are provider/model;
+    # catalog refreshed in all_backends() from `opencode models`.
+    "opencode": BackendSpec(
+        name="opencode",
+        label="opencode",
+        abbrev="OC",
+        bridge_script="opencode_main.py",
+        fallback_model=opencode_backend.DEFAULT_MODEL,
+        default_models=list(opencode_backend.OPENCODE_FALLBACK_MODELS),
+        available=_opencode_available,
+        pinned=True,
+    ),
     "pi": BackendSpec(
         name="pi",
         label="Pi",
@@ -185,6 +203,14 @@ def all_backends(settings: Optional[dict] = None) -> Dict[str, BackendSpec]:
             )
     except Exception as e:
         print("[%s] grok model catalog refresh failed: %s" % (PLUGIN_NAME, e))
+    try:
+        if "opencode" in merged and _opencode_available():
+            merged["opencode"] = replace(
+                merged["opencode"],
+                default_models=list(opencode_backend.opencode_picker_models()),
+            )
+    except Exception as e:
+        print("[%s] opencode model catalog refresh failed: %s" % (PLUGIN_NAME, e))
     try:
         custom = provider_mod.load_custom_providers(settings)
     except Exception as e:

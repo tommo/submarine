@@ -233,6 +233,28 @@ class KimiStartCommand(sublime_plugin.WindowCommand):
         create_session(self.window, backend="kimi")
 
 
+class OpencodeStartCommand(sublime_plugin.WindowCommand):
+    """Start a native opencode session via ACP (`opencode acp`)."""
+    def run(self):
+        try:
+            from backend import opencode as opencode_backend
+            ok = opencode_backend.opencode_available()
+        except Exception:
+            ok = bool(
+                os.environ.get("OPENCODE_BIN")
+                or shutil.which("opencode")
+                or os.path.isfile(os.path.expanduser("~/.local/bin/opencode"))
+            )
+        if not ok:
+            sublime.error_message(
+                "opencode CLI not found.\n\n"
+                "Install opencode (https://opencode.ai) so `opencode` is on "
+                "PATH, or set OPENCODE_BIN.\n"
+                "Then run `opencode auth login` once.")
+            return
+        create_session(self.window, backend="opencode")
+
+
 class SubmarineQueryCommand(sublime_plugin.WindowCommand):
     def run(self):
         s = get_active_session(self.window) or create_session(self.window)
@@ -904,7 +926,7 @@ class SubmarineSwitchCommand(sublime_plugin.WindowCommand):
         except Exception:
             quota_client = None  # type: ignore
         ordered = []
-        for name in ("claude", "codex", "pi", "grok", "kimi"):
+        for name in ("claude", "codex", "pi", "grok", "kimi", "opencode"):
             if name in available_backends and name not in ordered:
                 ordered.append(name)
         for name in available_backends:
@@ -1101,6 +1123,18 @@ def _models_for_backend(backend, active_session=None):
             backend_models = list(grok_backend.grok_picker_models(extra=extra))
         except Exception as e:
             print("[Submarine] grok session model list: %s" % e)
+    elif backend == "opencode":
+        # Live ACP catalog + `opencode models` (custom providers from
+        # opencode.json) — the on-disk cache can predate the CLI fetch and
+        # pin the static zen-only fallback.
+        try:
+            from backend import opencode as opencode_backend
+            extra = []
+            if active_session is not None and getattr(active_session, "available_models", None):
+                extra.extend(active_session.available_models)
+            backend_models = list(opencode_backend.opencode_picker_models(extra=extra))
+        except Exception as e:
+            print("[Submarine] opencode session model list: %s" % e)
     return backend_models
 
 

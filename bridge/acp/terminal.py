@@ -22,6 +22,20 @@ from rpc_helpers import send_notification  # noqa: E402
 from acp.util import apply_plain_terminal_env, strip_ansi  # noqa: E402
 
 
+def _safe_killpg(pid: Any, sig: int) -> None:
+    """os.killpg for a terminal child's own group — never 0, 1 or bogus.
+
+    glibc killpg(g) is kill(-g): pgid 1 signals EVERY process the user owns
+    (logs out the desktop session), pgid 0 signals our own group (the
+    bridge, Sublime, …). Terminal children are spawned with
+    start_new_session=True, so a real pgid is always > 1. Raises
+    ProcessLookupError so callers fall back to proc.terminate()/kill().
+    """
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 1:
+        raise ProcessLookupError("refusing killpg(%r)" % (pid,))
+    os.killpg(pid, sig)
+
+
 class TerminalMixin:
     def _normalize_terminal_cmd(self, cmd: str, args: list) -> tuple:
         """Return (cmd, args, use_shell) for terminal spawn.
@@ -58,7 +72,7 @@ class TerminalMixin:
         pid = proc.pid
         try:
             # start_new_session=True → kill whole group.
-            os.killpg(pid, 15)  # SIGTERM
+            _safe_killpg(pid, 15)  # SIGTERM
         except (ProcessLookupError, PermissionError, OSError):
             try:
                 proc.terminate()
@@ -262,7 +276,7 @@ class TerminalMixin:
                     code = await asyncio.wait_for(proc.wait(), timeout=1.0)
                 except Exception:
                     try:
-                        os.killpg(proc.pid, 9)
+                        _safe_killpg(proc.pid, 9)
                         code = await asyncio.wait_for(proc.wait(), timeout=0.5)
                     except Exception:
                         code = -9
@@ -635,7 +649,7 @@ class TerminalMixin:
         proc = slot.get("proc")
         if proc and proc.returncode is None:
             try:
-                os.killpg(proc.pid, 9)
+                _safe_killpg(proc.pid, 9)
             except Exception:
                 try:
                     proc.kill()

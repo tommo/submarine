@@ -742,6 +742,15 @@ def plugin_loaded():
     except Exception as e:
         log_plugin("devtools start failed: %s" % e)
 
+    # Warm the opencode model catalog off-thread. `opencode models` is the
+    # only place custom providers from opencode.json surface; without this
+    # the first picker after load shows the static zen-only fallback.
+    try:
+        from backend import opencode as opencode_backend
+        opencode_backend.warm_catalog()
+    except Exception as e:
+        log_plugin("opencode catalog warm failed: %s" % e)
+
     schedule_auto_sleep()
     try:
         from ui.host import ui_mode
