@@ -1085,6 +1085,14 @@ Agent ID: {agent_id_info}
             await self.emit_message(message)
             return
 
+        # A subagent's own stream (Agent/Task, foreground or background) —
+        # its prompt, text, thinking, tool calls and results. The parent shows
+        # the Agent row and gets the report as that tool's result; the rest
+        # was a wall of someone else's work in the sheet. Its prompt would
+        # also read as our echo below, and its usage as our context.
+        if getattr(message, "parent_tool_use_id", None):
+            return
+
         kind = self._origin_kind(message)
         hq = self._host_query
 

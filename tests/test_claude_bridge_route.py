@@ -108,6 +108,33 @@ class RouteTest(unittest.TestCase):
                 for k, m, p in [(e[0], e[1], e[2]) for e in self.out]
                 for r in [p if k == "result" else {}]]
 
+    def _sub(self):
+        """A subagent's stream: its prompt, its text, a tool call's result."""
+        AssistantMessage, UserMessage = _SDK.AssistantMessage, _SDK.UserMessage
+        TextBlock, ToolResultBlock = _SDK.TextBlock, _SDK.ToolResultBlock
+        return [
+            UserMessage(content="Survey the repo and report.", parent_tool_use_id="toolu_A"),
+            AssistantMessage(content=[TextBlock(text="Long report…")], model="m",
+                             parent_tool_use_id="toolu_A", usage={"input_tokens": 99999}),
+            UserMessage(content=[ToolResultBlock(tool_use_id="toolu_B", content="x" * 500)],
+                        parent_tool_use_id="toolu_A"),
+        ]
+
+    def test_a_subagent_stream_never_reaches_the_sheet(self):
+        fut = self._open_query()
+        self._route(self.user("hi"), *self._sub())
+        self.assertEqual([p for k, m, p in self.out if k == "notify"], [],
+                         "no text, tool result or usage from the subagent")
+        # Its prompt is not our echo; the query is still ours and open.
+        self.assertFalse(fut.done())
+        self._route(self.assistant("done"), self.result("human"))
+        self.assertTrue(fut.done())
+
+    def test_a_background_subagent_after_the_turn_opens_no_turn(self):
+        self._route(*self._sub())
+        self.assertEqual(self.out, [], "no injected turn for a subagent's stream")
+        self.assertFalse(self.b._injected)
+
     def test_our_turn_closes_the_query_untagged(self):
         fut = self._open_query()
         self._route(self.user("hi"), self.assistant("yo"), self.result("human"))
