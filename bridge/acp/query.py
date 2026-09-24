@@ -42,6 +42,23 @@ class QueryMixin:
             return True
         return False
 
+    # An instant empty end_turn this soon after an interrupt is Kimi refusing
+    # the prompt (its own turn is live), not an answer.
+    REFUSAL_WINDOW_S = 60.0
+    REFUSAL_MAX_S = 1.5
+
+    def _silently_refused(self, result: dict, sent_at: float) -> bool:
+        if getattr(self, "BACKEND_NAME", "") != "kimi":
+            return False
+        if (result or {}).get("stopReason", "end_turn") != "end_turn":
+            return False
+        now = time.time()
+        if now - sent_at > self.REFUSAL_MAX_S:
+            return False
+        if now - float(getattr(self, "_last_interrupt_ts", 0) or 0) > self.REFUSAL_WINDOW_S:
+            return False
+        return float(getattr(self, "_last_session_tool_ts", 0) or 0) < sent_at
+
     def _is_agent_busy_error(self, e: BaseException) -> bool:
         msg = str(e).lower()
         return (
@@ -171,10 +188,34 @@ class QueryMixin:
             # session/cancel here is what dirtied the path; wait + retry
             # after end_turn delivers the second prompt. Esc still cancels.
             attempt = 0
+            refused = 0
             while True:
                 try:
+                    sent_at = time.time()
                     result = await self._send_prompt(prompt_blocks) or {}
                     last_err = None
+                    if (self._silently_refused(result, sent_at)
+                            and not self._prompt_cancelled):
+                        refused += 1
+                        if refused <= 3:
+                            # Kimi answered `end_turn` at once without running
+                            # the prompt: a turn of its own holds the agent
+                            # (after Esc: its reaction to the killed tasks).
+                            # Stop that turn — Esc asked for it — and resend.
+                            self.file_log(
+                                f"query: prompt refused (instant empty end_turn), "
+                                f"cancel agent turn and resend #{refused}")
+                            await self._cancel_agent_turn(
+                                reason="refused_prompt", wait_s=1.5, settle_s=0.8,
+                                force_local=True, orphan_ok=True)
+                            # That cancel was for the agent's turn, not ours:
+                            # the resent prompt must not read as cancelled.
+                            self._prompt_cancelled = False
+                            self._cancel_in_flight = False
+                            continue
+                        raise RuntimeError(
+                            "the agent is still busy with a turn of its own and "
+                            "did not take the prompt — send it again in a moment")
                     break
                 except Exception as e:
                     last_err = e
@@ -544,6 +585,10 @@ class QueryMixin:
         early — agent keeps turn.agent_busy. Wait longer before force; next
         query also re-settles via _cancel_agent_turn.
         """
+        # Esc: Kimi answers the killed shells with a turn of its own, which
+        # then refuses prompts (see _silently_refused / _stop_post_interrupt_turn).
+        self._last_interrupt_ts = time.time()
+        self._post_interrupt_cancelled = False
         fut = self._prompt_fut
         active = fut is not None and not fut.done()
         has_query = self._query_req_id is not None

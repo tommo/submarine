@@ -316,6 +316,7 @@ class UpdatesMixin:
         drop_leftover = bool(getattr(self, "_drop_grok_leftover", False))
         suppress = bool(cancel_in_flight or drop_leftover or (
             self._prompt_cancelled and host_prompt_live))
+        self._stop_post_interrupt_turn(kind, host_prompt_live)
         # After user interrupt: drop *new* tool starts / leftover prose.
         # Still accept tool_call_update for already-open rows so ⚙ can close.
         # Do NOT open a brand-new failed row from a post-cancel update —
@@ -731,6 +732,31 @@ class UpdatesMixin:
                 })
                 return
             self._handle_grok_turn_end(params, upd)
+
+    POST_INTERRUPT_S = 15.0
+
+    def _stop_post_interrupt_turn(self, kind, host_prompt_live) -> None:
+        """Kimi: Esc kills the turn's background shells, and Kimi answers the
+        "task failed" notices with a turn of its own — edits and all, while
+        the sheet shows nothing (post-Esc output is held back) and refuses
+        the user's next prompts. Esc meant stop: cancel that turn once."""
+        if getattr(self, "BACKEND_NAME", "") != "kimi" or host_prompt_live:
+            return
+        if kind not in ("tool_call", "agent_message_chunk", "agent_thought_chunk"):
+            return
+        if getattr(self, "_post_interrupt_cancelled", True):
+            return
+        since = time.time() - float(getattr(self, "_last_interrupt_ts", 0) or 0)
+        if since > self.POST_INTERRUPT_S:
+            return
+        self._post_interrupt_cancelled = True
+        self.file_log(f"post-interrupt agent turn ({kind}, {since:.1f}s after Esc): cancel")
+        try:
+            asyncio.get_event_loop().create_task(self._cancel_agent_turn(
+                reason="post_interrupt_agent_turn", wait_s=1.0, settle_s=0.3,
+                orphan_ok=True))
+        except Exception as e:
+            self.file_log(f"post-interrupt cancel failed: {e}")
 
     def _handle_compaction(self, kind: str, upd: dict) -> None:
         """Grok auto-compaction → a live hint while it runs, a note after."""
