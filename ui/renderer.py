@@ -763,6 +763,8 @@ class TurnRenderer:
         """
         if not self.current or not self.current.working or not self._has_view():
             return
+        if not self._owns_view():
+            return
         if frames:
             self._spinner_frames = frames
         self._spinner_frame += 1
@@ -781,6 +783,21 @@ class TurnRenderer:
                     self.owner.sheet.update_title()
                 except Exception:
                     pass
+
+    def _owns_view(self):
+        """True unless the view is bound to another session's output.
+
+        Single mode shares one host view: an output that still holds it after
+        a swap (a stale reference) must not tick its busy mark into the sheet
+        another session now shows — that left glyph lines below a question.
+        """
+        try:
+            bound = get_session_for_view(self.owner.view)
+        except Exception:
+            return True
+        if bound is None:
+            return True
+        return getattr(bound, "output", None) is self.owner
 
     def _spinner_glyphs(self):
         seen = []
@@ -1334,7 +1351,9 @@ class TurnRenderer:
                     view.run_command(keys.CMD_REPLACE, {
                         "start": a, "end": b, "text": err_sym,
                     })
-                view.set_read_only(True)
+                # Lock follows the composer: an unconditional lock here left
+                # an open ◎ dead to typing until a click unlocked it.
+                self.owner.sheet.finish_buffer_edit()
 
     def refresh_preserving_input(self):
         """Rewrite the live turn, keep composer. Viewless: no-op."""

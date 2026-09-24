@@ -36,6 +36,20 @@ _DANGEROUS_BASH = (
 )
 
 
+
+try:
+    from plat.constants import SPINNER_FRAMES, SPINNER_RESPONDING, SPINNER_WAITING
+    _BUSY_GLYPHS = set(SPINNER_FRAMES + SPINNER_RESPONDING + SPINNER_WAITING)
+except Exception:
+    _BUSY_GLYPHS = set("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◇◈◆")
+
+
+def _only_busy_glyphs(text):
+    """True for leftover spinner lines: glyphs and whitespace, nothing else."""
+    stripped = [ch for ch in text if not ch.isspace()]
+    return bool(stripped) and all(ch in _BUSY_GLYPHS for ch in stripped)
+
+
 class ModalUI:
     """Turn-modal permission / plan / question blocks.
 
@@ -49,6 +63,7 @@ class ModalUI:
 
     def __init__(self, owner):
         self.owner = owner
+        self._ready = False
         self.pending_permission = None  # type: Optional[PermissionRequest]
         self._permission_queue = []  # type: List[PermissionRequest]
         self.pending_plan = None  # type: Optional[PlanApproval]
@@ -58,6 +73,53 @@ class ModalUI:
         self._last_allowed_time = 0.0
         self._perm_timeout_token = 0
         self._region_stash = None  # type: Optional[dict]
+        self._ready = True
+
+    # A modal that goes away must take its view stamps with it. Paths that
+    # dropped one without a re-stamp left `has_question` on the sheet — the
+    # question keymap then swallowed `o` and 1-4 in the composer — and
+    # `has_modal`, which turned Esc into an interrupt.
+    def _set_pending(self, attr, value):
+        setattr(self, attr, value)
+        if value is None and getattr(self, "_ready", False):
+            try:
+                self._sync_modal_settings()
+            except Exception:
+                pass
+
+    @property
+    def pending_question(self):
+        return self._pending_question
+
+    @pending_question.setter
+    def pending_question(self, value):
+        self._set_pending("_pending_question", value)
+
+    @property
+    def pending_permission(self):
+        return self._pending_permission
+
+    @pending_permission.setter
+    def pending_permission(self, value):
+        self._set_pending("_pending_permission", value)
+
+    @property
+    def pending_plan(self):
+        return self._pending_plan
+
+    @pending_plan.setter
+    def pending_plan(self, value):
+        self._set_pending("_pending_plan", value)
+
+    def _unlock_for_composer(self) -> None:
+        """After a modal block is cut: `clear_pending_block` leaves the sheet
+        read-only, and a composer that never closed is not re-entered (so
+        nothing unlocks it) — typing was dead until a click. Lock state
+        follows the composer instead."""
+        try:
+            self.owner.sheet.finish_buffer_edit()
+        except Exception:
+            pass
 
     def _sync_modal_settings(self) -> None:
         """Stamp view settings so question/interrupt keymaps can fire."""
@@ -71,6 +133,10 @@ class ModalUI:
             return
         q = self.pending_question
         c = getattr(self.owner, "composer", None)
+        try:
+            self.repair_question_input()
+        except Exception:
+            pass
         q_input = bool(c and getattr(c, "_question_input_mode", False))
         has_q = bool(q and getattr(q, "callback", None)) and not q_input
         has_m = bool(
@@ -335,6 +401,7 @@ class ModalUI:
                             keys.QUESTION_INPUT_MARKER,
                         ),
                     )
+                    self._unlock_for_composer()
             view.erase_regions(keys.QUESTION_KEYS)
             view.erase_regions(keys.QUESTION_INPUT_MARKER)
         except Exception:
@@ -565,6 +632,7 @@ class ModalUI:
                 button_keys=self.pending_permission.button_regions,
                 fallback_region_end=_conv_end(self.owner),
             )
+            self._unlock_for_composer()
             cur = self.owner.current
             if cur and cur.region:
                 cur.region = (cur.region[0], self.owner.view.size())
@@ -848,6 +916,7 @@ class ModalUI:
                 button_keys=self.pending_plan.button_regions,
                 fallback_region_end=_conv_end(self.owner),
             )
+            self._unlock_for_composer()
         self.pending_plan.region = None
         self.pending_plan.button_regions = {}
         self._sync_modal_settings()
@@ -1010,6 +1079,12 @@ class ModalUI:
             if orphan >= 0:
                 self.owner._replace(write_at + orphan, view.size(), "")
         end = self.owner._write(text, pos=write_at)
+        if free_marker is None:
+            end_tail = view.substr(_R(end, view.size()))
+            if end_tail and _only_busy_glyphs(end_tail):
+                # Busy-mark lines stranded below the block (a tick that
+                # landed past it): nothing belongs after a question.
+                self.owner._replace(end, view.size(), "")
         q_req.region = (write_at, end)
         self.owner.sheet.set_hidden_region(keys.QUESTION_BLOCK, write_at, end)
         if free_marker is not None:
@@ -1098,6 +1173,7 @@ class ModalUI:
             fallback_region_end=_conv_end(self.owner),
             extra_region_keys=(keys.QUESTION_KEYS, keys.QUESTION_INPUT_MARKER),
         )
+        self._unlock_for_composer()
         self.pending_question.region = None
         self.pending_question.button_regions = {}
         self._sync_modal_settings()
@@ -1422,9 +1498,64 @@ class ModalUI:
         except Exception:
             pass
 
+    def repair_question_input(self) -> bool:
+        """A live `▸ ` answer line whose flag was lost.
+
+        Seen after session switches: the question still waits, its marker
+        region still sits in the sheet, the ◎ composer flag points at that
+        line — but `_question_input_mode` is off. Enter then sent the answer
+        as a new prompt, queued behind the turn that waits on the question,
+        and the tool never returned. The marker is the truth: put the flag
+        back. True when it did.
+        """
+        c = self.owner.composer
+        q = self.pending_question
+        if c._question_input_mode or not q or getattr(q, "callback", None) is None:
+            return False
+        if not self._has_view():
+            return False
+        view = self.owner.view
+        regs = view.get_regions(keys.QUESTION_INPUT_MARKER)
+        marker = "\n    ▸ "
+        if regs and regs[0].size() > 0:
+            start = regs[0].end()
+        elif (c._input_mode and c._input_start
+              and view.substr(_R(c._input_start - len(marker), c._input_start)) == marker):
+            # The marker region went with a buffer restore; the ◎ flag still
+            # sits right after the line's own `▸ `.
+            start = c._input_start
+            try:
+                self.owner.sheet.set_hidden_region(
+                    keys.QUESTION_INPUT_MARKER, start - len(marker), start)
+            except Exception:
+                pass
+        else:
+            return False
+        c._question_input_mode = True
+        c._question_input_start = start
+        c._input_mode = True
+        c._input_start = start
+        try:
+            keys.write_setting(view.settings(), keys.QUESTION_INPUT_MODE, True)
+            keys.write_setting(view.settings(), keys.INPUT_MODE, True)
+            view.set_read_only(False)
+        except Exception:
+            pass
+        try:
+            from plat.log import log_plugin
+            import traceback
+            log_plugin("question input repaired (qid=%s): flag was lost; from %s" % (
+                getattr(q, "qid", "?"),
+                " < ".join(l.strip().split("\n")[0] for l in traceback.format_stack(limit=6)[:-1][::-1])))
+        except Exception:
+            pass
+        return True
+
     def submit_question_input(self):
         c = self.owner.composer
         view = self.owner.view
+        if not c._question_input_mode:
+            self.repair_question_input()
         if not c._question_input_mode:
             return False
         if not self.pending_question or not self._has_view():

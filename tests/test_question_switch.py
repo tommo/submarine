@@ -58,6 +58,132 @@ class TestQuestionSurvivesSwitch(_SingleViewCase):
         self.assertTrue(bo.modals.submit_question_input())
         self.assertEqual(answered, [{"pick": "half typed"}])
 
+    def _lost_flag(self):
+        """The state seen live after switches: the answer line and its marker
+        are there, the ◎ flag points at it, the question flag is gone."""
+        a, _ao, _ac = _live(self.win, "front")
+        b, bo, _bc = _live(self.win, "asker")
+        answered = []
+        self.hv.attach(self.win, b)
+        b._enter_input_with_draft()
+        b.query("ask")
+        bo.question_request(3, Q, lambda ans: answered.append(ans))
+        bo.handle_question_key("o")
+        bo.view.run_command("append", {"characters": "my own answer"})
+        c = bo.composer
+        c._question_input_mode = False
+        keys.write_setting(bo.view.settings(), keys.QUESTION_INPUT_MODE, False)
+        self.assertTrue(c._input_mode)
+        return b, bo, answered
+
+    def test_enter_on_an_answer_line_that_lost_its_flag_still_answers(self):
+        b, bo, answered = self._lost_flag()
+        self.assertTrue(bo.modals.submit_question_input(),
+                        "Enter must answer the question, not send a prompt")
+        self.assertEqual(answered, [{"pick": "my own answer"}])
+        self.assertEqual(b._queued_prompts, [])
+
+    def test_a_settings_sync_heals_the_lost_flag(self):
+        _b, bo, answered = self._lost_flag()
+        bo.modals._sync_modal_settings()
+        view = bo.view
+        self.assertTrue(bo.composer._question_input_mode)
+        self.assertTrue(keys.read_setting(view.settings(), keys.QUESTION_INPUT_MODE, False))
+        self.assertFalse(keys.read_setting(view.settings(), keys.HAS_QUESTION, True),
+                         "the number keys must not grab the typed answer")
+        self.assertFalse(view.is_read_only(), "the answer line stays typeable")
+        self.assertEqual(bo.modals.question_input_text(), "my own answer")
+
+    def test_a_redrawn_question_drops_busy_glyphs_stranded_below_it(self):
+        b, bo, _bc = _live(self.win, "asker")
+        self.hv.attach(self.win, b)
+        b._enter_input_with_draft()
+        b.query("ask")
+        bo.question_request(3, Q, lambda ans: None)
+        bo.view.run_command("append", {"characters": " ⠼\n ⠼"})
+        bo.modals.render_question()
+        self.assertTrue(bo.view.substr(None).endswith("[O] Other...\n"),
+                        repr(bo.view.substr(None)[-40:]))
+
+    def test_a_stale_output_does_not_tick_into_the_shown_sheet(self):
+        a, ao, _ac = _live(self.win, "front")
+        b, bo, _bc = _live(self.win, "asker")
+        self.hv.attach(self.win, a)
+        a._enter_input_with_draft()
+        a.query("busy")
+        self.hv.attach(self.win, b)                 # a goes viewless
+        b._enter_input_with_draft()
+        b.query("ask")
+        bo.question_request(3, Q, lambda ans: None)
+        before = bo.view.substr(None)
+        ao.view = bo.view                           # a stale hold on the host
+        ao.current.working = True
+        for _ in range(3):
+            ao.advance_spinner()
+        self.assertEqual(bo.view.substr(None), before)
+
+    def test_answering_clears_the_question_stamps(self):
+        """A stale `has_question` routed `o` and 1-4 typed in the composer to
+        the question keymap, which dropped them; a stale `has_modal` made Esc
+        interrupt."""
+        b, bo, _bc = _live(self.win, "asker")
+        self.hv.attach(self.win, b)
+        b._enter_input_with_draft()
+        b.query("ask")
+        bo.question_request(3, Q, lambda ans: None)
+        self.assertTrue(bo.handle_question_key("1"))
+        b.scheduler.fire_all()
+        st = bo.view.settings()
+        self.assertFalse(keys.read_setting(st, keys.HAS_QUESTION, None))
+        self.assertFalse(keys.read_setting(st, keys.HAS_MODAL, None))
+
+    def test_a_dropped_modal_restamps_the_sheet(self):
+        b, bo, _bc = _live(self.win, "asker")
+        self.hv.attach(self.win, b)
+        b.query("ask")
+        bo.question_request(3, Q, lambda ans: None)
+        self.assertTrue(keys.read_setting(bo.view.settings(), keys.HAS_QUESTION, None))
+        bo.pending_question = None          # any path that drops it
+        self.assertFalse(keys.read_setting(bo.view.settings(), keys.HAS_QUESTION, None))
+
+    def _tracking_read_only(self, view):
+        ro = {"on": False}                 # the harness view ignores read-only
+        view.set_read_only = lambda v: ro.__setitem__("on", bool(v))
+        view.is_read_only = lambda: ro["on"]
+
+    def _assert_typeable(self, s, out):
+        s.scheduler.fire_all()
+        st = out.view.settings()
+        self.assertTrue(out.composer.is_input_mode(), "the composer came back")
+        self.assertTrue(keys.read_setting(st, keys.INPUT_MODE, False))
+        self.assertFalse(keys.read_setting(st, keys.HAS_QUESTION, None))
+        self.assertFalse(keys.read_setting(st, keys.HAS_MODAL, None))
+        self.assertFalse(out.view.is_read_only(),
+                         "typing in the composer must work without a click")
+
+    def test_after_a_permission_the_composer_is_typeable(self):
+        b, bo, _bc = _live(self.win, "asker")
+        self.hv.attach(self.win, b)
+        b._enter_input_with_draft()
+        self._tracking_read_only(bo.view)
+        b.query("ask")
+        bo.modals.permission_request(5, "Bash", {"command": "ls"}, lambda r: None)
+        self.assertTrue(bo.view.is_read_only())
+        self.assertTrue(bo.modals.handle_permission_key("y"))
+        b.turn.end_live()
+        self._assert_typeable(b, bo)
+
+    def test_after_a_question_the_composer_is_typeable(self):
+        b, bo, _bc = _live(self.win, "asker")
+        self.hv.attach(self.win, b)
+        b._enter_input_with_draft()
+        self._tracking_read_only(bo.view)
+        b.query("ask")
+        bo.question_request(3, Q, lambda ans: None)
+        self.assertTrue(bo.handle_question_key("2"))
+        b.turn.end_live()
+        self._assert_typeable(b, bo)
+
     def test_a_plain_question_is_still_answerable_after_a_switch(self):
         a, _ao, _ac = _live(self.win, "front")
         b, bo, _bc = _live(self.win, "asker")
