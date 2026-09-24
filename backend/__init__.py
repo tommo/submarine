@@ -1,5 +1,5 @@
-"""L2 backend: JSON-RPC client, specs, providers, grok/kimi helpers. Sublime-free."""
-from . import grok, kimi, providers, rpc, specs
+"""L2 backend: JSON-RPC client, specs, providers, grok/kimi/opencode helpers. Sublime-free."""
+from . import grok, kimi, opencode, providers, rpc, specs
 from .rpc import JsonRpcClient
 from .specs import (
     BackendSpec,
@@ -20,6 +20,7 @@ __all__ = [
     "grok",
     "is_available",
     "kimi",
+    "opencode",
     "providers",
     "rpc",
     "specs",

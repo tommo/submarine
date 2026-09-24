@@ -28,6 +28,10 @@
         "command": "kimi_start"
     },
     {
+        "caption": "opencode: New Session",
+        "command": "opencode_start"
+    },
+    {
         "caption": "(CC) DeepSeek: New Session",
         "command": "deep_seek_start"
     },

@@ -814,6 +814,18 @@ class SubmarineSelectModelCommand(sublime_plugin.WindowCommand):
                 models = [list(m) for m in grok_backend.grok_picker_models(extra=extra)]
             except Exception as e:
                 print("[Submarine] grok model merge: %s" % e)
+        elif backend == "opencode":
+            # Live ACP catalog + `opencode models` outrank the on-disk cache,
+            # which can predate the CLI fetch and pin the zen-only fallback.
+            try:
+                from backend import opencode as opencode_backend
+                extra = []
+                s = get_active_session(self.window)
+                if s is not None and getattr(s, "available_models", None):
+                    extra.extend(s.available_models)
+                models = [list(m) for m in opencode_backend.opencode_picker_models(extra=extra)]
+            except Exception as e:
+                print("[Submarine] opencode model merge: %s" % e)
         return models
 
 
@@ -821,7 +833,7 @@ class SubmarineSetDefaultModelCommand(sublime_plugin.WindowCommand):
     def run(self):
         seen = set()
         backends_list = []
-        for name in ("claude", "codex", "pi", "grok", "kimi"):
+        for name in ("claude", "codex", "pi", "grok", "kimi", "opencode"):
             if backend_specs.is_available(name) or name == "claude":
                 backends_list.append(name)
                 seen.add(name)
@@ -881,7 +893,7 @@ class SubmarineSetDefaultProviderCommand(sublime_plugin.WindowCommand):
         default_models = settings.get("default_models", {}) or {}
         seen = set()
         backends_list = []
-        for name in ("claude", "codex", "pi", "grok", "kimi"):
+        for name in ("claude", "codex", "pi", "grok", "kimi", "opencode"):
             if name == "claude" or backend_specs.is_available(name):
                 backends_list.append(name)
                 seen.add(name)
