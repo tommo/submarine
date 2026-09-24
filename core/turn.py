@@ -262,6 +262,12 @@ def looks_like_compact_start(text: str) -> bool:
     )
 
 
+def looks_like_compact_blocked(text: str) -> bool:
+    """Kimi's `compaction.blocked` local chunk. It fires for a second
+    trigger while its own compaction of this turn is already running."""
+    return "compaction is blocked" in (text or "").lower()
+
+
 def is_compact_prompt(prompt: str) -> bool:
     raw = (prompt or "").strip()
     return raw in ("/compact", "compact") or raw.startswith("/compact ")

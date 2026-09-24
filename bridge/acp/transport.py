@@ -21,6 +21,11 @@ if _BRIDGE_DIR not in sys.path:
 from rpc_helpers import send_notification  # noqa: E402
 
 
+
+# Grok announces an automatic compaction on the parent pipe as
+# `_x.ai/session/update`; the turn is silent for its whole length otherwise.
+_COMPACTION_UPDATES = ("auto_compact_started", "auto_compact_completed")
+
 class TransportMixin:
     def _get_acp_write_lock(self) -> asyncio.Lock:
         if self._acp_write_lock is None:
@@ -228,6 +233,9 @@ class TransportMixin:
                     kind = str(upd.get("sessionUpdate") or "")
                     if kind in ("turn_completed", "TurnCompleted"):
                         self._handle_grok_turn_end(params, upd)
+                    elif kind in _COMPACTION_UPDATES:
+                        self._last_session_tool_ts = time.time()
+                        self._handle_compaction(kind, upd)
                     else:
                         self._handle_schedule_lifecycle(upd)
             elif method and self._is_foreign_session(params):

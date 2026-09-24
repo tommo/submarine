@@ -7,6 +7,7 @@ replay must not paint or set working (§9.29).
 from __future__ import annotations
 
 import asyncio
+import time
 import os
 import re
 import sys
@@ -19,6 +20,14 @@ if _BRIDGE_DIR not in sys.path:
 from rpc_helpers import send_notification  # noqa: E402
 from acp.util import _acp_is_compact_text  # noqa: E402
 
+
+def _k_tokens(n) -> str:
+    """411333 → '411k'."""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return "?"
+    return "%dk" % round(n / 1000.0) if n >= 1000 else str(n)
 
 class UpdatesMixin:
     # ── session/update → Sublime message notifications ─────────────────
@@ -722,6 +731,41 @@ class UpdatesMixin:
                 })
                 return
             self._handle_grok_turn_end(params, upd)
+
+    def _handle_compaction(self, kind: str, upd: dict) -> None:
+        """Grok auto-compaction → a live hint while it runs, a note after."""
+        if kind == "auto_compact_started":
+            self.file_log(f"compaction started: {upd}")
+            send_notification("message", {
+                "type": "system",
+                "subtype": "compaction_started",
+                "data": {
+                    "tokens_used": upd.get("tokens_used"),
+                    "context_window": upd.get("context_window"),
+                    "percentage": upd.get("percentage"),
+                },
+            })
+            return
+        before = upd.get("tokens_before")
+        after = upd.get("tokens_after")
+        ms = upd.get("elapsed_ms")
+        took = ""
+        try:
+            if ms:
+                took = " in %ds" % round(int(ms) / 1000.0)
+        except (TypeError, ValueError):
+            took = ""
+        self.file_log(f"compaction done: {upd}")
+        send_notification("message", {
+            "type": "system",
+            "subtype": "compaction",
+            "data": {
+                "message": "Context compacted: %s → %s tokens%s" % (
+                    _k_tokens(before), _k_tokens(after), took),
+                "tokens_before": before,
+                "tokens_after": after,
+            },
+        })
 
     def _forward_load_replay(self, params: dict) -> None:
         """Paint session/load history. Kimi replays before load settles.

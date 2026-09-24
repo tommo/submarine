@@ -446,6 +446,7 @@ class Session:
             user_cancelled=lambda: bool(self._user_cancelled_turn),
             on_leftover_pending=self._mark_leftover_pending,
             on_injected_turn=self._adopt_injected_turn,
+            context_tokens=self._context_tokens,
         )
         self.rewind = RewindService(
             send=self._send,
@@ -1826,6 +1827,15 @@ class Session:
         except Exception:
             pass
         return True, "%s · %s" % (label, model)
+
+    def _context_tokens(self):
+        # type: () -> Optional[int]
+        """Tokens in context after the last turn (for the silence hint)."""
+        usage = self.context_usage or {}
+        try:
+            return int(usage.get("total_tokens") or usage.get("input_tokens") or 0) or None
+        except (TypeError, ValueError, AttributeError):
+            return None
 
     def touch_access(self):
         # type: () -> None

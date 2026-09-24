@@ -383,6 +383,39 @@ class QueryMixin:
             blocks.append({"type": "text", "text": text or ""})
         return blocks
 
+    # A prompt with no update for this long gets a "still there" hint: Grok
+    # compacts a large context before the turn with no word on the pipe (a
+    # resumed 400k session sat ~3 minutes looking hung).
+    SILENCE_HINT_S = 20.0
+
+    def _context_window(self) -> Optional[int]:
+        """The running model's window, from session/new|load availableModels."""
+        for m in getattr(self, "_available_models", None) or []:
+            if isinstance(m, dict) and m.get("modelId") == self.model:
+                try:
+                    return int((m.get("_meta") or {}).get("totalContextTokens") or 0) or None
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    async def _silence_watch(self, sent_at: float) -> None:
+        try:
+            await asyncio.sleep(self.SILENCE_HINT_S)
+        except asyncio.CancelledError:
+            return
+        if float(getattr(self, "_last_session_tool_ts", 0) or 0) > sent_at:
+            return
+        self.file_log(f"prompt silent {self.SILENCE_HINT_S:.0f}s")
+        send_notification("message", {
+            "type": "system",
+            "subtype": "agent_silent",
+            "data": {
+                "seconds": int(self.SILENCE_HINT_S),
+                "tokens_used": getattr(self, "_last_total_tokens", None),
+                "context_window": self._context_window(),
+            },
+        })
+
     async def _send_prompt(self, prompt_blocks: list) -> Any:
         """session/prompt with a tracked future so interrupt can unblock us."""
         await self._spawn()
@@ -444,6 +477,7 @@ class QueryMixin:
             self.proc.stdin.write((line + "\n").encode())
             await self.proc.stdin.drain()
         exit_task = None
+        watch = asyncio.create_task(self._silence_watch(time.time()))
         try:
             if self.proc is not None:
                 exit_task = asyncio.create_task(self.proc.wait())
@@ -470,6 +504,11 @@ class QueryMixin:
                 )
                 if pid:
                     self._host_prompt_id = str(pid)
+                try:
+                    if (meta or {}).get("totalTokens"):
+                        self._last_total_tokens = int(meta["totalTokens"])
+                except (TypeError, ValueError):
+                    pass
             try:
                 self.file_log(
                     f"← acp session/prompt (id={rid}) result: "
@@ -479,6 +518,8 @@ class QueryMixin:
                     f"← acp session/prompt (id={rid}) result: {result!r}")
             return result
         finally:
+            if not watch.done():
+                watch.cancel()
             if exit_task is not None and not exit_task.done():
                 exit_task.cancel()
             self.pending.pop(rid, None)

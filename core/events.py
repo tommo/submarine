@@ -12,6 +12,7 @@ from .background import is_shell_background_tool
 from .turn import (
     _SELF_WAKE_BACKENDS,
     looks_like_compact_done,
+    looks_like_compact_blocked,
     looks_like_compact_start,
 )
 
@@ -26,6 +27,28 @@ _LOOP_TOOLS = (
 
 _PERM_ALLOW = frozenset({"allow", "allow_all", "allow_session"})
 _PLAN_APPROVE = "approve"
+
+
+def _k_tokens(n):
+    # type: (object) -> str
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return "?"
+    return "%dk" % round(n / 1000.0) if n >= 1000 else str(n)
+
+
+def _compaction_hint(data):
+    # type: (dict) -> str
+    """Grok's auto_compact_started: '⟳ compacting context · 81% of 500k'."""
+    pct = data.get("percentage")
+    window = data.get("context_window")
+    tail = ""
+    if pct is not None and window:
+        tail = " · %s%% of %s" % (pct, _k_tokens(window))
+    elif data.get("tokens_used"):
+        tail = " · %s tokens" % _k_tokens(data.get("tokens_used"))
+    return "⟳ compacting context%s" % tail
 
 
 class BridgeEventRouter:
@@ -65,6 +88,7 @@ class BridgeEventRouter:
         user_cancelled=None,  # type: Optional[Callable[[], bool]]
         on_leftover_pending=None,  # type: Optional[Callable[[], None]]
         on_injected_turn=None,  # type: Optional[Callable[[str, str], None]]
+        context_tokens=None,  # type: Optional[Callable[[], Optional[int]]]
     ):
         self.output = output
         self.chrome = chrome
@@ -98,6 +122,8 @@ class BridgeEventRouter:
         self.user_cancelled = user_cancelled
         self.on_leftover_pending = on_leftover_pending
         self.on_injected_turn = on_injected_turn
+        self.context_tokens = context_tokens
+        self._compact_seen = False      # a compaction started this turn
         self.current_tool = None  # type: Optional[str]
         self._api_retry_hint = None  # type: Optional[str]
 
@@ -384,7 +410,6 @@ class BridgeEventRouter:
 
     def text(self, params):
         # type: (dict) -> None
-        self._clear_api_retry_hint()
         text = params.get("text") or ""
         if params.get("replay"):
             if text:
@@ -400,6 +425,7 @@ class BridgeEventRouter:
         compacting = self.is_compacting() if self.is_compacting else (
             self.turn.kind == "compacting")
         if compacting and looks_like_compact_done(text):
+            self._clear_api_retry_hint()
             if self.turn.busy and self.on_phase is not None:
                 self.on_phase("responding")
             try:
@@ -409,15 +435,24 @@ class BridgeEventRouter:
             if self.on_compact_done is not None:
                 self.on_compact_done()
             return
+        if looks_like_compact_blocked(text):
+            if compacting or self._compact_seen:
+                # Kimi's compaction of this turn is under way; the "blocked"
+                # line is its second trigger being refused, not the news.
+                return
         if looks_like_compact_start(text):
+            self._compact_seen = True
             if self.turn.busy and self.on_compact_start is not None:
                 self.on_compact_start()
             try:
                 self.output.text("\n*Compacting conversation context…*\n")
             except Exception:
                 pass
+            self._set_live_hint("⟳ compacting context — the agent summarizes "
+                                "its history before answering")
             return
         if looks_like_compact_done(text):
+            self._clear_api_retry_hint()
             try:
                 self.output.text("\n*Compaction completed.*\n")
             except Exception:
@@ -425,6 +460,9 @@ class BridgeEventRouter:
             if compacting and self.on_compact_done is not None:
                 self.on_compact_done()
             return
+        # Real output: whatever the live line said (retry, silence,
+        # compaction) is over.
+        self._clear_api_retry_hint()
         action = self.turn.inbound_action("text")
         if action == "drop":
             return
@@ -631,6 +669,8 @@ class BridgeEventRouter:
         sid = params.get("session_id") or params.get("sessionId")
         if sid and self.on_session_id is not None:
             self.on_session_id(str(sid))
+        self._clear_api_retry_hint()   # a hint never outlives its turn
+        self._compact_seen = False
         cost = params.get("total_cost_usd") or 0
         try:
             cost_f = float(cost)
@@ -755,7 +795,13 @@ class BridgeEventRouter:
         elif subtype == "compact_boundary":
             if self.on_usage is not None:
                 self.on_usage({})
+        elif subtype == "compaction_started":
+            self._set_live_hint(_compaction_hint(data))
+        elif subtype == "agent_silent":
+            self._set_live_hint(self._silence_hint(data))
         elif subtype in ("error", "init", "compaction"):
+            if subtype == "compaction":
+                self._clear_api_retry_hint()
             msg = ""
             if isinstance(data, dict):
                 msg = data.get("message") or ""
@@ -786,6 +832,38 @@ class BridgeEventRouter:
         except Exception:
             pass
         self.chrome.set_status(hint)
+
+    def _set_live_hint(self, hint):
+        # type: (str) -> None
+        """The line under the busy mark (shared with API retries): cleared
+        by the next text / tool / thinking, or the turn's end."""
+        self._api_retry_hint = hint
+        try:
+            self.output.set_retry_hint(hint)
+        except Exception:
+            pass
+        self.chrome.set_status(hint)
+
+    def _silence_hint(self, data):
+        # type: (dict) -> str
+        """No update for a while. With the context near its window that is
+        almost always a compaction the agent does not announce."""
+        secs = data.get("seconds") or 20
+        used = data.get("tokens_used")
+        if not used and self.context_tokens is not None:
+            try:
+                used = self.context_tokens()
+            except Exception:
+                used = None
+        window = data.get("context_window")
+        try:
+            full = bool(used and window and float(used) / float(window) >= 0.7)
+        except (TypeError, ValueError, ZeroDivisionError):
+            full = False
+        if full:
+            return "⟳ no reply for %ss — probably compacting context (%s of %s)" % (
+                secs, _k_tokens(used), _k_tokens(window))
+        return "⋯ no reply for %ss — still waiting on the agent" % secs
 
     def _clear_api_retry_hint(self):
         # type: () -> None
