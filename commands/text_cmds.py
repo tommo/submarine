@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import sys
 
 import sublime
 import sublime_plugin
@@ -738,7 +739,77 @@ class SubmarinePasteImageCommand(sublime_plugin.TextCommand):
             return None, None, None
 
 
+
+def _open_folder(path):
+    """Show a folder's contents in the system file manager."""
+    import subprocess
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        elif sys.platform.startswith("win"):
+            subprocess.Popen(["explorer", os.path.normpath(path)])
+        else:
+            subprocess.Popen(["xdg-open", path])
+        return True
+    except Exception as e:
+        print("[Submarine] open folder: %s" % e)
+        return False
+
 class SubmarineOpenLinkCommand(sublime_plugin.TextCommand):
+    def _project_roots(self):
+        """Where a relative path in the sheet is looked up: the session's
+        folder, then the window's."""
+        roots = []
+        session = get_session_for_view(self.view)
+        try:
+            cwd = session._cwd() if session is not None else ""
+        except Exception:
+            cwd = getattr(session, "cwd", "") or ""
+        if cwd:
+            roots.append(cwd)
+        window = self.view.window()
+        try:
+            for folder in (window.folders() if window else None) or []:
+                if folder and folder not in roots:
+                    roots.append(folder)
+        except Exception:
+            pass
+        return roots
+
+    def _open_code_span_path(self, line, col):
+        """A `code span` under the click that names a file or folder —
+        absolute, or relative to the project (`packages/x/y.gfxp`)."""
+        import re
+        for m in re.finditer(r"`([^`\n]+)`", line):
+            if not (m.start() <= col <= m.end()):
+                continue
+            text = m.group(1).strip()
+            line_num = None
+            hit = re.match(r"^(.*?):(\d+)(?::\d+)?$", text)
+            if hit:
+                text, line_num = hit.group(1), int(hit.group(2))
+            text = os.path.expanduser(text)
+            if not text or " " in text.strip("/"):
+                return False            # prose in backticks, not a path
+            cands = [text] if os.path.isabs(text) else [
+                os.path.join(root, text) for root in self._project_roots()]
+            for path in cands:
+                if os.path.isfile(path):
+                    window = self.view.window()
+                    if window:
+                        if line_num:
+                            window.open_file("%s:%s" % (path, line_num),
+                                             sublime.ENCODED_POSITION)
+                        else:
+                            window.open_file(path)
+                    return True
+                if os.path.isdir(path):
+                    if _open_folder(path):
+                        sublime.status_message("Opened folder %s" % path)
+                    return True
+            return False
+        return False
+
     def _focus_agent_at(self, line, col):
         """An agent id under the click (`submarine::<hex>`, or the old
         `agent-<hex>`) → show that session, in whatever window holds it."""
@@ -787,6 +858,8 @@ class SubmarineOpenLinkCommand(sublime_plugin.TextCommand):
             if session and session.output and hasattr(session.output, "show_media_popup"):
                 session.output.show_media_popup(media_path, location=pt)
                 return
+        if self._open_code_span_path(line, col):
+            return
         if self._focus_agent_at(line, col):
             return
         url_pattern = r'https?://[^\s\]\)>\'"]+|file://[^\s\]\)>\'"]+'
@@ -797,7 +870,9 @@ class SubmarineOpenLinkCommand(sublime_plugin.TextCommand):
         path_pattern = r'(?:[/.]|[a-zA-Z]:)[^\s:,\]\)\}>\'\"]+(?::\d+)?'
         for match in re.finditer(path_pattern, line):
             if match.start() <= col <= match.end():
-                path_with_line = match.group()
+                # Markdown code spans and prose end a path with `, ., ; —
+                # never part of it ("`/tmp/out/`" missed the folder).
+                path_with_line = match.group().rstrip("`'\".,;")
                 line_num = None
                 if ":" in path_with_line:
                     parts = path_with_line.rsplit(":", 1)
@@ -825,6 +900,10 @@ class SubmarineOpenLinkCommand(sublime_plugin.TextCommand):
                                 sublime.ENCODED_POSITION)
                         else:
                             window.open_file(path_with_line)
+                    return
+                if os.path.isdir(path_with_line):
+                    if _open_folder(path_with_line):
+                        sublime.status_message("Opened folder %s" % path_with_line)
                     return
         sublime.status_message("No link or file path found at cursor")
 

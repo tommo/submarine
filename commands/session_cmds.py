@@ -758,6 +758,9 @@ class SubmarineResumeCommand(sublime_plugin.WindowCommand):
                 s.name = name
                 s.output.show()
                 s.output.set_name(name)
+            if s:
+                from ui.session_list import reveal_in_list
+                reveal_in_list(self.window, s)
 
         self.window.show_quick_panel(items, on_select)
 

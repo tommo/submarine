@@ -2104,3 +2104,66 @@ class TestTreeSelfLink(unittest.TestCase):
         out = sl.tree_order(rows)
         self.assertEqual([(r["agent_id"], r["depth"]) for r in out], [("p", 0), ("c", 1)])
 
+
+
+class FocusAgentPointsTheListTest(unittest.TestCase):
+    """Cmd+click on an id jumps to the session and puts the list caret on
+    its row — retrying while a resumed session has no CURRENT row yet."""
+
+    def setUp(self):
+        self.saved = {k: getattr(sl, k) for k in (
+            "get_session_by_agent_id", "open_row", "resume_saved",
+            "sync_list_to_session", "load_saved_sessions", "sublime",
+            "create_session", "find_live_by_session_id")}
+        self.timers = []
+        self.synced = []
+        fake = types.SimpleNamespace(
+            set_timeout=lambda fn, ms=0: self.timers.append((ms, fn)),
+            status_message=lambda msg: None)
+        sl.sublime = fake
+        sl.open_row = lambda window, row: True
+        # The real resume_saved: it is what points the list at the woken row.
+        sl.find_live_by_session_id = lambda sid: None
+        sl.create_session = lambda window, **kw: types.SimpleNamespace(
+            agent_id="submarine::0123456789ab", name=None, output=None)
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            setattr(sl, k, v)
+
+    def test_a_live_session_is_pointed_at_right_away(self):
+        live = types.SimpleNamespace(agent_id="submarine::0123456789ab",
+                                     session_id="s1", window=None)
+        sl.get_session_by_agent_id = lambda aid: live if aid == live.agent_id else None
+        sl.sync_list_to_session = lambda w, s: self.synced.append(s) or True
+        win = object()
+        self.assertTrue(sl.focus_agent(win, "agent-0123456789ab"))
+        self.assertEqual(self.synced, [live])
+        self.assertEqual(self.timers, [])
+
+    def test_a_resumed_session_is_pointed_at_once_its_row_exists(self):
+        state = {"live": None, "rows": False}
+        sl.get_session_by_agent_id = lambda aid: state["live"]
+        sl.load_saved_sessions = lambda: [
+            {"session_id": "s9", "agent_id": "submarine::0123456789ab"}]
+        sl.sync_list_to_session = lambda w, s: state["rows"]
+        self.assertTrue(sl.focus_agent(object(), "submarine::0123456789ab"))
+        self.assertEqual(len(self.timers), 1, "no row yet: one retry armed")
+        state["live"] = types.SimpleNamespace(agent_id="submarine::0123456789ab")
+        self.timers.pop(0)[1]()
+        self.assertEqual(len(self.timers), 1, "still no row: retry again")
+        state["rows"] = True
+        self.timers.pop(0)[1]()
+        self.assertEqual(self.timers, [], "found: the retries stop")
+
+    def test_the_retries_give_up(self):
+        sl.get_session_by_agent_id = lambda aid: None
+        sl.load_saved_sessions = lambda: [
+            {"session_id": "s9", "agent_id": "submarine::0123456789ab"}]
+        sl.sync_list_to_session = lambda w, s: False
+        sl.focus_agent(object(), "submarine::0123456789ab")
+        fired = 0
+        while self.timers:
+            self.timers.pop(0)[1]()
+            fired += 1
+        self.assertEqual(fired, len(sl._POINT_RETRY_MS))

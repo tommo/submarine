@@ -1267,7 +1267,18 @@ def resume_saved(window, row: dict, focus: bool = True) -> bool:
         s.name = name
         if s.output:
             s.output.set_name(name)
+    if s:
+        reveal_in_list(window, s)
     return bool(s)
+
+
+def reveal_in_list(window, session) -> None:
+    """Point this window's Sessions list at a session that just became live
+    (a history row woke): caret and scroll follow it into CURRENT, focus
+    stays where it is."""
+    aid = getattr(session, "agent_id", None)
+    if window is not None and aid:
+        _point_list_at(window, aid)
 
 
 _last_open = (0.0, None)
@@ -1349,8 +1360,10 @@ def focus_agent(window, agent_id) -> bool:
                 target.bring_to_front()
             except Exception:
                 pass
-        return open_row(target, {"kind": "live", "agent_id": aid,
-                                 "session_id": getattr(live, "session_id", None)})
+        ok = open_row(target, {"kind": "live", "agent_id": aid,
+                               "session_id": getattr(live, "session_id", None)})
+        _point_list_at(target, aid)
+        return ok
     try:
         from core.agent_ids import canon_agent_ids
         for rec in load_saved_sessions() or []:
@@ -1360,6 +1373,24 @@ def focus_agent(window, agent_id) -> bool:
         pass
     sublime.status_message("Submarine: no session %s" % aid)
     return False
+
+
+_POINT_RETRY_MS = (150, 400, 900, 1600)
+
+
+def _point_list_at(window, agent_id, attempt=0) -> None:
+    """The window's Sessions list caret onto the session just jumped to.
+
+    A resumed session is only a CURRENT row after the list's next refresh,
+    so a miss retries a few times; the first hit stops it.
+    """
+    session = get_session_by_agent_id(agent_id)
+    if session is not None and sync_list_to_session(window, session):
+        return
+    if attempt < len(_POINT_RETRY_MS) and sublime is not None:
+        sublime.set_timeout(
+            lambda: _point_list_at(window, agent_id, attempt + 1),
+            _POINT_RETRY_MS[attempt])
 
 
 def _same_view(a, b) -> bool:
