@@ -783,7 +783,7 @@ def action_chat(params: dict, caller: Any = None) -> dict:
             session.send_now(prompt)
             data["action"] = "send_now"
         else:
-            session.queue_prompt(prompt)
+            session.queue_prompt(prompt, display=display)
             data["action"] = "queued"
     else:
         session.query(prompt, display_prompt=display)

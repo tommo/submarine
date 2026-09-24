@@ -36,17 +36,27 @@ class TestStampSenderPrompt(unittest.TestCase):
         stamped = sr.stamp_sender_prompt(
             "long body\nmore", sender_agent_id="agent-abc123")
         self.assertEqual(
-            sr.sender_display_prompt(stamped), "📬 from agent-abc123")
+            sr.sender_display_prompt(stamped), "📬 from agent-abc123: long body")
         self.assertEqual(
-            sr.sender_display_prompt("[from user]\nhi"), "📬 from user")
+            sr.sender_display_prompt("[from user]\nhi"), "📬 from user: hi")
         # Extras after the id: no stray "]" on the token; the name wins.
         full = sr.stamp_sender_prompt(
             "x", sender_agent_id="agent-abc123", sender_session_id="s9")
-        self.assertEqual(sr.sender_display_prompt(full), "📬 from agent-abc123")
+        self.assertEqual(sr.sender_display_prompt(full), "📬 from agent-abc123: x")
         named = sr.stamp_sender_prompt(
             "x", sender_agent_id="agent-abc123", sender_session_id="s9",
             sender_name="Bonsai UX")
-        self.assertEqual(sr.sender_display_prompt(named), "📬 from Bonsai UX")
+        self.assertEqual(sr.sender_display_prompt(named), "📬 from Bonsai UX: x")
+
+    def test_two_messages_from_one_sender_label_apart(self):
+        """Two sends queued behind a busy turn were one repeated chip."""
+        a = sr.stamp_sender_prompt("Baseline complete. Execute the cleanup.",
+                                   sender_agent_id="agent-abc123", sender_name="lead")
+        b = sr.stamp_sender_prompt("You can proceed now.",
+                                   sender_agent_id="agent-abc123", sender_name="lead")
+        self.assertNotEqual(sr.sender_display_prompt(a), sr.sender_display_prompt(b))
+        long = sr.stamp_sender_prompt("w " * 200, sender_agent_id="agent-abc123")
+        self.assertLessEqual(len(sr.sender_display_prompt(long)), 90)
 
 
 if __name__ == "__main__":

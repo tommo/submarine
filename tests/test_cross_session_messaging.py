@@ -122,7 +122,7 @@ class CliSenderStampTest(unittest.TestCase):
             "please check", "📨 please check")
         self.assertTrue(prompt.startswith("[from agent submarine::00000000000a]"))
         self.assertIn("name=planner", prompt)
-        self.assertEqual(shown, "📬 from planner")
+        self.assertEqual(shown, "📬 from planner: please check")
 
     def test_a_human_caller_is_not(self):
         from features.session_control import _stamp_agent_sender

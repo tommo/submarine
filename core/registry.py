@@ -127,23 +127,35 @@ def stamp_sender_prompt(
 
 def sender_display_prompt(stamped):
     # type: (str) -> str
-    """Short transcript label for a stamped send_to_session body."""
-    first = (stamped or "").split("\n", 1)[0].strip()
+    """Short label (turn line, queue chip) for a stamped send_to_session body:
+    who sent it and how it starts — two messages from one sender queued
+    together read as one repeated chip without the body."""
+    first, _nl, body = (stamped or "").partition("\n")
+    first = first.strip()
     m = _SENDER_LINE.match(first)
     if not m:
         return first[:50] if first else "📬"
     if m.group(1) == "user":
-        return "📬 from user"
-    # "[from agent <id>] session_id=… name=<name…>" — the header's closing
-    # bracket sits right after the id, so strip it off the token (a stray
-    # "]" showed on every stamp that carried extras); prefer the name.
-    head = first[len("[from agent"):].strip()
-    ident, _sep, extras = head.partition("]")
-    token = (ident.split() or ["agent"])[0]
-    name = extras.split("name=", 1)[1].strip() if "name=" in extras else ""
-    if name:
-        return "📬 from %s" % name[:40]
-    return "📬 from %s" % token
+        who = "user"
+    else:
+        # "[from agent <id>] session_id=… name=<name…>" — the header's closing
+        # bracket sits right after the id, so strip it off the token (a stray
+        # "]" showed on every stamp that carried extras); prefer the name.
+        head = first[len("[from agent"):].strip()
+        ident, _sep, extras = head.partition("]")
+        token = (ident.split() or ["agent"])[0]
+        name = extras.split("name=", 1)[1].strip() if "name=" in extras else ""
+        who = _clip_label(name, 32) if name else token
+    line = next((ln.strip() for ln in body.split("\n") if ln.strip()), "")
+    if not line:
+        return "📬 from %s" % who
+    return "📬 from %s: %s" % (who, _clip_label(line, 60))
+
+
+def _clip_label(text, n):
+    # type: (str, int) -> str
+    text = (text or "").strip()
+    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
 
 
 _legacy_view_ref_logged = False

@@ -63,7 +63,7 @@ class FakeSession(object):
     def query(self, prompt, display_prompt=None, **kw):
         self.calls.append(("query", prompt, display_prompt))
 
-    def queue_prompt(self, prompt):
+    def queue_prompt(self, prompt, display=None):
         self.calls.append(("queue", prompt))
 
     def send_now(self, prompt=""):

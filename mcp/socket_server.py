@@ -374,7 +374,7 @@ class MCPSocketServer:
             try:
                 if _session.working:
                     _log("%s:%s busy after init — queue_prompt" % (_tag, _vid))
-                    _session.queue_prompt(_prompt)
+                    _session.queue_prompt(_prompt, display=_display)
                 elif _display:
                     _session.query(_prompt, display_prompt=_display)
                 else:
@@ -1336,7 +1336,7 @@ class MCPSocketServer:
         aid = getattr(session, "agent_id", None)
         name = session.name or "(unnamed)"
         if session.working or getattr(session, "_compacting", False):
-            session.queue_prompt(prompt)
+            session.queue_prompt(prompt, display=display)
             return {
                 "sent": True, "queued": True, "agent_id": aid,
                 "name": name,
@@ -2188,7 +2188,7 @@ class MCPSocketServer:
                 if parent is not None:
                     try:
                         if parent.working:
-                            parent.queue_prompt(body)
+                            parent.queue_prompt(body, display="📬 Subsession complete")
                         else:
                             parent.query(body, display_prompt="📬 Subsession complete")
                         n += 1
@@ -2364,7 +2364,8 @@ class MCPSocketServer:
                 if child_busy else "Parent notified when free."
             ),
             "subsession_id": subsession_id,
-            "parent_agent_id": parent_agent_id,
+            # The parent this reaches — its current id, not a stale link.
+            "parent_agent_id": getattr(parent_session, "agent_id", None) or parent_agent_id,
             "result_summary": result_summary,
             "context_budget": budget,
             "context_summary": budget_line,

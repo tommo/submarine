@@ -158,6 +158,28 @@ def _clip(s: str, n: int = 70) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def _aid(value) -> str:
+    """An agent id as the sheet shows it: whole and canonical, so Cmd+click
+    finds it (never clipped — `submarine::0` names nobody)."""
+    try:
+        from core.agent_ids import canon_agent_id
+        return str(canon_agent_id(str(value)))
+    except Exception:
+        return str(value)
+
+
+def _owner_session(output):
+    """The session whose sheet `output` is (bound or viewless)."""
+    try:
+        from core.registry import default_registry
+        for s in default_registry.iter_sessions():
+            if getattr(s, "output", None) is output:
+                return s
+    except Exception:
+        pass
+    return None
+
+
 def _tool_input(tool) -> dict:
     return tool.tool_input if isinstance(tool.tool_input, dict) else {}
 
@@ -525,6 +547,24 @@ def _task(view, tool) -> str:
     return ""
 
 
+def _send_message(view, tool) -> str:
+    """Claude Code's SendMessage: a follow-up to one of its own agents (a
+    subagent it spawned, a teammate) — `→ explorer · check the tests too`."""
+    inp = _tool_input(tool)
+    to = str(inp.get("to") or inp.get("recipient") or inp.get("agent_id")
+             or inp.get("name") or "").strip()
+    msg = inp.get("message") or inp.get("content") or inp.get("prompt") or ""
+    if not isinstance(msg, str):
+        msg = str(msg)
+    msg = " ".join(msg.split())
+    bits = []
+    if to:
+        bits.append("→ %s" % to[:40])
+    if msg:
+        bits.append(_clip(msg, 60))
+    return _join_bits(*bits)
+
+
 def _notebook_edit(view, tool) -> str:
     return ": %s" % tool.tool_input.get("notebook_path", "")
 
@@ -736,7 +776,7 @@ def _spawn_session(view, tool) -> str:
         bits.append("fork:self")
     fa = inp.get("fork_from_agent_id")
     if fa:
-        bits.append("fork:%s" % fa)
+        bits.append("fork:%s" % _aid(fa))
     ff = inp.get("fork_from_view_id")
     if ff is not None and not fa:
         bits.append("fork:view:%s" % ff)
@@ -755,7 +795,7 @@ def _send_to_session(view, tool) -> str:
     prompt = inp.get("prompt") or ""
     bits = []
     if aid:
-        bits.append(str(aid))
+        bits.append(_aid(aid))
     elif vid is not None:
         bits.append("view %s" % vid)
     if prompt:
@@ -776,7 +816,7 @@ def _read_session_edits(view, tool) -> str:
     lim = inp.get("limit")
     bits = []
     if aid:
-        bits.append(str(aid)[:12])
+        bits.append(_aid(aid))
     if off:
         bits.append("off %s" % off)
     if lim:
@@ -872,9 +912,18 @@ def _signal_complete(view, tool) -> str:
     summary = inp.get("result_summary") or ""
     bits = []
     if sid is not None:
-        bits.append("session %s" % sid)
+        bits.append("session %s" % _aid(sid))
     else:
         bits.append("self")
+    parent = None
+    if isinstance(tool.result, dict):
+        parent = tool.result.get("parent_agent_id")
+    if not parent:
+        # Before the result lands (and for an error result): the link the
+        # calling session holds.
+        parent = getattr(_owner_session(view), "parent_agent_id", None)
+    if parent:
+        bits.append("parent %s" % _aid(parent))
     if summary:
         bits.append(_clip(str(summary), 45))
     if tool.status == "done" and isinstance(tool.result, dict):
@@ -894,7 +943,7 @@ def _wait_for_subsession(view, tool) -> str:
     wake = inp.get("wake_prompt") or ""
     bits = []
     if sid:
-        bits.append(_clip(str(sid), 24))
+        bits.append(_aid(sid))
     if wake:
         bits.append(_clip(str(wake), 40))
     return _join_bits(*bits)
@@ -992,6 +1041,7 @@ TOOL_FORMATTERS = {
     "goal_verdict": _goal_verdict,
     "WebFetch": _webfetch,
     "Task": _task,
+    "SendMessage": _send_message,
     "Subagent": _task,
     "Agent": _task,
     "AgentSwarm": _task,
