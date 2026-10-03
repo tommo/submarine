@@ -79,6 +79,7 @@ BACKEND_ABBREV = {
     "pi": "Pi",
     "grok": "GR",
     "kimi": "KM",
+    "opencode": "OC",
 }
 BACKEND_LABELS = {
     "claude": "Claude",
@@ -86,6 +87,7 @@ BACKEND_LABELS = {
     "pi": "Pi",
     "grok": "Grok",
     "kimi": "Kimi Code",
+    "opencode": "opencode",
 }
 
 # ─── Timing ───────────────────────────────────────────────────────────────────
