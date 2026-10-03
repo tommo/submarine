@@ -192,7 +192,10 @@
         "args": { "key": "1" },
         "context": [
             { "key": "setting.submarine_output", "operator": "equal", "operand": true },
-            { "key": "setting.submarine_has_question", "operator": "equal", "operand": true }
+            { "key": "setting.submarine_has_question", "operator": "equal", "operand": true },
+            // A question forces input mode off; if a stale flag survives a
+            // re-opened composer, typing "o" / digits / Enter must not answer.
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
         ]
     },
     {
@@ -201,7 +204,10 @@
         "args": { "key": "2" },
         "context": [
             { "key": "setting.submarine_output", "operator": "equal", "operand": true },
-            { "key": "setting.submarine_has_question", "operator": "equal", "operand": true }
+            { "key": "setting.submarine_has_question", "operator": "equal", "operand": true },
+            // A question forces input mode off; if a stale flag survives a
+            // re-opened composer, typing "o" / digits / Enter must not answer.
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
         ]
     },
     {
@@ -210,7 +216,10 @@
         "args": { "key": "3" },
         "context": [
             { "key": "setting.submarine_output", "operator": "equal", "operand": true },
-            { "key": "setting.submarine_has_question", "operator": "equal", "operand": true }
+            { "key": "setting.submarine_has_question", "operator": "equal", "operand": true },
+            // A question forces input mode off; if a stale flag survives a
+            // re-opened composer, typing "o" / digits / Enter must not answer.
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
         ]
     },
     {
@@ -219,7 +228,10 @@
         "args": { "key": "4" },
         "context": [
             { "key": "setting.submarine_output", "operator": "equal", "operand": true },
-            { "key": "setting.submarine_has_question", "operator": "equal", "operand": true }
+            { "key": "setting.submarine_has_question", "operator": "equal", "operand": true },
+            // A question forces input mode off; if a stale flag survives a
+            // re-opened composer, typing "o" / digits / Enter must not answer.
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
         ]
     },
     {
@@ -228,7 +240,10 @@
         "args": { "key": "o" },
         "context": [
             { "key": "setting.submarine_output", "operator": "equal", "operand": true },
-            { "key": "setting.submarine_has_question", "operator": "equal", "operand": true }
+            { "key": "setting.submarine_has_question", "operator": "equal", "operand": true },
+            // A question forces input mode off; if a stale flag survives a
+            // re-opened composer, typing "o" / digits / Enter must not answer.
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
         ]
     },
     {
@@ -237,7 +252,10 @@
         "args": { "key": "enter" },
         "context": [
             { "key": "setting.submarine_output", "operator": "equal", "operand": true },
-            { "key": "setting.submarine_has_question", "operator": "equal", "operand": true }
+            { "key": "setting.submarine_has_question", "operator": "equal", "operand": true },
+            // A question forces input mode off; if a stale flag survives a
+            // re-opened composer, typing "o" / digits / Enter must not answer.
+            { "key": "setting.submarine_input_mode", "operator": "equal", "operand": false }
         ]
     },
     // Submit on Enter (default mode: submit_with_modifier=false)
