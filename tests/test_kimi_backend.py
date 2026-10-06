@@ -281,3 +281,30 @@ class AntigravityForkTest(unittest.TestCase):
             antigravity_main.ag.fork_conversation = orig
         self.assertEqual(loaded, ["new-id"])
         self.assertFalse(b._resumed)
+
+
+class AcpOutputBodyTest(unittest.TestCase):
+    """A rawOutput object shows its body, not itself as JSON (Antigravity's
+    run_command: commandLine, workingDir, exitCode, combinedOutput…)."""
+
+    def _text(self, raw, tool="Bash"):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for p in (os.path.join(root, "bridge"), root):
+            if p not in sys.path:
+                sys.path.insert(0, p)
+        from acp.tools import ToolsMixin
+        return ToolsMixin._extract_tool_content({"rawOutput": raw}, tool)
+
+    def test_the_body_is_shown(self):
+        raw = {"commandLine": "pil man show knowledge.md", "workingDir": "/w",
+               "exitCode": 0, "exit_code": 0, "combinedOutput": "doc text\n",
+               "formatted_output": "doc text\n"}
+        self.assertEqual(self._text(raw), "doc text\n")
+
+    def test_a_failed_command_says_its_exit_code(self):
+        raw = {"commandLine": "pil man show knowledge", "exitCode": 1,
+               "combinedOutput": "Multiple matches:\nknowledge.md\n"}
+        self.assertEqual(self._text(raw), "Multiple matches:\nknowledge.md\n[exit 1]")
+
+    def test_an_unknown_shape_is_still_json(self):
+        self.assertIn('"weird": 1', self._text({"weird": 1}))

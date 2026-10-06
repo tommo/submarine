@@ -667,6 +667,17 @@ class ToolsMixin:
                 joined = stdout + (("\n" + stderr) if stderr.strip() else "")
                 if joined:
                     return joined
+            # Agents that name the body differently (Antigravity:
+            # formatted_output / combinedOutput, with commandLine, workingDir,
+            # exitCode beside it): show the body, not the whole object as JSON.
+            for key in ("formatted_output", "combinedOutput", "combined_output",
+                        "output", "content", "text", "body"):
+                body = raw.get(key)
+                if isinstance(body, str) and body.strip():
+                    code = raw.get("exitCode", raw.get("exit_code"))
+                    if isinstance(code, int) and code != 0:
+                        body = body.rstrip("\n") + "\n[exit %d]" % code
+                    return body
             try:
                 return json.dumps(raw, ensure_ascii=False, indent=2)
             except Exception:
