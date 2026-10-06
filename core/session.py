@@ -1312,9 +1312,18 @@ class Session:
         surfaces one round late.
         """
         return bool(
-            self.backend == "claude" and self.working and self.client
+            self._on_claude_bridge() and self.working and self.client
             and getattr(self.client, "is_alive", lambda: True)()
             and getattr(self.turn, "kind", "") != "interrupting")
+
+    def _on_claude_bridge(self):
+        # type: () -> bool
+        """Claude Code underneath — the claude backend and every custom
+        provider on its bridge (DeepSeek, GLM…). Steering is the bridge's
+        streaming input, not the provider's."""
+        spec = self._spec()
+        script = getattr(spec, "bridge_script", "") if spec is not None else ""
+        return script == "claude_main.py" or (not script and self.backend == "claude")
 
     def steer_now(self, prompt=""):
         # type: (str) -> bool
@@ -1350,7 +1359,13 @@ class Session:
         self._update_queue_phantom()
 
         def _on_inj(r, p=prompt, shown=display, m=meta):
-            res = r.get("result") if isinstance(r, dict) and isinstance(r.get("result"), dict) else {}
+            # The RPC client hands callbacks the bare result ({"status": "ok"}),
+            # not the envelope. Reading r["result"] made every successful steer
+            # look failed: the message went in, came back to the queue, was
+            # sent again on each press, and once more as its own turn.
+            res = r if isinstance(r, dict) else {}
+            if isinstance(res.get("result"), dict):
+                res = res["result"]
             status = res.get("status")
             if isinstance(r, dict) and not r.get("error") and status in ("ok", "queued"):
                 if status == "queued":
@@ -1371,6 +1386,22 @@ class Session:
             self._update_queue_phantom()
             if not self.working:
                 self._fire_next_queued()
+            elif status == "idle":
+                # The bridge has no turn running, yet the sheet is busy: a
+                # turn that never got its closer (a /compact, a lost result).
+                # Waiting for its end left the message — and its chip —
+                # stuck for good. After a grace (the real closer may be in
+                # flight: closing now would let it land on the next turn),
+                # close the stale turn; this message goes out next.
+                gen = self.turn.gen
+
+                def _close_stale(g=gen):
+                    if not self.working or self.turn.gen != g:
+                        return
+                    log_plugin("send-now: bridge idle under a busy sheet — "
+                               "closing the stale turn")
+                    self._on_done({"status": "complete"}, _expected_gen=g)
+                self.scheduler.call_later(1500, _close_stale)
 
         self._send("inject_message", {"message": message}, _on_inj)
         return True

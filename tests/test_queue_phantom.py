@@ -196,7 +196,7 @@ class TestQueueAfterInterrupt(unittest.TestCase):
         self.assertTrue(s.steer_now("look at b.py too"))
         _m, p, cb = [c for c in client.sent if c[0] == "inject_message"][-1]
         self.assertEqual(p, {"message": "look at b.py too"})
-        cb({"result": {"status": "ok"}})
+        cb({"status": "ok"})
         self.assertEqual(s.output.steers, ["look at b.py too"])
         self.assertEqual(s._queued_prompts, [])
 
@@ -206,7 +206,7 @@ class TestQueueAfterInterrupt(unittest.TestCase):
         s.queue_prompt("later")
         s.steer_now("urgent")
         _m, _p, cb = [c for c in client.sent if c[0] == "inject_message"][-1]
-        cb({"result": {"status": "idle"}})
+        cb({"status": "idle"})
         self.assertEqual(s._queued_prompts, ["urgent", "later"])
         self.assertEqual(s.output.steers, [])
 
@@ -275,3 +275,72 @@ class TestSteerRow(unittest.TestCase):
         conv.events = ["Reading a.py\n", SteerNote("check b.py too"), "Now b.py\n"]
         body = r.conversation_body(conv)
         self.assertIn("Reading a.py\n  ↪ check b.py too\nNow b.py\n", body)
+
+
+class SteerOnClaudeBridgeProvidersTest(unittest.TestCase):
+    """A custom provider runs on the Claude bridge: send-now steers there too
+    (it checked the backend name, fell back to interrupt, and the queued
+    chip stayed until the cancel finished)."""
+
+    SETTINGS = {"custom_providers": {"deepseek_flash": {
+        "label": "DeepSeek Flash", "base_url": "https://api.deepseek.com/anthropic",
+        "auth_env_var": "DEEPSEEK_API_KEY", "opus_model": "deepseek-v4-flash",
+        "sonnet_model": "deepseek-v4-flash", "haiku_model": "deepseek-v4-flash"}}}
+
+    def test_a_provider_session_steers_and_the_chip_clears(self):
+        from tests.fakes import FakeClient, make_session
+        c = FakeClient()
+        s = make_session(client=c, initialized=True, backend="deepseek_flash",
+                         settings=self.SETTINGS)
+        s.query("first")
+        s.queue_prompt("later")
+        self.assertTrue(s.can_steer())
+        s._on_queue_phantom_navigate("send_now")
+        self.assertEqual(s.chrome.queues[-1], [])
+        self.assertTrue(any(m == "inject_message" for m, _p, _cb in c.sent))
+        self.assertFalse(any(m == "interrupt" for m, _p, _cb in c.sent))
+
+    def test_grok_still_interrupts(self):
+        from tests.fakes import FakeClient, make_session
+        s = make_session(client=FakeClient(), initialized=True, backend="grok")
+        s.query("first")
+        self.assertFalse(s.can_steer())
+
+
+class SteerIntoAStaleTurnTest(unittest.TestCase):
+    """The bridge has no turn running but the sheet is busy (a /compact that
+    never closed): send-now's message used to go back to the queue and wait
+    for a turn end that never came. Now the stale turn closes and it goes."""
+
+    def test_the_message_goes_out_and_the_chip_clears(self):
+        from tests.fakes import FakeClient, make_session
+        c = FakeClient()
+        s = make_session(client=c, initialized=True, backend="claude")
+        s.query("first")                       # its closer never arrives
+        s.queue_prompt("urgent")
+        s._on_queue_phantom_navigate("send_now")
+        _m, _p, cb = [x for x in c.sent if x[0] == "inject_message"][-1]
+        cb({"status": "idle"})
+        s.scheduler.fire_all()
+        queries = [p.get("prompt") for m, p, _cb in c.sent if m == "query"]
+        self.assertEqual(queries[-1], "urgent")
+        self.assertEqual(s._queued_prompts, [])
+        self.assertEqual(s.chrome.queues[-1], [])
+        self.assertTrue(s.working, "the message is the running turn now")
+
+
+class SteerStaleGraceTest(unittest.TestCase):
+    def test_a_real_closer_within_the_grace_wins(self):
+        from tests.fakes import FakeClient, make_session
+        c = FakeClient()
+        s = make_session(client=c, initialized=True, backend="claude")
+        s.query("first")
+        s.queue_prompt("urgent")
+        s._on_queue_phantom_navigate("send_now")
+        _m, _p, icb = [x for x in c.sent if x[0] == "inject_message"][-1]
+        icb({"status": "idle"})
+        _m, _p, qcb = [x for x in c.sent if x[0] == "query"][0]
+        qcb({"status": "complete"})            # the turn's own closer
+        s.scheduler.fire_all()                 # the grace check finds it handled
+        queries = [p.get("prompt") for m, p, _cb in c.sent if m == "query"]
+        self.assertEqual(queries, ["first", "urgent"], "sent once, not twice")

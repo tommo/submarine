@@ -791,7 +791,9 @@ class SubmarineSelectModelCommand(sublime_plugin.WindowCommand):
                         msg = err.get("message") if isinstance(err, dict) else str(err)
                         sublime.status_message("Submarine: %s" % (msg or "model not set"))
                         return
-                    res = resp.get("result") if isinstance(resp, dict) else None
+                    res = resp if isinstance(resp, dict) else None
+                    if isinstance((res or {}).get("result"), dict):
+                        res = res["result"]   # envelope shape, if a caller wraps it
                     applied = (res or {}).get("model") if isinstance(res, dict) else None
                     _apply_session_model(s, applied or _real)
                     sublime.status_message("Model: %s" % (applied or _mid))
