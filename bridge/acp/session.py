@@ -530,6 +530,10 @@ class SessionMixin:
             "cwd": self.cwd,
         }
         load_params["mcpServers"] = list(mcp_servers or [])
+        if self._additional_dirs:
+            # A resumed session keeps its extra roots (ACP takes them on load
+            # as on new; Kimi advertises it). Sent only on new, a wake lost them.
+            load_params["additionalDirectories"] = list(self._additional_dirs)
         self._loading_session = True
         try:
             try:

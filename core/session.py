@@ -722,7 +722,7 @@ class Session:
 
         init_params = {
             "cwd": cwd,
-            "additional_dirs": list(self.additional_dirs),
+            "additional_dirs": self._working_dirs(cwd),
             "allowed_tools": allowed_tools,
             "permission_mode": permission_mode,
             "agent_id": self.agent_id,
@@ -1830,6 +1830,44 @@ class Session:
         if self.working:
             return False, "the session is mid-turn — interrupt it first"
         return _restart("")
+
+    def _working_dirs(self, cwd):
+        # type: (str) -> List[str]
+        """Extra working directories for the agent, as sublime-claude sent
+        them: the window's other project folders, the project file's
+        `settings.claude_additional_dirs` / `submarine_additional_dirs`
+        (~ expanded), then what the session was built with (the plugin
+        setting, the skills folder). Read at every start, so a folder added
+        to the window reaches the next wake. The rewrite had kept only the
+        last part: a multi-folder project gave every agent its first folder.
+        """
+        out = []  # type: List[str]
+
+        def add(d):
+            d = os.path.expanduser(str(d or "").strip())
+            if d and d != cwd and d not in out:
+                out.append(d)
+
+        win = getattr(self, "window", None)
+        try:
+            folders = list(win.folders() or []) if win is not None else []
+        except Exception:
+            folders = []
+        for d in folders[1:]:
+            add(d)
+        try:
+            data = (win.project_data() if win is not None else None) or {}
+        except Exception:
+            data = {}
+        psettings = data.get("settings") or {} if isinstance(data, dict) else {}
+        for key in ("submarine_additional_dirs", "claude_additional_dirs"):
+            extra = psettings.get(key) if isinstance(psettings, dict) else None
+            if isinstance(extra, list):
+                for d in extra:
+                    add(d)
+        for d in self.additional_dirs:
+            add(d)
+        return out
 
     def _shutdown_client(self):
         # type: () -> None

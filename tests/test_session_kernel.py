@@ -492,3 +492,34 @@ class TestNoSublimeImport(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkingDirsTest(unittest.TestCase):
+    """The agent gets the window's other project folders and the project's
+    extra dirs, as sublime-claude sent them (the rewrite had dropped them)."""
+
+    def test_window_folders_and_project_settings(self):
+        import types
+        from tests.fakes import FakeClient, make_session
+        s = make_session(client=FakeClient(), resume_id="sid-dirs", cwd="/p/main")
+        s.window = types.SimpleNamespace(
+            folders=lambda: ["/p/main", "/p/packages", "/p/tools"],
+            project_data=lambda: {"settings": {"claude_additional_dirs": ["~/notes", "/p/tools"]}})
+        s.additional_dirs = ["/plugin/skills"]
+        dirs = s._working_dirs("/p/main")
+        self.assertEqual(dirs[:2], ["/p/packages", "/p/tools"])
+        self.assertIn(os.path.expanduser("~/notes"), dirs)
+        self.assertEqual(dirs[-1], "/plugin/skills")
+        self.assertEqual(len(dirs), len(set(dirs)), "no duplicates")
+        self.assertNotIn("/p/main", dirs, "the cwd is not repeated")
+
+    def test_initialize_sends_them(self):
+        import types
+        from tests.fakes import FakeClient, make_session
+        c = FakeClient()
+        s = make_session(client=c, resume_id="sid-dirs2", cwd="/p/main")
+        s.window = types.SimpleNamespace(folders=lambda: ["/p/main", "/p/packages"],
+                                         project_data=lambda: {})
+        s.start()
+        params = [p for m, p, _cb in c.sent if m == "initialize"][-1]
+        self.assertIn("/p/packages", params["additional_dirs"])
