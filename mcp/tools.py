@@ -518,7 +518,10 @@ TOOL_TABLE = {
             "\n"
             "The target sees a [from agent <your agent_id>] header (or "
             "[from user] if no caller session). Reply with "
-            "send_to_session(agent_id=that id). Sleeping workers auto-wake. "
+            "send_to_session(agent_id=that id). Sleeping workers auto-wake; "
+            "your own CLOSED subsessions (list_sessions marks them closed) are "
+            "reopened by agent_id with their history — reuse them instead of "
+            "spawning. "
             "Mid-turn: queued (sent=true); do not retry the same prompt. "
             "Prefer reuse over spawn."
         ),

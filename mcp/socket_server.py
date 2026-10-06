@@ -1327,10 +1327,9 @@ class MCPSocketServer:
         if agent_id:
             session = _get_session_by_agent_id(str(agent_id))
             if not session:
-                return {
-                    "error": "Session not found for agent_id %r" % agent_id,
-                    "hint": 'Call list_sessions(scope="all")',
-                }
+                session, err = self._wake_saved_child(str(agent_id))
+                if err:
+                    return err
         else:
             # Same resolution the sessions CLI uses: every window, live only.
             resolve = _try_import("features.session_control._resolve_live")
@@ -1384,6 +1383,62 @@ class MCPSocketServer:
             return {"error": "Session not initialized", "agent_id": aid}
         session.query(prompt, display_prompt=display)
         return {"sent": True, "agent_id": aid, "name": name}
+
+    def _wake_saved_child(self, agent_id: str):
+        """(session, None) for the caller's own subsession that is closed but
+        still in the session index, resumed under the same agent_id; else
+        (None, error). A closed child used to be "not found" — the parent
+        had to spawn a fresh one and lost the child's history.
+        Only the caller's own children: waking any closed session from the
+        history on another agent's word is not this tool's job.
+        """
+        canon = _try_import("core.agent_ids.canon_agent_id") or (lambda v: v)
+        load = _try_import("core.records.load_saved_sessions")
+        want = canon(agent_id)
+        rows = []
+        if load is not None:
+            try:
+                rows = load() or []
+            except Exception:
+                rows = []
+        row = next((r for r in rows if canon(r.get("agent_id")) == want), None)
+        if not row or not row.get("session_id"):
+            return None, {
+                "error": "Session not found for agent_id %r" % agent_id,
+                "hint": 'Call list_sessions(scope="all")',
+            }
+        caller_aid = canon(self._caller_agent_id) if self._caller_agent_id else None
+        caller = _get_session_by_agent_id(str(caller_aid)) if caller_aid else None
+        children = set(canon(c) for c in (getattr(caller, "child_agent_ids", None) or []))
+        if not caller_aid or (canon(row.get("parent_agent_id")) != caller_aid
+                              and want not in children):
+            return None, {
+                "error": "agent_id %r is closed and is not your subsession" % agent_id,
+                "hint": "Only your own subsessions are woken from the session index",
+            }
+        create_session = (
+            _try_import("commands.session_cmds.create_session")
+            or _try_import("core.host.create_session")
+        )
+        window = self._get_window()
+        if create_session is None or not window:
+            return None, {"error": "cannot reopen %r here" % agent_id}
+        try:
+            session = create_session(
+                window, resume_id=row["session_id"],
+                backend=row.get("backend") or "claude", focus=False,
+                show=_parent_in_focus(window, caller), model=row.get("model"))
+        except Exception as e:
+            return None, {"error": "could not reopen %r: %s" % (agent_id, e)}
+        name = row.get("name")
+        if session is not None and name and name != "(unnamed)":
+            session.name = name
+            try:
+                session.output.set_name(name)
+            except Exception:
+                pass
+        _log("send_to_session: woke closed subsession %s (%s)" % (agent_id, name))
+        return session, None
 
     @staticmethod
     def _session_context_budget(session) -> dict:
@@ -1476,6 +1531,33 @@ class MCPSocketServer:
                 "forkable": bool(getattr(session, "session_id", None)),
                 "context_budget": budget,
             })
+        # Closed children still in the session index: send_to_session wakes
+        # them (history kept), so the parent should know they exist.
+        if parent_agent_id:
+            canon = _try_import("core.agent_ids.canon_agent_id") or (lambda v: v)
+            load = _try_import("core.records.load_saved_sessions")
+            live_ids = {canon(r["agent_id"]) for r in sessions}
+            mine = canon(parent_agent_id)
+            try:
+                saved = load() if load is not None else []
+            except Exception:
+                saved = []
+            for row in saved or []:
+                aid = canon(row.get("agent_id"))
+                if (not aid or aid in live_ids or not row.get("session_id")
+                        or canon(row.get("parent_agent_id")) != mine):
+                    continue
+                name = " ".join(str(row.get("name") or "(unnamed)").split())
+                lines.append("✕ %s %s · closed (send_to_session wakes it)" % (aid, name))
+                sessions.append({
+                    "agent_id": aid,
+                    "name": name,
+                    "closed": True,
+                    "parent_agent_id": parent_agent_id,
+                    "backend": row.get("backend"),
+                    "forkable": False,
+                })
+                live_ids.add(aid)
         if not lines:
             if caller is None and not parent_agent_id:
                 return {
