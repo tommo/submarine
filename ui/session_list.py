@@ -30,7 +30,9 @@ from .session_api import (
     iter_sessions,
     load_bookmarks,
     load_bookmark_records,
+    load_order,
     load_todos,
+    save_order,
     save_todos,
     load_saved_sessions,
     place_in_last_session_split,
@@ -251,6 +253,26 @@ def _section_sort_key(row: dict) -> Tuple[int, float]:
     if row.get("kind") == "live":
         band = _LIVE_BAND.get(row.get("status") or "", 1)
     return (band, -access_ts(row))
+
+
+def order_key(row: dict) -> str:
+    """The key a manual order is saved under: agent_id (stable across a
+    resume), else the session id."""
+    return str(row.get("agent_id") or row.get("session_id") or "")
+
+
+def _ordered_sort_key(order: Optional[dict]):
+    """Rows the user placed (Alt+Up/Down) first, in their order; the rest
+    after them, by the usual band and recency."""
+    order = order or {}
+
+    def key(row):
+        rank = order.get(order_key(row))
+        if rank is not None:
+            return (0, rank, 0.0)
+        band, rec = _section_sort_key(row)
+        return (1, band, rec)
+    return key
 
 
 def _mark(status: str) -> str:
@@ -859,7 +881,8 @@ def tree_prefix(depth: int) -> str:
     return (" " * (TREE_INDENT * vis)) + CHILD_MARK
 
 
-def tree_order(rows: List[dict], starred: Optional[set] = None) -> List[dict]:
+def tree_order(rows: List[dict], starred: Optional[set] = None,
+               order: Optional[dict] = None) -> List[dict]:
     """Forest-order a section; attach ``depth`` on each copied row.
 
     Parent link is ``parent_agent_id``. A child whose parent is missing from
@@ -878,6 +901,7 @@ def tree_order(rows: List[dict], starred: Optional[set] = None) -> List[dict]:
     if n == 0:
         return []
     ids = set(starred or ())
+    skey = _ordered_sort_key(order)
 
     by_aid = {}  # type: Dict[str, int]
     for i, r in enumerate(src):
@@ -914,7 +938,7 @@ def tree_order(rows: List[dict], starred: Optional[set] = None) -> List[dict]:
         parent_of[i] = p
 
     for i in range(n):
-        kids[i].sort(key=lambda j, _src=src: _section_sort_key(_src[j]))
+        kids[i].sort(key=lambda j, _src=src: skey(_src[j]))
 
     def has_starred_ancestor(i: int) -> bool:
         cur = parent_of[i]
@@ -930,7 +954,7 @@ def tree_order(rows: List[dict], starred: Optional[set] = None) -> List[dict]:
         i for i in range(n)
         if _pinned(src[i], ids) and not has_starred_ancestor(i)
     ]
-    leaders.sort(key=lambda i: _section_sort_key(src[i]))
+    leaders.sort(key=lambda i: skey(src[i]))
     leader_set = set(leaders)
     for i in leaders:
         p = parent_of[i]
@@ -942,7 +966,7 @@ def tree_order(rows: List[dict], starred: Optional[set] = None) -> List[dict]:
         i for i in range(n)
         if parent_of[i] is None and i not in leader_set
     ]
-    rest_roots.sort(key=lambda i: _section_sort_key(src[i]))
+    rest_roots.sort(key=lambda i: skey(src[i]))
     ordered_roots = leaders + rest_roots
 
     out = []  # type: List[dict]
@@ -961,7 +985,7 @@ def tree_order(rows: List[dict], starred: Optional[set] = None) -> List[dict]:
     for ridx in ordered_roots:
         walk(ridx, 0)
     leftover = [i for i in range(n) if i not in visited]
-    leftover.sort(key=lambda i: _section_sort_key(src[i]))
+    leftover.sort(key=lambda i: skey(src[i]))
     for i in leftover:
         walk(i, 0)
     return out
@@ -994,7 +1018,8 @@ def _fmt_row(r: dict, starred: set, compact: bool = False, cols: int = 0) -> str
 
 def render_list(live: List[dict], here: List[dict], other: List[dict],
                 starred: Optional[set] = None,
-                cols: int = 0, todo: Optional[set] = None) -> Tuple[str, List[dict]]:
+                cols: int = 0, todo: Optional[set] = None,
+                order: Optional[dict] = None) -> Tuple[str, List[dict]]:
     starred = starred or set()
     todo = todo or set()
     compact = use_compact(cols)
@@ -1017,7 +1042,7 @@ def render_list(live: List[dict], here: List[dict], other: List[dict],
             rec["section"] = title
             # Where the row lives when it is not parked: closing a TODO
             # row does what closing it there would.
-            rec["home"] = (homes or {}).get(id(r), title)
+            rec["home"] = (homes or {}).get(order_key(r), title)
             index.append(rec)
         lines.append("")
 
@@ -1027,12 +1052,12 @@ def render_list(live: List[dict], here: List[dict], other: List[dict],
 
     parked = [r for r in live if is_todo(r)] + [r for r in here if is_todo(r)]
     if parked:
-        homes = {id(r): "CURRENT" for r in live}
-        homes.update({id(r): "HISTORY" for r in here})
-        add_section("TODO", parked, _fmt_row, homes)
+        homes = {order_key(r): "CURRENT" for r in live}
+        homes.update({order_key(r): "HISTORY" for r in here})
+        add_section("TODO", tree_order(parked, starred, order), _fmt_row, homes)
         live = [r for r in live if not is_todo(r)]
         here = [r for r in here if not is_todo(r)]
-    add_section("CURRENT", tree_order(live, starred), _fmt_row)
+    add_section("CURRENT", tree_order(live, starred, order), _fmt_row)
     add_section("HISTORY", tree_order(here, starred), _fmt_row)
     return "\n".join(lines).rstrip() + "\n", index
 
@@ -1043,6 +1068,7 @@ def build_for_window(window, cols: int = 0) -> Tuple[str, List[dict]]:
         cwd = window.folders()[0]
     starred = load_bookmarks(cwd or None)
     todo = load_todos(cwd or None)
+    order = load_order(cwd or None)
     # Unused live sheets stay in CURRENT so you can switch away; close drops
     # them. Empty HISTORY rows are still omitted (except starred).
     live = collect_live(window)
@@ -1066,7 +1092,7 @@ def build_for_window(window, cols: int = 0) -> Tuple[str, List[dict]]:
         have.update(row_ids(r))
     here = _include_starred_saved(here, have, cwd, starred | todo)
     here = drop_empty_sessions(here, starred | todo)
-    return render_list(live, here, [], starred, cols=cols, todo=todo)
+    return render_list(live, here, [], starred, cols=cols, todo=todo, order=order)
 
 
 def _include_starred_saved(here: List[dict], live_ids: set, cwd: str,
@@ -2531,6 +2557,7 @@ def list_state_key(window, cols: int):
     try:
         starred = tuple(sorted(load_bookmarks(cwd or None) or ()))
         starred += ("todo:",) + tuple(sorted(load_todos(cwd or None) or ()))
+        starred += ("order:",) + tuple(sorted((load_order(cwd or None) or {}).items()))
     except Exception:
         starred = ()
     try:
@@ -3064,7 +3091,7 @@ class SubmarineSessionListStarCommand(sublime_plugin.TextCommand):
     """Toggle bookmark for the session under the caret; with `todo`, park
     it in (or take it out of) the TODO section instead."""
 
-    def run(self, edit, todo=False):
+    def run(self, edit, todo=False, move=0):
         if not self.view.settings().get(SETTING):
             return
         raw = self.view.settings().get(ROWS_KEY) or "[]"
@@ -3088,6 +3115,9 @@ class SubmarineSessionListStarCommand(sublime_plugin.TextCommand):
                 cwd = folders[0]
         except Exception:
             cwd = ""
+        if move:
+            self._move(win, index, row, cwd, 1 if move > 0 else -1)
+            return
         record = {
             "name": row.get("name"),
             "backend": row.get("backend"),
@@ -3125,6 +3155,37 @@ class SubmarineSessionListStarCommand(sublime_plugin.TextCommand):
         _place_caret_on_session(self.view, sid, kind=row.get("kind"))
         sublime.status_message(
             ("★ Starred: {}" if now else "☆ Unstarred: {}").format(name))
+
+    def _move(self, win, index, row, cwd, step):
+        """Alt+Up/Down: swap the row with its neighbour among its siblings
+        (same section, same parent; a tree moves with its root). The whole
+        section is ranked as shown, so nothing else shifts."""
+        section = row.get("section")
+        if section not in ("CURRENT", "TODO"):
+            return                      # HISTORY stays by recency
+        depth = row.get("depth") or 0
+        parent = row.get("parent_agent_id") if depth else None
+        shown = [r for r in index if r.get("section") == section and order_key(r)]
+        sibs = [r for r in shown if (r.get("depth") or 0) == depth
+                and (not depth or r.get("parent_agent_id") == parent)]
+        keys = [order_key(r) for r in sibs]
+        me = order_key(row)
+        if me not in keys:
+            return
+        i = keys.index(me)
+        j = i + step
+        if j < 0 or j >= len(keys):
+            return
+        try:
+            order = dict(load_order(cwd or None) or {})
+        except Exception:
+            order = {}
+        for n, r in enumerate(shown):
+            order[order_key(r)] = float(n)
+        order[keys[i]], order[keys[j]] = order[keys[j]], order[keys[i]]
+        save_order(order, cwd or None)
+        refresh_session_list(win)
+        _place_caret_on_session(self.view, row.get("session_id"), kind=row.get("kind"))
 
     def _toggle_todo(self, win, row, sid, cwd, record):
         try:

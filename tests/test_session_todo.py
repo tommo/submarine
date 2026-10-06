@@ -73,3 +73,59 @@ class TodoStoreTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ManualOrderTest(unittest.TestCase):
+    """Alt+Up/Down: a row swaps with its sibling; the saved order wins over
+    band and recency, rows without one follow in the usual order."""
+
+    def _live(self, sid, ts, parent=None):
+        return _row(sid, kind="live", status="ready", last_access=ts,
+                    parent_agent_id=parent)
+
+    def _names(self, live, order):
+        _t, index = sl.render_list(live, [], [], set(), cols=100, order=order)
+        return [r["session_id"] for r in index if r["section"] == "CURRENT"], index
+
+    def _move(self, index, sid, step):
+        saved = {}
+        cmd = sl.SubmarineSessionListStarCommand.__new__(sl.SubmarineSessionListStarCommand)
+        cmd.view = None
+        orig = (sl.load_order, sl.save_order, sl.refresh_session_list, sl._place_caret_on_session)
+        sl.load_order = lambda cwd=None: {}
+        sl.save_order = lambda order, cwd=None: saved.update(order) or True
+        sl.refresh_session_list = lambda win: None
+        sl._place_caret_on_session = lambda *a, **k: None
+        try:
+            row = next(r for r in index if r["session_id"] == sid)
+            cmd._move(object(), index, row, "", step)
+        finally:
+            sl.load_order, sl.save_order, sl.refresh_session_list, sl._place_caret_on_session = orig
+        return saved
+
+    def test_move_up_and_down(self):
+        live = [self._live("a", 300), self._live("b", 200), self._live("c", 100)]
+        names, index = self._names(live, None)
+        self.assertEqual(names, ["a", "b", "c"])                 # recency
+        order = self._move(index, "c", -1)
+        names, index = self._names(live, order)
+        self.assertEqual(names, ["a", "c", "b"])
+        order = self._move(index, "a", 1)
+        self.assertEqual(self._names(live, order)[0], ["c", "a", "b"])
+
+    def test_edges_and_new_rows(self):
+        live = [self._live("a", 300), self._live("b", 200)]
+        _n, index = self._names(live, None)
+        self.assertEqual(self._move(index, "a", -1), {}, "top row cannot go up")
+        order = self._move(index, "b", -1)
+        live.append(self._live("new", 999))                    # newest, unplaced
+        self.assertEqual(self._names(live, order)[0], ["b", "a", "new"])
+
+    def test_a_child_moves_among_its_siblings_only(self):
+        live = [self._live("p", 300), self._live("k1", 200, parent="submarine::p"),
+                self._live("k2", 100, parent="submarine::p"), self._live("q", 50)]
+        names, index = self._names(live, None)
+        self.assertEqual(names, ["p", "k1", "k2", "q"])
+        order = self._move(index, "k2", -1)
+        self.assertEqual(self._names(live, order)[0], ["p", "k2", "k1", "q"])
+        self.assertEqual(self._move(index, "k1", -1), {}, "first child stays under its parent")

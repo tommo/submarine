@@ -424,6 +424,22 @@
         ]
     },
     {
+        "keys": ["alt+up"],
+        "command": "submarine_session_list_star",
+        "args": {"move": -1},
+        "context": [
+            { "key": "setting.submarine_session_list", "operator": "equal", "operand": true }
+        ]
+    },
+    {
+        "keys": ["alt+down"],
+        "command": "submarine_session_list_star",
+        "args": {"move": 1},
+        "context": [
+            { "key": "setting.submarine_session_list", "operator": "equal", "operand": true }
+        ]
+    },
+    {
         "keys": ["shift+t"],
         "command": "submarine_session_list_star",
         "args": {"todo": true},

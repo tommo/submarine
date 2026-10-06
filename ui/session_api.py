@@ -224,6 +224,22 @@ def save_todos(todo, project_path=None, records=None) -> bool:
         return False
 
 
+def load_order(project_path=None):
+    try:
+        from core.records import load_order as _fn
+        return _fn(project_path)
+    except Exception:
+        return {}
+
+
+def save_order(order, project_path=None) -> bool:
+    try:
+        from core.records import save_order as _fn
+        return bool(_fn(order, project_path))
+    except Exception:
+        return False
+
+
 def load_bookmark_records(project_path=None):
     try:
         from core.records import load_bookmark_records as _fn

@@ -366,6 +366,28 @@ def save_todos(todo: set, project_path: Optional[str] = None,
     return save_bookmark_state(state, project_path)
 
 
+def load_order(project_path: Optional[str] = None) -> dict:
+    """Manual session-list order: row key (agent_id) → rank."""
+    raw = load_bookmark_state(project_path).get("order") or {}
+    out = {}
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            try:
+                out[str(k)] = float(v)
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
+def save_order(order: dict, project_path: Optional[str] = None) -> bool:
+    state = load_bookmark_state(project_path)
+    if order:
+        state["order"] = {str(k): v for k, v in order.items()}
+    else:
+        state.pop("order", None)
+    return save_bookmark_state(state, project_path)
+
+
 def load_bookmark_records(project_path: Optional[str] = None) -> dict:
     """id → snapshot so a starred row can list after sessions.json prune."""
     rec = load_bookmark_state(project_path).get("records") or {}
