@@ -176,3 +176,25 @@ class CompactLineTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClaudeCompactClosesTest(unittest.TestCase):
+    """A Claude /compact: the bridge sends the turn's result (skipped while
+    compacting) before answering the query, whose compact branch only ended
+    Kimi's turn kind — the session stayed busy forever."""
+
+    def test_the_turn_ends_and_is_closed(self):
+        from tests.fakes import FakeClient, make_session
+        c = FakeClient()
+        s = make_session(client=c, initialized=True, backend="claude")
+        s.query("/compact")
+        self.assertTrue(s.working)
+        s.events.system({"subtype": "compact_boundary", "data": {}})
+        s.events.result({"status": "complete", "stop_reason": "end_turn"})   # first
+        _m, _p, cb = [x for x in c.sent if x[0] == "query"][-1]
+        cb({"status": "complete"})                                           # then
+        s.scheduler.fire_all()
+        self.assertFalse(s.working, "still busy after /compact")
+        self.assertEqual(s.turn.kind, "idle")
+        self.assertTrue(s.output.metas, "the turn got no @done")
+        self.assertTrue(any("@compact(done)" in t for t in s.output.texts))

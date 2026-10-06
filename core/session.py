@@ -13,7 +13,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .background import BackgroundTaskGate
-from .events import BridgeEventRouter
+from .events import BridgeEventRouter, _compact_line
 from .ports import ChromePort, OutputPort, PersistPort, Scheduler
 from .records import (
     STAMP_AGENT_ID,
@@ -1162,10 +1162,17 @@ class Session:
                 self.current_tool = "compact…"
                 self.chrome.set_status("compacting…")
                 return
+            # Close the turn here: its result arrived while compacting (the
+            # bridge sends it before answering the query), so the router
+            # skipped @done — and _finish_compact only ends Kimi's
+            # "compacting" turn kind. A Claude /compact stayed busy forever,
+            # ◈ spinning, the next prompt queued behind it.
             try:
-                self.output.text("\n*Compacted.*\n")
+                self.output.text(_compact_line())
+                self.output.meta(self._elapsed())
             except Exception:
                 pass
+            self.turn.end_live(_expected_gen)
             self._finish_compact()
             return
         if self._compacting:
