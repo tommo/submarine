@@ -129,9 +129,26 @@ def _send_codegen(args: Dict[str, Any]) -> str:
     for key in ("agent_id", "session_id", "name"):
         if args.get(key):
             parts.append("%s=%r" % (key, args[key]))
+    if args.get("now"):
+        parts.append("now=True")
     if args.get("_caller_agent_id") is not None:
         parts.append("_caller_agent_id=%r" % args["_caller_agent_id"])
     return "return send_to_session(%s)" % ", ".join(parts)
+
+
+def _close_codegen(args: Dict[str, Any]) -> str:
+    ids = args.get("agent_ids") or []
+    if isinstance(ids, str):
+        ids = [ids]
+    if args.get("agent_id"):
+        ids = [args["agent_id"]] + [i for i in ids if i != args["agent_id"]]
+    if not ids:
+        raise ValueError("Missing required parameter: agent_id")
+    parts = ["agent_ids=%r" % [str(i) for i in ids],
+             "force=%r" % bool(args.get("force", False))]
+    if args.get("_caller_agent_id") is not None:
+        parts.append("_caller_agent_id=%r" % args["_caller_agent_id"])
+    return "return close_session(%s)" % ", ".join(parts)
 
 
 def _read_session_codegen(args: Dict[str, Any]) -> str:
@@ -522,7 +539,11 @@ TOOL_TABLE = {
             "your own CLOSED subsessions (list_sessions marks them closed) are "
             "reopened by agent_id with their history — reuse them instead of "
             "spawning. "
-            "Mid-turn: queued (sent=true); do not retry the same prompt. "
+            "Mid-turn: queued until the target's turn ends (sent=true); do "
+            "not retry the same prompt. now=true is the user's Send Now: a "
+            "Claude target reads it at its next step inside the running "
+            "turn; other backends stop the turn and take it next. Use it "
+            "only to redirect work that is going wrong. "
             "Prefer reuse over spawn."
         ),
         "schema": {
@@ -532,10 +553,34 @@ TOOL_TABLE = {
                 "session_id": {"type": "string", "description": "The target's session_id (if you have that instead)"},
                 "name": {"type": "string", "description": "The target's exact session name (must be unique)"},
                 "prompt": {"type": "string", "description": "Message to send"},
+                "now": {"type": "boolean",
+                        "description": "Deliver into the target's running turn (Send Now) instead of after it"},
             },
             "required": ["prompt"],
         },
         "codegen": _send_codegen,
+    },
+    "close_session": {
+        "description": (
+            "Close your own subsessions when their work is finished — the "
+            "same as the user closing them in the session list. The bridge "
+            "stops; the transcript stays in the session index, so "
+            "send_to_session(agent_id) reopens one with its history later.\n"
+            "\n"
+            "Only your own subsessions (list_sessions). A working one is "
+            "refused unless force=true (that stops its turn)."
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "agent_id": {"type": "string", "description": "Subsession to close"},
+                "agent_ids": {"type": "array", "items": {"type": "string"},
+                              "description": "Several subsessions at once"},
+                "force": {"type": "boolean",
+                          "description": "Also close ones that are mid-turn (stops them)"},
+            },
+        },
+        "codegen": _close_codegen,
     },
     "list_sessions": {
         "description": (
@@ -543,7 +588,8 @@ TOOL_TABLE = {
             "Default scope \"children\": your subsessions. scope \"all\": "
             "every live session in every window (name, window, project, "
             "backend) — to find a peer to send_to_session. Use agent_id for "
-            "send_to_session / fork_from_agent_id."
+            "send_to_session / fork_from_agent_id / close_session (close "
+            "subsessions whose work is finished)."
         ),
         "schema": {
             "type": "object",

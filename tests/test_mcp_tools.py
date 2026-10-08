@@ -32,6 +32,7 @@ KEEP = (
     "list_backends",
     "spawn_session",
     "send_to_session",
+    "close_session",
     "list_sessions",
     "read_session_output",
     "read_session_edits",

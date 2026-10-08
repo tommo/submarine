@@ -817,8 +817,23 @@ def _send_to_session(view, tool) -> str:
         bits.append(_aid(aid))
     elif vid is not None:
         bits.append("view %s" % vid)
+    if inp.get("now"):
+        bits.append("now")
     if prompt:
         bits.append(_clip(str(prompt), 50))
+    return _join_bits(*bits)
+
+
+def _close_session(view, tool) -> str:
+    inp = _tool_input(tool)
+    ids = list(inp.get("agent_ids") or [])
+    if inp.get("agent_id"):
+        ids.insert(0, inp["agent_id"])
+    bits = [_aid(a) for a in ids[:4]]
+    if len(ids) > 4:
+        bits.append("+%d" % (len(ids) - 4))
+    if inp.get("force"):
+        bits.append("force")
     return _join_bits(*bits)
 
 
@@ -1020,6 +1035,7 @@ SUBLIME_MCP_FORMATTERS = {
     "list_profiles": _list_profiles,
     "spawn_session": _spawn_session,
     "send_to_session": _send_to_session,
+    "close_session": _close_session,
     "list_sessions": _list_sessions,
     "session_info": _session_info,
     "read_session_output": _read_session_output,

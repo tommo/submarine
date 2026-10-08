@@ -507,6 +507,7 @@ class MCPSocketServer:
             "list_profiles": self._list_profiles,
             "spawn_session": self._spawn_session,
             "send_to_session": self._send_to_session,
+            "close_session": self._close_session,
             "list_sessions": self._list_sessions,
             "read_session_output": self._read_session_output,
             "read_session_edits": self._read_session_edits,
@@ -1314,6 +1315,7 @@ class MCPSocketServer:
         _caller_agent_id: str = None,
         session_id: str = None,
         name: str = None,
+        now: bool = False,
     ) -> dict:
         if _caller_agent_id is not None:
             self._caller_agent_id = _caller_agent_id
@@ -1351,6 +1353,18 @@ class MCPSocketServer:
         prompt, display = self._stamp_send_prompt(prompt)
         aid = getattr(session, "agent_id", None)
         name = session.name or "(unnamed)"
+        if now and session.working and not getattr(session, "_compacting", False):
+            # The user's Send Now: Claude reads it at its next step inside
+            # the running turn; other backends stop the turn and take it next.
+            if display and display != prompt:
+                session._queued_display[prompt] = display
+            steer = bool(getattr(session, "can_steer", lambda: False)())
+            session.steer_now(prompt)
+            return {
+                "sent": True, "now": True, "agent_id": aid, "name": name,
+                "message": ("Delivered into the running turn." if steer else
+                            "Running turn stopped; your message runs next."),
+            }
         if session.working or getattr(session, "_compacting", False):
             session.queue_prompt(prompt, display=display)
             return {
@@ -1383,6 +1397,63 @@ class MCPSocketServer:
             return {"error": "Session not initialized", "agent_id": aid}
         session.query(prompt, display_prompt=display)
         return {"sent": True, "agent_id": aid, "name": name}
+
+    def _close_session(self, agent_ids=None, force: bool = False,
+                       _caller_agent_id: str = None) -> dict:
+        """Close the caller's own subsessions, as the list's Del does on a
+        CURRENT row: the bridge stops, the save stays (send_to_session wakes
+        it again)."""
+        if _caller_agent_id is not None:
+            self._caller_agent_id = _caller_agent_id
+        canon = _try_import("core.agent_ids.canon_agent_id") or (lambda v: v)
+        caller_aid = canon(self._caller_agent_id) if self._caller_agent_id else None
+        caller = _get_session_by_agent_id(str(caller_aid)) if caller_aid else None
+        if caller is None:
+            return {"error": "No caller session — close_session closes your own subsessions"}
+        children = set(canon(c) for c in (getattr(caller, "child_agent_ids", None) or []))
+        close_row = _try_import("ui.session_list.close_row")
+        closed, results = [], []
+        for raw in agent_ids or []:
+            want = canon(str(raw))
+            entry = {"agent_id": want}
+            results.append(entry)
+            if want == caller_aid:
+                entry["error"] = "that is you"
+                continue
+            session = _get_session_by_agent_id(str(want))
+            if session is None:
+                entry["closed"] = True
+                entry["note"] = "already closed"
+                continue
+            if (canon(getattr(session, "parent_agent_id", None)) != caller_aid
+                    and want not in children):
+                entry["error"] = "not your subsession"
+                continue
+            if (getattr(session, "working", False) or getattr(session, "_compacting", False)) and not force:
+                entry["error"] = "mid-turn; pass force=true to stop and close it"
+                continue
+            row = {"kind": "live", "agent_id": want,
+                   "session_id": getattr(session, "session_id", None),
+                   "name": session.name or ""}
+            window = getattr(session, "window", None) or self._get_window()
+            try:
+                if close_row is not None:
+                    close_row(window, row, remove=False)
+                else:
+                    session.stop()
+            except Exception as e:
+                entry["error"] = "close failed: %s" % e
+                continue
+            entry["closed"] = True
+            entry["name"] = row["name"] or "(unnamed)"
+            closed.append(want)
+        if closed:
+            _log("close_session: %s closed %s" % (caller_aid, ", ".join(closed)))
+        out = {"closed": closed, "results": results}
+        if any("error" in r for r in results):
+            out["error"] = "; ".join("%s: %s" % (r["agent_id"], r["error"])
+                                     for r in results if "error" in r)
+        return out
 
     def _wake_saved_child(self, agent_id: str):
         """(session, None) for the caller's own subsession that is closed but
