@@ -1134,12 +1134,9 @@ class SubmarineOutputEventListener(sublime_plugin.ViewEventListener):
                 claim_host_for_restore(window, session, view)
             except Exception:
                 pass
-            if keys.read_setting(view.settings(), keys.QUICK):
-                view.settings().set("color_scheme", keys.THEME_QUICK)
-            else:
-                from .session_api import backend_theme
-                if saved_backend and saved_backend != "claude":
-                    view.settings().set("color_scheme", backend_theme(saved_backend))
+            from . import themes
+            themes.apply_to_view(view, window)
+            themes.watch_view(view)
             session.output.reset_active_states(soft=True)
             Composer.strip_composer_tail(view)
             session.output.clear_phantoms()

@@ -3,6 +3,22 @@
     // Must have claude-agent-sdk installed: pip install claude-agent-sdk
     "python_path": "python3",
 
+    // Theme of session sheets and the session list. Built-in: ayu-mirage,
+    // ayu-dark, one-dark, dracula, nord, gruvbox-dark, tokyo-night,
+    // catppuccin-mocha, solarized-dark, github-dark, ayu-light,
+    // solarized-light, github-light, catppuccin-latte.
+    // "Submarine: Select Theme (This Window)…" overrides it per window
+    // (saved with the window); "…Select Default Theme…" sets this.
+    "theme": "ayu-mirage",
+
+    // Your own themes: inherit a built-in, override any of bg, fg, alt
+    // (code blocks), sel (selection), comment, red, orange, yellow, green,
+    // aqua, cyan, blue, purple; "light": true for a light background.
+    // "custom_themes": {
+    //     "midnight": {"inherits": "tokyo-night", "label": "Midnight",
+    //                  "bg": "#101018", "blue": "#88aaff"}
+    // },
+
     // Default model when no profile is selected
     // Options: "opus", "sonnet", "haiku" — the CLI's aliases ("opus" is
     // Opus 5.5 on claude 2.1.280+), or a pinned id such as "claude-opus-5-5"

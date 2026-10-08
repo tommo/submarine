@@ -17,6 +17,16 @@ from core.session import Session
 
 MAX_QUICK_SLOTS = 3
 QUICK_COLOR_SCHEME = "Packages/Submarine/SubmarineOutput-quick.hidden-tmTheme"
+
+
+def _apply_quick_theme(view, window=None) -> None:
+    """The window theme's Quick tint; the shipped warm scheme if that fails."""
+    try:
+        from ui import themes
+        themes.apply_to_view(view, window, themes.QUICK)
+        themes.watch_view(view)
+    except Exception:
+        view.settings().set("color_scheme", QUICK_COLOR_SCHEME)
 TAB_BAR_KEY = "submarine_quick_tabs"
 
 # window.id() → QuickHost
@@ -275,7 +285,7 @@ class QuickHost:
             v.settings().set("submarine_quick", True)
             v.settings().set("submarine_quick_host", True)
             v.settings().set("auto_indent", False)
-            v.settings().set("color_scheme", QUICK_COLOR_SCHEME)
+            _apply_quick_theme(v, self.window)
             try:
                 v.assign_syntax("Packages/Submarine/SubmarineOutput.sublime-syntax")
             except Exception:
@@ -419,7 +429,7 @@ class QuickHost:
         view.settings().set("submarine_backend", session.backend)
         view.settings().set("submarine_quick", True)
         view.settings().set("submarine_quick_host", True)
-        view.settings().set("color_scheme", QUICK_COLOR_SCHEME)
+        _apply_quick_theme(view)
         session.output.set_name(session.name or "⚡ Quick")
         if clear_buffer or restore_content is not None:
             view.set_read_only(False)

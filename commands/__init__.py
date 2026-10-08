@@ -57,6 +57,7 @@ from .context_cmds import (  # noqa: F401
     SubmarineClearContextCommand,
 )
 from .ui_cmds import (  # noqa: F401
+    SubmarineSelectThemeCommand,
     SubmarineClearCommand,
     SubmarineClearKeepLastCommand,
     SubmarineCopyCommand,

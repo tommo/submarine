@@ -337,11 +337,75 @@ class SubmarineAddMcpCommand(sublime_plugin.WindowCommand):
         self.window.open_file(settings_path)
 
 
+class SubmarineSelectThemeCommand(sublime_plugin.WindowCommand):
+    """Pick the session-sheet theme for this window (scope "window") or the
+    default every window without its own choice follows (scope "default").
+    Highlighting an entry previews it; Esc puts the old one back."""
+
+    def run(self, scope: str = "window"):
+        from ui import themes
+        window = self.window
+        per_window = scope != "default"
+        default = themes.default_theme()
+        override = themes.window_theme_override(window) if per_window else ""
+        current = override or default
+        pals = themes.palettes()
+        entries = []  # type: list
+        if per_window:
+            entries.append(("", sublime.QuickPanelItem(
+                "Follow default", annotation=pals[default].get("label") or default,
+                details="Use the default theme (Submarine: Select Default Theme)")))
+        for name, label in themes.picker_items(current):
+            mark = "✓ " if name == (override if per_window else default) else ""
+            kind = "light" if pals[name].get("light") else "dark"
+            if name not in themes.PALETTES:
+                kind += " · custom"
+            entries.append((name, sublime.QuickPanelItem(mark + label, annotation=kind)))
+        names = [n for n, _ in entries]
+        try:
+            selected = names.index(override if per_window else default)
+        except ValueError:
+            selected = 0
+
+        def preview(i):
+            if 0 <= i < len(names):
+                pick = names[i] or default
+                if per_window:
+                    themes.apply_to_window(window, theme=pick)
+                else:
+                    for w in sublime.windows():
+                        if not themes.window_theme_override(w):
+                            themes.apply_to_window(w, theme=pick)
+
+        def done(i):
+            if i < 0:
+                themes.apply_everywhere()          # back to what was saved
+                return
+            pick = names[i]
+            if per_window:
+                themes.set_window_theme(window, pick or None)
+                label = pals[pick].get("label") if pick else "default"
+                sublime.status_message("Submarine theme for this window: %s" % label)
+            else:
+                themes.set_default_theme(pick)
+                sublime.status_message("Submarine default theme: %s"
+                                       % (pals[pick].get("label") or pick))
+
+        window.show_quick_panel([e for _, e in entries], done,
+                                selected_index=selected, on_highlight=preview,
+                                placeholder=("Theme for this window" if per_window
+                                             else "Default theme for all windows"))
+
+
 class SubmarineTogglePermissionModeCommand(sublime_plugin.WindowCommand):
-    MODES = ["default", "acceptEdits", "plan", "bypassPermissions"]
+    MODES = ["default", "acceptEdits", "auto", "plan", "bypassPermissions"]
     MODE_LABELS = {
         "default": "Default (prompt for all)",
         "acceptEdits": "Accept Edits (auto-approve file ops)",
+        # Claude Code's classifier approves what it judges safe and asks for
+        # the rest — not bypass. Claude-bridge sessions only: grok agent has
+        # no per-session permission mode (its config.toml decides).
+        "auto": "Auto (Claude Code decides; asks when unsure)",
         "plan": "Plan (plan mode, approve before implement)",
         "bypassPermissions": "Bypass (allow ALL - use with caution)",
     }

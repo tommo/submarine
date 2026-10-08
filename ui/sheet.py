@@ -21,7 +21,8 @@ from plat.util import buffer_safe
 
 from . import keys
 from .models import strip_title_decoration
-from .session_api import abbrev_for, backend_theme, get_session_for_view
+from . import themes
+from .session_api import abbrev_for, get_session_for_view
 
 try:
     import sublime
@@ -126,11 +127,8 @@ class OutputSheet:
         try:
             self.view.assign_syntax(keys.SYNTAX_PATH)
             if not keys.read_setting(st, keys.QUICK):
-                backend = keys.read_setting(st, keys.BACKEND) or "claude"
-                theme = backend_theme(backend) if backend != "claude" else keys.THEME_DEFAULT
-                if keys.read_setting(st, keys.QUICK):
-                    theme = keys.THEME_QUICK
-                st.set("color_scheme", theme)
+                themes.apply_to_view(self.view, self.window)
+            themes.watch_view(self.view)
         except Exception as e:
             print("[Submarine] Error setting syntax/theme: %s" % e)
         if sublime is not None:
@@ -162,7 +160,8 @@ class OutputSheet:
         st.set("scroll_past_end", False)
         try:
             self.view.assign_syntax(keys.SYNTAX_PATH)
-            st.set("color_scheme", keys.THEME_DEFAULT)
+            themes.apply_to_view(self.view, self.window, themes.OUTPUT)
+            themes.watch_view(self.view)
         except Exception as e:
             print("[Submarine] panel syntax: %s" % e)
         if focus:
@@ -173,13 +172,11 @@ class OutputSheet:
             return
         st = self.view.settings()
         if quick or keys.read_setting(st, keys.QUICK):
-            st.set("color_scheme", keys.THEME_QUICK)
+            themes.apply_to_view(self.view, self.window, themes.QUICK)
             return
         backend = backend or keys.read_setting(st, keys.BACKEND) or "claude"
-        if backend and backend != "claude":
-            st.set("color_scheme", backend_theme(backend))
-        else:
-            st.set("color_scheme", keys.THEME_DEFAULT)
+        kind = themes.CODEX if backend == "codex" else themes.OUTPUT
+        themes.apply_to_view(self.view, self.window, kind)
 
     def apply_output_settings(self) -> None:
         apply_output_settings_to_view(self.view)

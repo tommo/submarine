@@ -265,6 +265,16 @@
         "command": "submarine_interrupt"
     },
     {
+        "caption": "Submarine: Select Theme (This Window)…",
+        "command": "submarine_select_theme",
+        "args": {"scope": "window"}
+    },
+    {
+        "caption": "Submarine: Select Default Theme…",
+        "command": "submarine_select_theme",
+        "args": {"scope": "default"}
+    },
+    {
         "caption": "Submarine: Select Permission Mode…",
         "command": "submarine_toggle_permission_mode"
     },

@@ -87,8 +87,8 @@ def restart_session_new(window, session=None):
             spec = backend_specs.get(backend)
             keys.write_setting(new_session.output.view.settings(), keys.BACKEND, backend)
             new_session.output.set_name(spec.label)
-            if spec.theme:
-                new_session.output.view.settings().set("color_scheme", spec.theme)
+            from ui import themes
+            themes.apply_to_view(new_session.output.view)
         else:
             new_session.output.set_name("Submarine")
     new_session.output.show()

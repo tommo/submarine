@@ -1254,8 +1254,8 @@ def reveal_live_session(window, session, focus: bool = True,
             spec = _get(session.backend)
             from .keys import BACKEND, write_setting
             write_setting(view.settings(), BACKEND, session.backend)
-            if getattr(spec, "theme", None):
-                view.settings().set("color_scheme", spec.theme)
+            from . import themes
+            themes.apply_to_view(view)
     except Exception:
         pass
     try:
@@ -2197,7 +2197,9 @@ class SessionListView:
         st.set("highlight_line", True)
         st.set("font_size", 10)
         st.set("font_face", "Menlo")
-        st.set("color_scheme", keys.SESSION_LIST_SCHEME)
+        from . import themes
+        st.set("color_scheme", themes.scheme_for(self.window, themes.LIST))
+        themes.watch_view(self.view)
         self.view.assign_syntax(keys.SESSION_LIST_SYNTAX)
 
     def _create(self):

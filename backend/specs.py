@@ -120,7 +120,8 @@ BACKENDS = {
         abbrev="CX",
         bridge_script="codex_main.py",
         fallback_model="gpt-6-astra",
-        theme="Packages/Submarine/SubmarineOutput-codex.hidden-tmTheme",
+        # No fixed scheme: ui.themes gives Codex sheets the window theme's
+        # green tint.
         default_models=[
             ("gpt-6-astra", "GPT-6 Astra"),
             # Codex's own default since 0.159 ("latest workhorse").
