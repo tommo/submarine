@@ -98,9 +98,11 @@ BACKENDS = {
             ("opus", "Opus 5.5"),
             # The CLI's alias: whichever Sonnet the installed claude maps it to.
             ("sonnet", "Sonnet (latest)"),
-            ("haiku", "Haiku 4.5"),
+            # The CLI's alias (claude 2.1.294 maps it to claude-haiku-5-5).
+            ("haiku", "Haiku 5.5"),
             ("claude-opus-5-5", "Opus 5.5 (pinned)"),
             ("claude-sonnet-5-5", "Sonnet 5.5 (pinned, claude 2.1.284+)"),
+            ("claude-haiku-5-5", "Haiku 5.5 (pinned)"),
             ("claude-opus-5", "Opus 5 (pinned)"),
             ("claude-sonnet-5", "Sonnet 5 (pinned)"),
             ("claude-fable-5", "Fable 5"),
@@ -109,6 +111,7 @@ BACKENDS = {
             ("claude-opus-4-7", "Opus 4.7"),
             ("claude-opus-4-6", "Opus 4.6"),
             ("claude-sonnet-4-5", "Sonnet 4.5"),
+            ("claude-haiku-4-5", "Haiku 4.5"),
         ],
     ),
     "codex": BackendSpec(
