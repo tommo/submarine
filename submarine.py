@@ -97,6 +97,7 @@ from commands import (  # noqa: F401
     SubmarineAddOpenFilesCommand,
     SubmarineAddFolderCommand,
     SubmarineClearContextCommand,
+    SubmarineSelectThemeCommand,
     SubmarineClearCommand,
     SubmarineClearKeepLastCommand,
     SubmarineCopyCommand,
