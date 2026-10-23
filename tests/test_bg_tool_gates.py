@@ -717,6 +717,10 @@ class TestSubagentTerminalOutput(unittest.TestCase):
 
     def test_bg_release_kills_and_snaps_output(self):
         """ACP release kills; leftover terminal/output still has last stdout."""
+        from unittest import mock
+
+        # Fake pid: this used to reach a real os.killpg(1, …) == kill(-1, …),
+        # which SIGTERM'd then SIGKILL'd every process the user owns.
         class _P:
             returncode = None
             pid = 1
@@ -742,7 +746,11 @@ class TestSubagentTerminalOutput(unittest.TestCase):
             return await self.b._acp_terminal_output(
                 {"terminalId": "term_bg1"})
 
-        result = asyncio.run(_go())
+        with mock.patch("acp.terminal.os.killpg") as killpg:
+            result = asyncio.run(_go())
+        # The pid<=1 guard refuses before any real group signal; the fake's
+        # terminate() fallback records the SIGTERM instead.
+        killpg.assert_not_called()
         self.assertNotIn("term_bg1", self.b._terminals)
         self.assertEqual(result.get("output"), "starting editor\n")
         es = result.get("exitStatus") or {}
