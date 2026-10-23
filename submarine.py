@@ -55,6 +55,7 @@ from commands import (  # noqa: F401
     PiStartCommand,
     GrokStartCommand,
     KimiStartCommand,
+    OpencodeStartCommand,
     SubmarineQueryCommand,
     SubmarineRestartCommand,
     SubmarineRestartNewCommand,

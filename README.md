@@ -2,8 +2,9 @@
 
 A Sublime Text plugin for [Claude Code](https://claude.ai/claude-code) (Agent SDK
 plus custom Anthropic-compatible providers), [Codex CLI](https://github.com/openai/codex),
-[Kimi Code](https://moonshotai.github.io/kimi-code/) and [Grok Build](https://x.ai/)
-via **Agent Client Protocol (ACP)**, and [Pi](https://github.com/badlogic/pi-mono).
+[Kimi Code](https://moonshotai.github.io/kimi-code/), [Grok Build](https://x.ai/) and
+[opencode](https://opencode.ai) via **Agent Client Protocol (ACP)**, and
+[Pi](https://github.com/badlogic/pi-mono).
 
 There is no Copilot or DSR backend.
 
@@ -16,6 +17,8 @@ There is no Copilot or DSR backend.
   - Codex CLI
   - Grok Build CLI (`grok agent stdio` ACP)
   - **Kimi Code CLI** (`kimi acp` ACP) — native path; see below
+  - opencode CLI (`opencode acp` ACP) — models are `provider/model` ids,
+    incl. custom providers from `opencode.json` (listed via `opencode models`)
   - Pi CLI
   - Custom Anthropic-compatible provider — base URL + API key (uses the Claude bridge)
 
@@ -38,6 +41,11 @@ grok login
 # Default binary often at ~/.kimi-code/bin/kimi
 kimi login
 kimi doctor
+
+# opencode (optional, native ACP)
+# Install opencode so `opencode` is on PATH (or set OPENCODE_BIN).
+# Default binary at ~/.local/bin/opencode
+opencode auth login
 
 # Pi (optional)
 npm install -g @earendil-works/pi-coding-agent
